@@ -1,0 +1,24 @@
+# Generated Bible study decks
+bible-studies/
+
+# Build / OCR scratch
+_build*.py
+_pdf-preview/
+_agent-reference.pptx
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Source scan / batch PDFs (large inputs)
+*.pdf
+
+# IDE & local settings
+.cursor/
+.vscode/
+.idea/
+
+# OS & Office lock files
+.DS_Store
+._*
+~$*
+Thumbs.db
