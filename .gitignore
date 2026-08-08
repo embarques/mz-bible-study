@@ -1,13 +1,22 @@
-# Generated Bible study decks
+# Generated Bible study decks & prepare inputs
 bible-studies/
+studies/
 
-# Build / OCR scratch
-_build*.py
+# CLI / agent scratch (page rasters, previews, unzipped builds)
+generated/
+
+# Legacy scratch paths (kept ignored if anything still lands here)
+tmp/
 _pdf-preview/
+_page*.png
+_study*_page*.png
+_build*.py
 _agent-reference.pptx
+
 __pycache__/
 *.py[cod]
 *$py.class
+*.egg-info/
 
 # Source scan / batch PDFs (large inputs)
 *.pdf
@@ -22,3 +31,9 @@ __pycache__/
 ._*
 ~$*
 Thumbs.db
+
+.venv/
+
+# Secrets
+.env
+.env.local

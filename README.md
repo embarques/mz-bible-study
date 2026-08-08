@@ -2,6 +2,56 @@
 
 Spanish Bible study PowerPoints for Monte de Sion.
 
+## CLI (`mzbs`)
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[prepare]"   # includes cursor-sdk for `mzbs prepare`
+```
+
+Set `CURSOR_API_KEY` in a project `.env` (see [`.env.example`](.env.example)):
+
+1. Open [cursor.com/dashboard/api](https://cursor.com/dashboard/api)
+2. Create an **API Key** (format `crsr_…`)
+3. Copy `.env.example` → `.env` and paste the key:
+
+```bash
+cp .env.example .env
+# edit .env → CURSOR_API_KEY=crsr_…
+```
+
+`mzbs` loads `.env` automatically (existing shell exports still win).
+
+```bash
+# 1) Agent prepares JSON + section images
+mzbs prepare --pdf "Bible Study 20-22.pdf" -n 22 --pages 7-9 --last
+
+# Or prepare + build + PDF in one go:
+mzbs prepare --pdf "Bible Study 20-22.pdf" -n 22 --pages 7-9 --last --build
+
+# Or the whole PDF (prepare + build every study + agent review):
+mzbs from-pdf --pdf "Bible Study 20-22.pdf" --from 20 --to 22
+# Each estudio gets a rotating section-image style (different every study).
+
+# Prepare-only batch (still reviews JSON/images unless --no-review):
+mzbs from-pdf --pdf "Bible Study 20-22.pdf" --from 20 --to 22 --prepare-only
+
+# Re-run QA later:
+mzbs review --from 20 --to 22 --pdf "Bible Study 20-22.pdf"
+
+# 2) Or build later yourself
+mzbs build studies/22.json -o "bible-studies/22 - TITLE.pptx" --export-pdf
+
+mzbs validate "bible-studies/22 - TITLE.pptx"
+mzbs export-pdf "bible-studies/22 - TITLE.pptx"
+```
+
+- **`mzbs from-pdf`:** every study → prepare, build + PDF, then **agent review** (`studies/REVIEW.md`)  
+- **`mzbs prepare`:** one study → JSON + section images  
+- **`mzbs build`:** clone master template, pack slides, fill OOXML, validate, export PDF  
+- **`mzbs review`:** Cursor agent double-checks outputs (files, validate, OOXML/PDF spot-checks)  
+
 ## What you provide
 
 ### Option A — one study (unchanged)
@@ -59,6 +109,8 @@ Open the PowerPoint and check that text doesn’t run into the logo.
 | Folder | What’s in it |
 |--------|----------------|
 | [`bible-studies/`](bible-studies/) | Generated presentations |
-| [`template/`](template/) | Master template and format examples (don’t edit these unless you mean to change the system) |
-# mz-bible-study
-# mz-bible-study
+| [`studies/`](studies/) | Prepare JSON + section images (gitignored) |
+| [`generated/`](generated/) | Scratch: page rasters, PDF previews, build work (gitignored) |
+| [`template/`](template/) | Master template (`master-template.pptx`) |
+| [`mz_bible_study/`](mz_bible_study/) | Click CLI package (`mzbs`) |
+| [`scripts/`](scripts/) | Thin wrappers (prefer `mzbs`) |

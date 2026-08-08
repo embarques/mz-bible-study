@@ -131,12 +131,13 @@ Follow slide order and recipes below, then the checklist.
 
 ### 5. Generate section images (1 / 2 / 3)
 
-**Just generate them — do not ask.** You already have permission to create section art. Do **not** ask the user to confirm prompts, styles, or whether to generate. Pick a design family for this study (different from prior studies), generate all three images, insert them into the deck, and move on. If a generation fails or is blocked, regenerate with a safer framing and continue — still without asking.
+**Just generate them — do not ask.** You already have permission to create section art. Do **not** ask the user to confirm prompts, styles, or whether to generate. When using **`mzbs prepare` / `from-pdf`**, follow the **CLI-assigned** `section_style` for that estudio (rotating catalog — different id every study). For chat-only builds, pick a design family different from prior studies yourself. Generate all three images, insert them into the deck, and move on. If a generation fails or is blocked, regenerate with a safer framing and continue — still without asking.
 
 **One design family per study; different family from other studies.**
 
 - Within a study, all three section images share the **same visual design language** (lighting, finish, edge treatment, optional accents).
-- Across studies, **change the design** — do not reuse the previous study’s look (e.g. if study 16 used yellow dashed accent arcs / a particular white-curve panel, study 17 and 18 must not copy that).
+- Across studies, **change the design** — `mzbs` assigns a rotating family; chat builds must not reuse the previous study’s look (e.g. if study 16 used yellow dashed accent arcs / a particular white-curve panel, study 17 and 18 must not copy that).
+- Catalog: `mz_bible_study/section_styles.py` (parchment, lavender mist, sage paper, ink wash, dawn gold, …).
 - When cloning a prior deck, **always strip** PowerPoint shapes named `Arc …` (yellow dashed/dotted arcs). That motif is retired — **do not** keep or redraw dotted/dashed arc chrome on section slides for any new study.
 - Generate three **new** illustrations every study (don’t reuse another study’s media files).
 
@@ -144,8 +145,9 @@ Requirements:
 
 - Aspect **16:9**; final media ≈ **1408×768** PNG.
 - Scene fits each section theme; be inventive.
-- **Full-bleed / whole-image art is allowed.** A white left panel is optional, not required.
-- **HARD RULE — title + verse must be readable:** wherever the title and Bible verse sit, contrast must be strong enough that both are clearly visible. Prefer a calm/light area under the text, a soft wash/scrim, or switch title/verse (and gray line if needed) to a color that reads on that background (e.g. dark text on light, light text on dark). Never leave dark navy text on a busy dark photo, or white text on a bright wash.
+- **Finished slide backgrounds (HARD):** each PNG must include a deliberate **left text-safe treatment** (~35–45% width — soft mist, parchment fade, watercolor bloom, dusk glow, cool paper wash, etc.) that **matches this study’s design family**. Put the scene subject right/center-right. Do **not** deliver a busy undressed full-bleed under the title band. The treatment must **change with each study** — do not reuse the previous study’s fade motif.
+- Full-bleed canvas is fine **only when** that left treatment is baked into the art.
+- **HARD RULE — title + verse must be readable:** calm/light area under the text (via the left treatment above), or switch title/verse colors if needed. Never leave dark navy text on a busy dark photo, or white text on a bright wash.
 - No text, letters, logos, watermarks, or decorative caption marks in the art. **Never** use yellow dotted/dashed arcs (study-16 motif is retired).
 - **No** `alphaModFix` / opacity dimming on the photo itself.
 - Slide chrome (XML): orange bar (`E85D04`), gray line, title (`1- TITLE`), bold verse under gray line — colors chosen so they stay readable on the image.
@@ -288,7 +290,7 @@ Do **not** call a helper that strips `b="1"` from every run with `bold=False` as
 
 - **Per study:** one shared design language for all three images. **Next study:** a different design — never recycle the previous study’s motif.
 - **Always strip** cloned `Arc …` yellow dashed/dotted shapes — that motif is retired; do not put it back.
-- Whole-image / full-bleed art is fine; white left panel is optional.
+- Whole-image art is fine **only with** a baked-in left text-safe treatment that matches this study’s design family (change the treatment next study).
 - **Title + verse must stay readable** — calm area under text, soft scrim, and/or text color that contrasts with the background.
 - Orange bar, gray line, title `1- TITLE`; verse **under** the gray line only.
 - **No overlap** between title and verse — if the title is long, reduce font size and/or move gray line + verse down until there is a clear gap.
@@ -323,8 +325,8 @@ Do **not** call a helper that strips `b="1"` from every run with `bold=False` as
 9. Points 1–3: section art → Texto → A/B.  
 10. Conclusión → Próximo (from scan 2; multi-line base if `;`). **Force Times New Roman 42pt on conclusión body** (never leave Verlag Light from the clone).  
 11. Pass: **no logo overflow**, **no sparse slides**, bold refs, no dimming, Lectura/Texto continuations without titles, whole verses only, **conclusión = Times New Roman 42pt**, **Propósitos boxes @ 36pt with no PDF ghost overflow**, **font/bold table above** (Base Bíblica label only bold; Lectura/Texto citation+numbers bold; A/B titles bold).  
-12. **Run `python3 scripts/validate_pptx.py` on the output** — must exit OK. Do not deliver if it fails.  
-13. **Export PDF** — once the `.pptx` validates, run `python3 scripts/export_pdf.py "bible-studies/{N} - {TITLE}.pptx"` (no need to ask). Same folder, same basename, `.pdf` extension.  
+12. **Run `mzbs validate` (or `python3 scripts/validate_pptx.py`) on the output** — must exit OK. Do not deliver if it fails.  
+13. **Export PDF** — once the `.pptx` validates, run `mzbs export-pdf "bible-studies/{N} - {TITLE}.pptx"` (or `python3 scripts/export_pdf.py …`). Same folder, same basename, `.pdf` extension.  
 14. User QA in PowerPoint (and optional PDF check).
 
 ---
@@ -335,7 +337,7 @@ These habits are why batch builds stay fast and clean — follow them; don’t r
 
 1. **Batch PDF workflow** — preview the whole PDF (counts, titles, last study / no Próximo) → wait for OK → build all decks with one reusable builder script (clone known-good → fill text → section images → validate → export PDF). Do not hand-craft each deck from scratch.
 2. **Clone, don’t invent layouts** — copy slide XML from `template/master-template.pptx` or a recent good deck; only swap text/media.
-3. **Hard gates before “done”** — `validate_pptx.py` OK + `export_pdf.py` + spot-check **Propósitos**, **Conclusión font**, **logo floor**, and **one section title/verse** in the PDF.
+3. **Hard gates before “done”** — `mzbs validate` OK + `mzbs export-pdf` + spot-check **Propósitos**, **Conclusión font**, **logo floor**, and **one section title/verse** in the PDF.
 4. **Lock lessons into this file + `.cursor/rules/bible-study-pptx.mdc`** when a QA bug is fixed (like Propósitos 36pt). Future sessions read those first.
 5. **One design family per study for section art; change it next study** — generate all three images up front; strip retired `Arc` chrome.
 6. **Surgical fixes only** — when the user says “everything else is good,” patch only the broken slide/part (don’t regenerate the whole deck unless asked).
@@ -344,7 +346,7 @@ These habits are why batch builds stay fast and clean — follow them; don’t r
 - Prefer Python + `xml.etree` for batch OOXML edits.  
 - Gold path: duplicate slides from master-template → replace text → swap `image4/5/6` → rebuild rels/order.  
 - Overwrite existing `bible-studies/{N} - {TITLE}.pptx` only when regenerating that study.  
-- After a successful validate, export PDF with `python3 scripts/export_pdf.py "bible-studies/{N} - {TITLE}.pptx"` (macOS + Microsoft PowerPoint). Regenerate the PDF whenever the pptx is rebuilt.  
+- After a successful validate, export PDF with `mzbs export-pdf "bible-studies/{N} - {TITLE}.pptx"` (macOS + Microsoft PowerPoint; or `python3 scripts/export_pdf.py …`). Regenerate the PDF whenever the pptx is rebuilt. Prefer the Click CLI package (`pip install -e .` → `mzbs build|validate|export-pdf`).  
 - Never hardcode one study filename as the permanent deck.
 
 ### Package integrity (MANDATORY — prevents “PowerPoint found a problem with content”)
@@ -385,7 +387,7 @@ PowerPoint repair dialogs mean the **ZIP package is inconsistent**. **Never deli
 After every rezip, run:
 
 ```bash
-python3 scripts/validate_pptx.py "bible-studies/{N} - {TITLE}.pptx"
+mzbs validate "bible-studies/{N} - {TITLE}.pptx"
 ```
 
 It must print `OK` and exit 0. Checks include: zip CRC, **`_rels/.rels` present**, no `ns0` in Content_Types/rels, Overrides ↔ files, `sldIdLst` ↔ slide rels, **notesSlide number matches slide number**, XML parse.
@@ -417,5 +419,5 @@ If it fails: **fix and re-run** — do not tell the user the deck is ready.
 - Don’t delete slide XML without also removing its Content_Types Override (and rels) — that corrupts the pptx.  
 - Don’t duplicate a slide and leave `notesSlide{old}` in the new `.rels`.  
 - Don’t `ElementTree.write()` `[Content_Types].xml` or `presentation.xml.rels`.  
-- Don’t deliver a deck that fails `scripts/validate_pptx.py`.  
+- Don’t deliver a deck that fails `mzbs validate` / `scripts/validate_pptx.py`.  
 - Don’t leave `ns0:` prefixes in `[Content_Types].xml` or `presentation.xml.rels`.
