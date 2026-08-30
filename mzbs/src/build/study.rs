@@ -2,25 +2,20 @@
 //! (fill logic) and the youth builder
 //! (`python/mz_bible_study/build/youth/builder.py`).
 //!
-//! Study JSON is kept as `serde_json::Value` for flexibility (many fields
-//! are optional / either-shaped, e.g. `comentario` vs `comentario_slides`,
-//! `base_biblica` string-or-array) — see `crate::model::study::Study` for a
-//! typed reference of the same shape.
+//! **Edit `model/study.rs` for the JSON shape** (fields, either-shaped
+//! fallbacks, packing budgets). **Edit this file for slide order** (which
+//! prototype slide gets which content, and in what sequence).
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use serde_json::Value;
 
 use crate::build::ooxml::{self, VerseKind};
 use crate::build::proto::PROTO;
 use crate::job::Audience;
-use crate::pack;
+use crate::model::study::Study;
 use crate::paths;
-
-const LECTURA_BUDGET: usize = 280;
-const TEXTO_BUDGET: usize = 280;
-const SENTENCE_BUDGET: usize = 380;
 
 /// Build a study deck: unzip `template` (or the audience master template),
 /// fix any `ns0:` corruption, fill it from the study JSON, pack+order
@@ -52,13 +47,13 @@ pub fn build_study(
 
     let text = std::fs::read_to_string(&study_path)
         .with_context(|| format!("read {}", study_path.display()))?;
-    let study: Value = serde_json::from_str(&text)
+    let study: Study = serde_json::from_str(&text)
         .with_context(|| format!("parse study JSON: {}", study_path.display()))?;
 
     let root = paths::project_root()?;
     let base_pptx = if let Some(t) = template {
         t.to_path_buf()
-    } else if let Some(t) = study.get("template").and_then(|v| v.as_str()) {
+    } else if let Some(t) = &study.template {
         let p = PathBuf::from(t);
         if p.is_absolute() {
             p
@@ -72,7 +67,7 @@ pub fn build_study(
         bail!("template not found: {}", base_pptx.display());
     }
 
-    let numero = numero_to_string(&study);
+    let numero = study.numero_string();
     let work = paths::generated_dir()?.join(format!("build-{numero}"));
 
     ooxml::unzip_pptx(&base_pptx, &work)?;
@@ -100,41 +95,36 @@ pub fn build_study(
 /// Fill content and return the final active slide-number order (mirrors
 /// Python's `apply_study`): title → lectura → propósitos/idea → comentario
 /// → intro → puntos (section/texto/A/B) → conclusión → próximo → images.
-pub fn apply_study(build: &Path, study: &Value) -> Result<Vec<u32>> {
+///
+/// Primary path — takes a typed [`Study`]. See [`apply_study_value`] for
+/// callers that still only have a raw `serde_json::Value`.
+pub fn apply_study(build: &Path, study: &Study) -> Result<Vec<u32>> {
     let mut order: Vec<u32> = Vec::new();
-    let base_lines = as_lines(study.get("base_biblica"));
+    let base_lines = study.base_biblica_lines();
 
     // Title (reuse prototype in-place).
     let title_n = PROTO.title;
     order.push(title_n);
     ooxml::set_title_slide(
         &ooxml::slide_path(build, title_n),
-        &numero_to_string(study),
-        get_str(study, "titulo")?,
+        &study.numero_string(),
+        &study.titulo,
         &base_lines,
     )?;
 
     // Lectura — pack + allocate.
-    let lectura = study
-        .get("lectura")
-        .ok_or_else(|| anyhow!("study JSON missing `lectura`"))?;
-    let lectura_cita = get_str(lectura, "cita")?;
-    let lectura_versiculos = str_vec(
-        lectura
-            .get("versiculos")
-            .ok_or_else(|| anyhow!("lectura missing `versiculos`"))?,
-    )?;
-    let lectura_packs = match study.get("lectura_slides") {
-        Some(v) if !v.is_null() => str_vec_vec(v)?,
-        _ => pack::pack_verses(&lectura_versiculos, LECTURA_BUDGET),
-    };
+    let lectura_packs = study.lectura_packs();
     let lectura_nums = ooxml::allocate_slides(build, PROTO.lectura, lectura_packs.len())?;
     order.extend(&lectura_nums);
     for (i, &n) in lectura_nums.iter().enumerate() {
         ooxml::set_verses(
             &ooxml::slide_path(build, n),
             &lectura_packs[i],
-            if i == 0 { Some(lectura_cita) } else { None },
+            if i == 0 {
+                Some(study.lectura.cita.as_str())
+            } else {
+                None
+            },
             VerseKind::Lectura,
         )?;
     }
@@ -142,42 +132,41 @@ pub fn apply_study(build: &Path, study: &Value) -> Result<Vec<u32>> {
     // Propósitos / Idea (in-place).
     order.push(PROTO.propositos);
     order.push(PROTO.idea);
-    let propositos = str_vec(
-        study
-            .get("propositos")
-            .ok_or_else(|| anyhow!("study JSON missing `propositos`"))?,
-    )?;
-    if propositos.len() != 3 {
-        bail!("propositos must have exactly 3 entries, got {}", propositos.len());
+    if study.propositos.len() != 3 {
+        bail!(
+            "propositos must have exactly 3 entries, got {}",
+            study.propositos.len()
+        );
     }
     let diagrams = build.join("ppt").join("diagrams");
     ooxml::replace_diagram_texts(
         &diagrams.join("data2.xml"),
         Some(&diagrams.join("drawing2.xml")),
-        &propositos,
+        &study.propositos,
         Some(3600),
     )?;
     ooxml::force_propositos_36pt(&diagrams.join("drawing2.xml"))?;
 
-    let idea = get_str(study, "idea_principal")?.to_string();
-    let para_memorizar = study
-        .get("para_memorizar")
-        .ok_or_else(|| anyhow!("study JSON missing `para_memorizar`"))?;
-    let memo = get_str(para_memorizar, "texto")?.to_string();
     ooxml::replace_diagram_texts(
         &diagrams.join("data3.xml"),
         Some(&diagrams.join("drawing3.xml")),
-        &[idea, memo],
+        &[
+            study.idea_principal.clone(),
+            study.para_memorizar.texto.clone(),
+        ],
         None,
     )?;
-    if let Some(cite) = para_memorizar.get("cita").and_then(|v| v.as_str()) {
-        if !cite.is_empty() {
-            ooxml::set_diagram_citation(&diagrams.join("data3.xml"), cite)?;
-        }
+    if let Some(cite) = study
+        .para_memorizar
+        .cita
+        .as_deref()
+        .filter(|s| !s.is_empty())
+    {
+        ooxml::set_diagram_citation(&diagrams.join("data3.xml"), cite)?;
     }
 
     // Comentario.
-    let comentario = packed_or_slides(study, "comentario", "comentario_slides")?;
+    let comentario = study.comentario_packs();
     let com_nums = ooxml::allocate_slides(build, PROTO.comentario, comentario.len())?;
     order.extend(&com_nums);
     for (&n, text) in com_nums.iter().zip(comentario.iter()) {
@@ -186,7 +175,7 @@ pub fn apply_study(build: &Path, study: &Value) -> Result<Vec<u32>> {
 
     // Introducción header + bodies.
     order.push(PROTO.intro_header);
-    let intro = packed_or_slides(study, "introduccion", "introduccion_slides")?;
+    let intro = study.intro_packs();
     let intro_nums = ooxml::allocate_slides(build, PROTO.intro, intro.len())?;
     order.extend(&intro_nums);
     for (&n, text) in intro_nums.iter().zip(intro.iter()) {
@@ -194,60 +183,38 @@ pub fn apply_study(build: &Path, study: &Value) -> Result<Vec<u32>> {
     }
 
     // Points 1–3.
-    let puntos = study
-        .get("puntos")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| anyhow!("study JSON missing `puntos`"))?;
-    if puntos.len() != 3 {
-        bail!("expected 3 puntos, got {}", puntos.len());
+    if study.puntos.len() != 3 {
+        bail!("expected 3 puntos, got {}", study.puntos.len());
     }
-    for (idx, punto) in puntos.iter().enumerate() {
+    for (idx, punto) in study.puntos.iter().enumerate() {
         let sec_n = PROTO.section[idx];
         order.push(sec_n);
-        let n_val = punto
-            .get("n")
-            .and_then(|v| v.as_u64())
-            .ok_or_else(|| anyhow!("punto[{idx}] missing numeric `n`"))? as u32;
-        let titulo = get_str(punto, "titulo")?;
-        let rango = get_str(punto, "rango")?;
-        ooxml::set_section_chrome(&ooxml::slide_path(build, sec_n), titulo, rango, n_val)?;
-
-        let texto_biblico = str_vec(
-            punto
-                .get("texto_biblico")
-                .ok_or_else(|| anyhow!("punto[{idx}] missing `texto_biblico`"))?,
+        ooxml::set_section_chrome(
+            &ooxml::slide_path(build, sec_n),
+            &punto.titulo,
+            &punto.rango,
+            punto.n,
         )?;
-        let tpacks = match punto.get("texto_slides") {
-            Some(v) if !v.is_null() => str_vec_vec(v)?,
-            _ => pack::pack_verses(&texto_biblico, TEXTO_BUDGET),
-        };
+
+        let tpacks = punto.punto_texto_packs();
         let texto_nums = ooxml::allocate_slides(build, PROTO.texto, tpacks.len())?;
         order.extend(&texto_nums);
         for (j, &n) in texto_nums.iter().enumerate() {
             ooxml::set_verses(
                 &ooxml::slide_path(build, n),
                 &tpacks[j],
-                if j == 0 { Some(rango) } else { None },
+                if j == 0 {
+                    Some(punto.rango.as_str())
+                } else {
+                    None
+                },
                 VerseKind::Texto,
             )?;
         }
 
-        for letter in ["A", "B"] {
-            let block = punto
-                .get(letter)
-                .ok_or_else(|| anyhow!("punto[{idx}] missing `{letter}`"))?;
-            let block_titulo = get_str(block, "titulo")?;
-            let ab_title = format!("{n_val}.{letter}- {block_titulo}");
-            let texts = match block.get("slides") {
-                Some(v) if !v.is_null() => str_vec(v)?,
-                _ => {
-                    let cuerpo = block
-                        .get("cuerpo")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default();
-                    pack::pack_sentences(cuerpo, SENTENCE_BUDGET)
-                }
-            };
+        for (letter, block) in [("A", &punto.a), ("B", &punto.b)] {
+            let ab_title = format!("{}.{letter}- {}", punto.n, block.titulo);
+            let texts = block.ab_packs();
             let ab_nums = ooxml::allocate_slides(build, PROTO.ab, texts.len())?;
             order.extend(&ab_nums);
             for (&n, text) in ab_nums.iter().zip(texts.iter()) {
@@ -259,7 +226,7 @@ pub fn apply_study(build: &Path, study: &Value) -> Result<Vec<u32>> {
     }
 
     // Conclusión.
-    let conclusion = packed_or_slides(study, "conclusion", "conclusion_slides")?;
+    let conclusion = study.conclusion_packs();
     let conc_nums = ooxml::allocate_slides(build, PROTO.conclusion, conclusion.len())?;
     order.extend(&conc_nums);
     for (&n, text) in conc_nums.iter().zip(conclusion.iter()) {
@@ -267,36 +234,39 @@ pub fn apply_study(build: &Path, study: &Value) -> Result<Vec<u32>> {
     }
 
     // Próximo (omit entirely if the study says so — last study in a batch).
-    if let Some(prox) = study.get("proximo").filter(|v| !v.is_null()) {
+    if let Some(prox) = &study.proximo {
         let prox_n = PROTO.proximo;
         order.push(prox_n);
+        let prox_base = prox
+            .base_biblica
+            .as_ref()
+            .map(|b| b.as_lines())
+            .unwrap_or_default();
         ooxml::set_title_slide(
             &ooxml::slide_path(build, prox_n),
-            &numero_to_string(prox),
-            get_str(prox, "titulo")?,
-            &as_lines(prox.get("base_biblica")),
+            &prox.numero.to_string(),
+            &prox.titulo,
+            &prox_base,
         )?;
     }
 
     // Section images.
-    let raw_images = study
-        .get("section_images")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| anyhow!("study JSON must include section_images: [3 paths]"))?;
-    let root = paths::project_root()?;
-    let images: Vec<PathBuf> = raw_images
-        .iter()
-        .map(|v| {
-            let s = v
-                .as_str()
-                .ok_or_else(|| anyhow!("section_images entries must be strings"))?;
-            let p = PathBuf::from(s);
-            Ok(if p.is_absolute() { p } else { root.join(p) })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    if images.len() != 3 {
+    if study.section_images.len() != 3 {
         bail!("study JSON must include section_images: [3 paths]");
     }
+    let root = paths::project_root()?;
+    let images: Vec<PathBuf> = study
+        .section_images
+        .iter()
+        .map(|s| {
+            let p = PathBuf::from(s);
+            if p.is_absolute() {
+                p
+            } else {
+                root.join(&p)
+            }
+        })
+        .collect();
     ooxml::replace_section_images(build, &images)?;
 
     println!(
@@ -311,107 +281,105 @@ pub fn apply_study(build: &Path, study: &Value) -> Result<Vec<u32>> {
     Ok(order)
 }
 
-// ---------------------------------------------------------------------------
-// Small JSON helpers
-// ---------------------------------------------------------------------------
-
-/// `base_biblica`-style field: a `;`-joined string, or an array of strings.
-/// Missing/null → empty.
-fn as_lines(value: Option<&Value>) -> Vec<String> {
-    match value {
-        None => Vec::new(),
-        Some(Value::Null) => Vec::new(),
-        Some(Value::String(s)) => s
-            .split(';')
-            .map(|b| b.trim().to_string())
-            .filter(|b| !b.is_empty())
-            .collect(),
-        Some(Value::Array(items)) => items
-            .iter()
-            .filter_map(|v| v.as_str().map(|s| s.to_string()))
-            .collect(),
-        Some(other) => vec![other.to_string()],
-    }
-}
-
-fn get_str<'a>(v: &'a Value, key: &str) -> Result<&'a str> {
-    v.get(key)
-        .and_then(|x| x.as_str())
-        .ok_or_else(|| anyhow!("study JSON missing string field `{key}`"))
-}
-
-fn str_vec(v: &Value) -> Result<Vec<String>> {
-    v.as_array()
-        .ok_or_else(|| anyhow!("expected a JSON array of strings"))?
-        .iter()
-        .map(|x| {
-            x.as_str()
-                .map(|s| s.to_string())
-                .ok_or_else(|| anyhow!("expected a JSON array of strings"))
-        })
-        .collect()
-}
-
-fn str_vec_vec(v: &Value) -> Result<Vec<Vec<String>>> {
-    v.as_array()
-        .ok_or_else(|| anyhow!("expected a JSON array of arrays of strings"))?
-        .iter()
-        .map(str_vec)
-        .collect()
-}
-
-fn numero_to_string(v: &Value) -> String {
-    match v.get("numero") {
-        Some(Value::String(s)) => s.clone(),
-        Some(Value::Number(n)) => n.to_string(),
-        Some(other) => other.to_string(),
-        None => "x".to_string(),
-    }
-}
-
-/// `{field}_slides` (pre-packed array of strings) if present, else
-/// `pack::pack_sentences({field}, 380)`.
-fn packed_or_slides(study: &Value, field: &str, slides_field: &str) -> Result<Vec<String>> {
-    if let Some(v) = study.get(slides_field).filter(|v| !v.is_null()) {
-        return str_vec(v);
-    }
-    let text = study.get(field).and_then(|v| v.as_str()).unwrap_or_default();
-    Ok(pack::pack_sentences(text, SENTENCE_BUDGET))
+/// Thin adapter for any leftover caller that only has a raw
+/// `serde_json::Value` (e.g. hand-built JSON in a test or script) instead
+/// of a typed [`Study`]. Prefer calling [`apply_study`] directly.
+pub fn apply_study_value(build: &Path, study: &Value) -> Result<Vec<u32>> {
+    let study: Study = serde_json::from_value(study.clone())
+        .context("study JSON does not match the expected shape (see model::study::Study)")?;
+    apply_study(build, &study)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn sample_study_json() -> Value {
+        serde_json::json!({
+            "numero": 17,
+            "titulo": "UN ABRAZO QUE DA VIDA",
+            "base_biblica": "2 Reyes 4:18-37",
+            "lectura": {"cita": "2 Reyes 4:18-21", "versiculos": ["18 ...", "19 ..."]},
+            "propositos": ["a", "b", "c"],
+            "idea_principal": "idea",
+            "para_memorizar": {"texto": "texto"},
+            "comentario": "comentario",
+            "introduccion": "intro",
+            "puntos": [
+                {
+                    "n": 1, "titulo": "T1", "rango": "R1", "texto_biblico": ["1 x"],
+                    "A": {"titulo": "A1", "cuerpo": "a body"},
+                    "B": {"titulo": "B1", "cuerpo": "b body"}
+                },
+                {
+                    "n": 2, "titulo": "T2", "rango": "R2", "texto_biblico": ["2 x"],
+                    "A": {"titulo": "A2", "cuerpo": "a body"},
+                    "B": {"titulo": "B2", "cuerpo": "b body"}
+                },
+                {
+                    "n": 3, "titulo": "T3", "rango": "R3", "texto_biblico": ["3 x"],
+                    "A": {"titulo": "A3", "cuerpo": "a body"},
+                    "B": {"titulo": "B3", "cuerpo": "b body"}
+                }
+            ],
+            "conclusion": "concl",
+            "section_images": ["a.png", "b.png", "c.png"]
+        })
+    }
+
     #[test]
-    fn as_lines_splits_semicolons() {
-        let v = Value::String("Juan 3:16; Romanos 5:8".to_string());
+    fn sample_study_deserializes() {
+        let study: Study = serde_json::from_value(sample_study_json()).expect("deserialize");
+        assert_eq!(study.numero_string(), "17");
         assert_eq!(
-            as_lines(Some(&v)),
-            vec!["Juan 3:16".to_string(), "Romanos 5:8".to_string()]
+            study.base_biblica_lines(),
+            vec!["2 Reyes 4:18-37".to_string()]
+        );
+        assert_eq!(study.puntos.len(), 3);
+    }
+
+    #[test]
+    fn packing_helpers_fall_back_to_raw_text() {
+        let study: Study = serde_json::from_value(sample_study_json()).expect("deserialize");
+        assert_eq!(study.comentario_packs(), vec!["comentario".to_string()]);
+        assert_eq!(study.intro_packs(), vec!["intro".to_string()]);
+        assert_eq!(study.conclusion_packs(), vec!["concl".to_string()]);
+        assert_eq!(
+            study.lectura_packs(),
+            vec![vec!["18 ...".to_string(), "19 ...".to_string()]]
+        );
+        assert_eq!(
+            study.puntos[0].punto_texto_packs(),
+            vec![vec!["1 x".to_string()]]
+        );
+        assert_eq!(study.puntos[0].a.ab_packs(), vec!["a body".to_string()]);
+    }
+
+    #[test]
+    fn packing_helpers_prefer_pre_packed_slides() {
+        let mut json = sample_study_json();
+        json["comentario_slides"] = serde_json::json!(["one", "two"]);
+        json["lectura_slides"] = serde_json::json!([["18 ..."], ["19 ..."]]);
+        let study: Study = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(study.comentario_packs(), vec!["one".to_string(), "two".to_string()]);
+        assert_eq!(
+            study.lectura_packs(),
+            vec![vec!["18 ...".to_string()], vec!["19 ...".to_string()]]
         );
     }
 
     #[test]
-    fn as_lines_accepts_array() {
-        let v = serde_json::json!(["Juan 3:16", "Romanos 5:8"]);
-        assert_eq!(
-            as_lines(Some(&v)),
-            vec!["Juan 3:16".to_string(), "Romanos 5:8".to_string()]
-        );
-    }
+    fn apply_study_value_rejects_shape_mismatch_before_touching_disk() {
+        // `puntos` is a required field on `Study` — this should fail during
+        // the Value→Study deserialize step, before any filesystem access.
+        let mut json = sample_study_json();
+        json.as_object_mut().unwrap().remove("puntos");
 
-    #[test]
-    fn as_lines_missing_is_empty() {
-        assert!(as_lines(None).is_empty());
-    }
-
-    #[test]
-    fn numero_to_string_handles_number_and_string() {
-        assert_eq!(numero_to_string(&serde_json::json!({"numero": 17})), "17");
-        assert_eq!(
-            numero_to_string(&serde_json::json!({"numero": "17B"})),
-            "17B"
+        let tmp = std::env::temp_dir().join("mzbs-apply-study-value-test");
+        let err = apply_study_value(&tmp, &json).unwrap_err();
+        assert!(
+            err.to_string().contains("does not match the expected shape"),
+            "unexpected error: {err}"
         );
     }
 }

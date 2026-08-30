@@ -1,10 +1,22 @@
 //! Serde structs mirroring the study JSON shape described in
-//! `PREPARE_STUDY.md` / `AGENTS.md`. Optional helpers — `crate::build`
-//! itself works directly off `serde_json::Value` for flexibility (many
-//! fields are either-shaped: `comentario` vs `comentario_slides`,
-//! `base_biblica` string-or-array, etc.).
+//! `PREPARE_STUDY.md` / `AGENTS.md`. `crate::build::apply_study` deserializes
+//! study JSON into [`Study`] and drives slide-filling off these typed
+//! fields — edit *this* file when the JSON shape changes, and
+//! `crate::build::study` when the slide order changes.
+//!
+//! The `*_packs()` methods below are the single place that decides "pre-packed
+//! `*_slides` field, or pack it now with `crate::pack`" for each either-shaped
+//! field (`comentario` vs `comentario_slides`, etc.) — callers should never
+//! need to duplicate that fallback logic.
 
 use serde::{Deserialize, Serialize};
+
+use crate::pack;
+
+/// Default budget (chars) for whole-verse packs (Lectura / Texto Bíblico).
+pub const VERSE_BUDGET: usize = 280;
+/// Default budget (chars) for sentence packs (comentario/intro/A-B/conclusión).
+pub const SENTENCE_BUDGET: usize = 380;
 
 /// A field that may be authored as a single `;`-joined string or as an
 /// already-split array (e.g. `base_biblica`).
@@ -77,6 +89,17 @@ pub struct AbBlock {
     pub slides: Option<Vec<String>>,
 }
 
+impl AbBlock {
+    /// One slide of body text per entry: pre-packed `slides` if present,
+    /// else `cuerpo` packed with `pack::pack_sentences` (budget 380).
+    pub fn ab_packs(&self) -> Vec<String> {
+        if let Some(slides) = &self.slides {
+            return slides.clone();
+        }
+        pack::pack_sentences(self.cuerpo.as_deref().unwrap_or_default(), SENTENCE_BUDGET)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Punto {
     pub n: u32,
@@ -90,6 +113,18 @@ pub struct Punto {
     pub a: AbBlock,
     #[serde(rename = "B")]
     pub b: AbBlock,
+}
+
+impl Punto {
+    /// One whole-verse group per Texto Bíblico slide: pre-packed
+    /// `texto_slides` if present, else `texto_biblico` packed with
+    /// `pack::pack_verses` (budget 280).
+    pub fn punto_texto_packs(&self) -> Vec<Vec<String>> {
+        if let Some(slides) = &self.texto_slides {
+            return slides.clone();
+        }
+        pack::pack_verses(&self.texto_biblico, VERSE_BUDGET)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,6 +200,44 @@ impl Study {
     pub fn numero_string(&self) -> String {
         self.numero.to_string()
     }
+
+    /// One whole-verse group per Lectura slide: pre-packed `lectura_slides`
+    /// if present, else `lectura.versiculos` packed with
+    /// `pack::pack_verses` (budget 280).
+    pub fn lectura_packs(&self) -> Vec<Vec<String>> {
+        if let Some(slides) = &self.lectura_slides {
+            return slides.clone();
+        }
+        pack::pack_verses(&self.lectura.versiculos, VERSE_BUDGET)
+    }
+
+    /// One slide of body text per entry: pre-packed `comentario_slides` if
+    /// present, else `comentario` packed with `pack::pack_sentences`
+    /// (budget 380).
+    pub fn comentario_packs(&self) -> Vec<String> {
+        packed_or_sentences(&self.comentario, &self.comentario_slides)
+    }
+
+    /// Same fallback as [`Study::comentario_packs`], for `introduccion` /
+    /// `introduccion_slides`.
+    pub fn intro_packs(&self) -> Vec<String> {
+        packed_or_sentences(&self.introduccion, &self.introduccion_slides)
+    }
+
+    /// Same fallback as [`Study::comentario_packs`], for `conclusion` /
+    /// `conclusion_slides`.
+    pub fn conclusion_packs(&self) -> Vec<String> {
+        packed_or_sentences(&self.conclusion, &self.conclusion_slides)
+    }
+}
+
+/// Shared `{field}` / `{field}_slides` fallback: pre-packed slides win;
+/// otherwise pack the raw text now with `pack::pack_sentences`.
+fn packed_or_sentences(text: &Option<String>, slides: &Option<Vec<String>>) -> Vec<String> {
+    if let Some(slides) = slides {
+        return slides.clone();
+    }
+    pack::pack_sentences(text.as_deref().unwrap_or_default(), SENTENCE_BUDGET)
 }
 
 #[cfg(test)]

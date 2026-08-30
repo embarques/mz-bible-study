@@ -4,5 +4,5 @@ mod ooxml;
 mod proto;
 mod study;
 
-pub use study::build_study;
 pub use proto::PROTO;
+pub use study::{apply_study, apply_study_value, build_study};
