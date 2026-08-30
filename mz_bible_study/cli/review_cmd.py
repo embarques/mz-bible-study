@@ -4,6 +4,7 @@ from pathlib import Path
 
 import click
 
+from mz_bible_study.cli.options import audience_option
 from mz_bible_study.paths import project_root
 from mz_bible_study.review import ReviewError, run_review_agent
 
@@ -34,6 +35,7 @@ from mz_bible_study.review import ReviewError, run_review_agent
     default=True,
     help="Require built pptx (default) or only JSON/images.",
 )
+@audience_option
 @click.option(
     "--model",
     default="composer-2.5",
@@ -56,15 +58,16 @@ def review_cmd(
     to_study: int,
     pdf: Path | None,
     expect_pptx: bool,
+    audience: str,
     model: str,
     api_key: str | None,
     stream: bool,
 ) -> None:
-    """Agent QA: double-check prepared/built studies (writes studies/REVIEW.md)."""
+    """Agent QA: double-check prepared/built studies (writes studies/{audience}/REVIEW.md)."""
     if to_study < from_study:
         raise click.UsageError("--to must be >= --from")
     studies = list(range(from_study, to_study + 1))
-    click.echo(f"Reviewing estudios {from_study}–{to_study}…")
+    click.echo(f"Reviewing estudios {from_study}–{to_study} (audience={audience})…")
     try:
         report = run_review_agent(
             studies=studies,
@@ -73,6 +76,7 @@ def review_cmd(
             model=model,
             api_key=api_key,
             stream=stream,
+            audience=audience,
         )
         click.secho(
             f"Review PASS — {report.relative_to(project_root())}",

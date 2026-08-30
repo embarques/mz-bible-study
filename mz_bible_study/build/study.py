@@ -10,26 +10,15 @@ import copy
 import json
 import re
 import shutil
+import sys
 import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from mz_bible_study.paths import generated_dir, master_template, project_root
-
-PROTO = {
-    "title": 1,
-    "lectura": 2,
-    "propositos": 3,
-    "idea": 4,
-    "comentario": 5,
-    "intro_header": 6,
-    "intro": 7,
-    "section": (8, 12, 16),  # image4 / image5 / image6
-    "texto": 9,
-    "ab": 10,
-    "conclusion": 20,
-    "proximo": 21,
-}
+from mz_bible_study.audience import normalize_audience
+from mz_bible_study.build.base import AdultBuilderNotImplemented, get_builder
+from mz_bible_study.build.youth.proto import PROTO
+from mz_bible_study.paths import master_template, project_root
 
 P = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
 A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
@@ -850,27 +839,39 @@ def build_study(
     output: Path,
     *,
     base: Path | None = None,
+    audience: str | None = None,
     export_pdf: bool = False,
 ) -> Path:
-    """Build a study deck. Returns the output pptx path."""
-    from mz_bible_study.validate import validate_pptx
-    from mz_bible_study.export_pdf import export_one
-
+    """Build a study deck via the audience-specific builder. Returns the output pptx path."""
     study_path = study_path.resolve()
     output = output.resolve()
-    base = (base or master_template()).resolve()
     study = json.loads(study_path.read_text(encoding="utf-8"))
-    work = generated_dir() / f"build-{study.get('numero', 'x')}"
-    unzip_pptx(base, work)
-    fix_package_ns0(work)
-    order = apply_study(work, study)
-    set_active_order(work, order)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    zip_pptx(work, output)
-    print(f"Wrote {output}")
 
-    if validate_pptx(output) != 0:
-        die("validation failed — not exporting PDF")
-    if export_pdf:
-        export_one(output)
-    return output
+    try:
+        aud = normalize_audience(audience if audience is not None else study.get("audience"))
+    except ValueError as exc:
+        die(str(exc))
+
+    if base is not None:
+        pptx = base.resolve()
+    else:
+        json_tmpl = study.get("template")
+        if json_tmpl:
+            p = Path(str(json_tmpl))
+            pptx = (project_root() / p if not p.is_absolute() else p).resolve()
+        else:
+            try:
+                pptx = master_template(aud).resolve()
+            except FileNotFoundError as exc:
+                die(str(exc))
+
+    builder = get_builder(aud)
+    try:
+        return builder.build(
+            study_path,
+            output,
+            base=pptx,
+            export_pdf=export_pdf,
+        )
+    except AdultBuilderNotImplemented as exc:
+        die(str(exc))

@@ -5,8 +5,15 @@ from pathlib import Path
 
 import click
 
+from mz_bible_study.audience import stamp_study_audience
 from mz_bible_study.build.study import build_study
-from mz_bible_study.paths import master_template, project_root
+from mz_bible_study.cli.options import (
+    audience_option,
+    base_alias_option,
+    resolve_template_path,
+    template_option,
+)
+from mz_bible_study.paths import project_root
 from mz_bible_study.prepare import (
     PrepareError,
     default_pages,
@@ -65,12 +72,9 @@ from mz_bible_study.section_styles import section_style_for_study
     default=True,
     help="Stream agent assistant text while each study is prepared.",
 )
-@click.option(
-    "--base",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    default=None,
-    help="Prototype pptx for builds (default: master-template.pptx).",
-)
+@audience_option
+@template_option
+@base_alias_option
 @click.option(
     "--stop-on-error/--continue-on-error",
     default=True,
@@ -90,6 +94,8 @@ def from_pdf_cmd(
     model: str,
     api_key: str | None,
     stream: bool,
+    audience: str,
+    template: Path | None,
     base: Path | None,
     stop_on_error: bool,
     review: bool,
@@ -98,10 +104,11 @@ def from_pdf_cmd(
     if to_study < from_study:
         raise click.UsageError("--to must be >= --from")
 
+    tmpl = resolve_template_path(template, base)
     studies = list(range(from_study, to_study + 1))
     click.echo(
         f"Batch PDF {pdf.name}: estudios {from_study}–{to_study} "
-        f"({len(studies)} studies); "
+        f"({len(studies)} studies); audience={audience}; "
         f"{'prepare+build' if do_build else 'prepare only'}"
         f"{'; +review' if review else ''}"
     )
@@ -122,6 +129,7 @@ def from_pdf_cmd(
         )
         style = section_style_for_study(study)
         click.echo(f"  Section style: {style.id} — {style.name}")
+        click.echo(f"  Audience: {audience}")
 
         try:
             paths = run_prepare_agent(
@@ -134,6 +142,13 @@ def from_pdf_cmd(
                 model=model,
                 api_key=api_key,
                 stream=stream,
+                audience=audience,
+            )
+            stamp_study_audience(
+                paths["json"],
+                audience,
+                template=tmpl,
+                project_root=project_root(),
             )
             for label, path in paths.items():
                 click.echo(f"  {label}: {path.relative_to(project_root())}")
@@ -146,12 +161,13 @@ def from_pdf_cmd(
                 build_study(
                     paths["json"],
                     out,
-                    base=base or master_template(),
+                    base=tmpl,
+                    audience=audience,
                     export_pdf=export_pdf,
                 )
                 built.append(out)
             else:
-                click.echo("  Next:\n" + suggested_build_command(study))
+                click.echo("  Next:\n" + suggested_build_command(study, audience=audience))
         except (PrepareError, Exception) as exc:
             msg = f"estudio {study}: {exc}"
             errors.append(msg)
@@ -185,6 +201,7 @@ def from_pdf_cmd(
                 model=model,
                 api_key=api_key,
                 stream=stream,
+                audience=audience,
             )
             click.secho(
                 f"Review PASS — {report.relative_to(project_root())}",

@@ -6,7 +6,8 @@ import re
 from pathlib import Path
 
 from mz_bible_study.env import resolve_cursor_api_key
-from mz_bible_study.paths import project_root
+from mz_bible_study.audience import DEFAULT_AUDIENCE, normalize_audience
+from mz_bible_study.paths import project_root, studies_dir
 from mz_bible_study.prepare import PrepareError, expected_paths
 
 
@@ -40,12 +41,15 @@ def build_review_prompt(
     studies: list[int],
     source_pdf: Path | None,
     expect_pptx: bool,
+    audience: str = DEFAULT_AUDIENCE,
 ) -> str:
     root = project_root()
+    aud = normalize_audience(audience)
     rows: list[str] = []
     for n in studies:
-        paths = expected_paths(n)
+        paths = expected_paths(n, aud)
         pptx, pdf = find_built_deck(n)
+        media_dir = f"studies/{aud}/media"
         rows.append(
             f"### Estudio {n}\n"
             f"- json: `{paths['json'].relative_to(root) if paths['json'].exists() else 'MISSING'}`\n"
@@ -53,7 +57,7 @@ def build_review_prompt(
             f"`{paths['img1'].name if paths['img1'].exists() else 'MISSING'}`, "
             f"`{paths['img2'].name if paths['img2'].exists() else 'MISSING'}`, "
             f"`{paths['img3'].name if paths['img3'].exists() else 'MISSING'}` "
-            f"under `studies/media/`\n"
+            f"under `{media_dir}/`\n"
             f"- pptx: `{pptx.relative_to(root) if pptx else 'MISSING'}`\n"
             f"- pdf: `{pdf.relative_to(root) if pdf else 'MISSING'}`\n"
         )
@@ -69,7 +73,7 @@ def build_review_prompt(
         else "Prepare-only run: JSON + section images required; pptx/pdf optional."
     )
 
-    return f"""You are QA for Monte de Sion Bible-study CLI output.
+    return f"""You are QA for Monte de Sion Bible-study CLI output (audience={aud}).
 
 {expect}
 {pdf_line}
@@ -78,8 +82,8 @@ def build_review_prompt(
 {chr(10).join(rows)}
 
 ## Checklist (per study)
-1. **Files exist** — JSON, 3 section PNGs; if pptx expected, pptx present (and pdf if built with export).
-2. **JSON** — `numero` matches; required fields present (`titulo`, `base_biblica`, `lectura`, `propositos`×3, `idea_principal`, `para_memorizar`, `puntos`×3 with A/B, conclusión; `proximo` only if not last). `section_images` lists the 3 PNGs. **`section_style.id` must match the CLI-assigned family for that estudio** (see `mz_bible_study/section_styles.py` — rotates; neighboring estudios must not share the same id).
+1. **Files exist** — JSON under `studies/{aud}/`, 3 section PNGs under `studies/{aud}/media/`; if pptx expected, pptx present (and pdf if built with export).
+2. **JSON** — `numero` matches; `audience` is `{aud}`; required fields present (`titulo`, `base_biblica`, `lectura`, `propositos`×3, `idea_principal`, `para_memorizar`, `puntos`×3 with A/B, conclusión; `proximo` only if not last). `section_images` lists the 3 PNGs under `studies/{aud}/media/`. **`section_style.id` must match the CLI-assigned family for that estudio** (see `mz_bible_study/section_styles.py` — rotates; neighboring estudios must not share the same id).
 3. **Validate pptx** — run `mzbs validate "<pptx>"` (or `.venv/bin/mzbs validate …`). Must print OK.
 4. **OOXML spot-check** (unzip / inspect XML if needed):
    - Propósitos `drawing2.xml` body runs `sz="3600"` (not 5600)
@@ -89,13 +93,13 @@ def build_review_prompt(
    - Lectura: red citation/numbers; black body
    - No `ns0:` in slide / presentation rels XML
 5. **PDF spot-check** (if pdf exists): Texto Bíblico pages must not be blank black; Propósitos boxes readable (no ghost overflow).
-6. **Section image style** — open each `studies/media/{N}-section*.png` (or the section slides in the PDF). They must look like **finished slide backgrounds**: shared design family for the study, and a clear left text-safe treatment (mist/parchment/wash/etc.) so title+verse read on a calm area — **not** a busy undressed full-bleed under the orange bar. Fail the study if images are bare scenes without that treatment. Different studies should not clone the same fade motif.
+6. **Section image style** — open each `studies/{aud}/media/{{N}}-section*.png` (or the section slides in the PDF). They must look like **finished slide backgrounds**: shared design family for the study, and a clear left text-safe treatment (mist/parchment/wash/etc.) so title+verse read on a calm area — **not** a busy undressed full-bleed under the orange bar. Fail the study if images are bare scenes without that treatment. Different studies should not clone the same fade motif.
 7. **Content** — if source PDF given, quick check that title / base bíblica / section titles match the printed study (not a different estudio).
 
 ## What to do
 - Fix **safe mechanical** issues you find (OOXML color/font/bold, missing validate/export) and re-validate.
 - Do **not** invent theology; only fix packaging/render bugs or obvious path mistakes.
-- Write a short report to `studies/REVIEW.md` with overall **PASS** or **FAIL**, one section per estudio, and any fixes applied.
+- Write a short report to `studies/{aud}/REVIEW.md` with overall **PASS** or **FAIL**, one section per estudio, and any fixes applied.
 - End your final message with a single line: `REVIEW_STATUS: PASS` or `REVIEW_STATUS: FAIL`.
 
 Also follow AGENTS.md hard rules (logo floor, packing) at a high level—if slides are clearly sparse/overflow from JSON packing mistakes, note FAIL and describe what to fix in the JSON (you may edit JSON and rebuild with `mzbs build` if the issue is clear).
@@ -110,8 +114,9 @@ def run_review_agent(
     model: str,
     api_key: str | None,
     stream: bool = True,
+    audience: str = DEFAULT_AUDIENCE,
 ) -> Path:
-    """Run QA agent; returns path to studies/REVIEW.md. Raises ReviewError on FAIL."""
+    """Run QA agent; returns path to studies/{{audience}}/REVIEW.md. Raises ReviewError on FAIL."""
     try:
         from cursor_sdk import Agent, CursorAgentError, LocalAgentOptions
     except ImportError as exc:
@@ -127,12 +132,14 @@ def run_review_agent(
             "https://cursor.com/dashboard/api"
         )
 
+    aud = normalize_audience(audience)
     root = project_root()
-    (root / "studies").mkdir(parents=True, exist_ok=True)
+    studies_dir(aud)
     prompt = build_review_prompt(
         studies=studies,
         source_pdf=source_pdf.resolve() if source_pdf else None,
         expect_pptx=expect_pptx,
+        audience=aud,
     )
 
     try:
@@ -154,7 +161,7 @@ def run_review_agent(
             f"review agent run failed mid-flight (id={getattr(result, 'id', '?')})"
         )
 
-    report = root / "studies" / "REVIEW.md"
+    report = studies_dir(aud) / "REVIEW.md"
     status = _read_review_status(report, result)
     if status != "PASS":
         raise ReviewError(

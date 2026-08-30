@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import click
 
+from mz_bible_study.audience import stamp_study_audience
 from mz_bible_study.build.study import build_study
-from mz_bible_study.paths import master_template, project_root
+from mz_bible_study.cli.options import (
+    audience_option,
+    base_alias_option,
+    resolve_template_path,
+    template_option,
+)
+from mz_bible_study.paths import project_root
 from mz_bible_study.prepare import (
     PrepareError,
     default_pages,
@@ -89,12 +97,9 @@ from mz_bible_study.section_styles import section_style_for_study
     default=True,
     help="With --build, also export PDF (default: on).",
 )
-@click.option(
-    "--base",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    default=None,
-    help="Prototype pptx for --build (default: master-template.pptx).",
-)
+@audience_option
+@template_option
+@base_alias_option
 @click.option(
     "--review/--no-review",
     default=True,
@@ -115,10 +120,12 @@ def prepare_cmd(
     build: bool,
     output: Path | None,
     export_pdf: bool,
+    audience: str,
+    template: Path | None,
     base: Path | None,
     review: bool,
 ) -> None:
-    """Prepare studies/{N}.json + section images via Cursor agent (PREPARE_STUDY.md)."""
+    """Prepare studies/{audience}/{N}.json + section images via Cursor agent (PREPARE_STUDY.md)."""
     try:
         if pages:
             page_range = parse_pages(pages)
@@ -146,11 +153,13 @@ def prepare_cmd(
                 "base_biblica": bases,
             }
 
+        tmpl = resolve_template_path(template, base)
         style = section_style_for_study(study_number)
         click.echo(
             f"Preparing estudio {study_number} from {pdf.name} pages {page_range[0]}–{page_range[1]}…"
         )
         click.echo(f"Section style: {style.id} — {style.name}")
+        click.echo(f"Audience: {audience}")
         paths = run_prepare_agent(
             study=study_number,
             pdf=pdf,
@@ -160,18 +169,23 @@ def prepare_cmd(
             model=model,
             api_key=api_key,
             stream=stream,
+            audience=audience,
+        )
+        stamp_study_audience(
+            paths["json"],
+            audience,
+            template=tmpl,
+            project_root=project_root(),
         )
         click.secho("Prepare OK:", fg="green")
         for label, path in paths.items():
             click.echo(f"  {label}: {path.relative_to(project_root())}")
 
-        cmd = suggested_build_command(study_number)
+        cmd = suggested_build_command(study_number, audience=audience)
         click.echo("\nNext:")
         click.echo(cmd)
 
         if build:
-            import json
-
             data = json.loads(paths["json"].read_text(encoding="utf-8"))
             title = data.get("titulo") or "TITLE"
             out = output or (
@@ -181,7 +195,8 @@ def prepare_cmd(
             build_study(
                 paths["json"],
                 out,
-                base=base or master_template(),
+                base=tmpl,
+                audience=audience,
                 export_pdf=export_pdf,
             )
             if review:
@@ -196,6 +211,7 @@ def prepare_cmd(
                         model=model,
                         api_key=api_key,
                         stream=stream,
+                        audience=audience,
                     )
                     click.secho(
                         f"Review PASS — {report.relative_to(project_root())}",
