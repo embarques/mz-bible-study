@@ -1,8 +1,8 @@
 # Generated Bible study decks & prepare inputs
 bible-studies/
-studies/*
+studies/**
+!studies/**/
 !studies/README.md
-!studies/*/
 !studies/*/README.md
 
 # CLI / agent scratch (page rasters, previews, unzipped builds)
