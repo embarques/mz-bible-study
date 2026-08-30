@@ -24,8 +24,7 @@ pub fn set_section_chrome(path: &Path, title: &str, rango: &str, n: u32) -> Resu
 /// (retired yellow dashed/dotted chrome — see AGENTS.md).
 pub(crate) fn strip_arc_shapes(xml: &str) -> String {
     let mut s = xml.to_string();
-    loop {
-        let Some(pos) = s.find(r#"name="Arc"#) else { break };
+    while let Some(pos) = s.find(r#"name="Arc"#) {
         let Some(start) = s[..pos].rfind("<p:sp") else { break };
         let Some(rel_end) = s[pos..].find("</p:sp>") else { break };
         let end = pos + rel_end + "</p:sp>".len();

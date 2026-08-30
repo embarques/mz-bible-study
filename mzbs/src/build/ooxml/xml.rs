@@ -150,7 +150,7 @@ fn insert_attr(open_tag: &str, name: &str, value: &str) -> String {
     // open_tag looks like `<a:rPr` or `<a:rPr foo="1"` possibly ending in
     // `/>` or `>`; insert right after the tag name.
     let tag_end = open_tag
-        .find(|c: char| c == ' ' || c == '/' || c == '>')
+        .find([' ', '/', '>'])
         .unwrap_or(open_tag.len());
     format!(
         r#"{} {}="{}"{}"#,

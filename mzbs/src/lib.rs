@@ -1,4 +1,10 @@
 //! Monte de Sion Bible-study engine — shared by CLI and TUI.
+//!
+//! **New here?** Read [`../CONTRIBUTING.md`](../../CONTRIBUTING.md) for the
+//! module map (“where do I change X?”). Entry points:
+//! - [`run`] — prepare → build → review orchestration
+//! - [`build::build_study`] — JSON + images → PPTX
+//! - [`validate::validate_pptx`] — package integrity
 
 pub mod agent;
 pub mod build;

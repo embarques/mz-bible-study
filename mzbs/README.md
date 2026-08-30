@@ -168,24 +168,30 @@ Deliverables:
 | pack_sentences / pack_verses | Working + tests |
 | validate_pptx | Working (validates youth master) |
 | section_styles catalog | Working |
-| youth OOXML build | Ported (needs live JSON fixtures to golden-test) |
+| youth OOXML build | Working + **golden** `tests/build_golden.rs` |
 | export-pdf (macOS) | Ported |
 | Cursor HTTP client | Implemented (needs live API key to exercise) |
 | prepare orchestration + page-count check | Working |
+| Typed `Study` as build input | Working (`model/study.rs`) |
 | TUI MVU form | Compiles; form → same `run()` |
 | Adult builder | Explicit error |
 | Python CLI | Untouched |
+| Contributor docs | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 
 ## Dev layout
 
 ```
 mzbs/
   Cargo.toml
-  src/…           # see module list in lib.rs
-  prompts/        # copies of AGENTS.md, PREPARE_STUDY.md, REVIEW.md
-  template/youth/ # copy of master-template.pptx
+  CONTRIBUTING.md     # junior map: where to change what
+  src/…               # see CONTRIBUTING.md
+  prompts/            # copies of AGENTS.md, PREPARE_STUDY.md, REVIEW.md
+  template/youth/     # copy of master-template.pptx
   scans/
+  tests/build_golden.rs
   config.example.toml
   LEEME.md
   README.md
 ```
+
+**New contributors:** start with [`CONTRIBUTING.md`](CONTRIBUTING.md) (module map + coding norms). Do not dive into `src/build/ooxml/` until you need to.

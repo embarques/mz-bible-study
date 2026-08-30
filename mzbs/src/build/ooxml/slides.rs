@@ -117,13 +117,12 @@ pub fn set_active_order(build: &Path, slide_nums: &[u32]) -> Result<()> {
         .captures_iter(&rels)
         .filter_map(|c| c[1].parse::<u32>().ok())
         .collect();
-    let mut next_id = used.iter().copied().max().map(|m| m + 1).unwrap_or(1);
+    let start_id = used.iter().copied().max().map(|m| m + 1).unwrap_or(1);
 
     let mut rids: Vec<String> = Vec::with_capacity(slide_nums.len());
     let mut chunks = String::new();
-    for &n in slide_nums {
-        let rid = format!("rId{next_id}");
-        next_id += 1;
+    for (i, &n) in slide_nums.iter().enumerate() {
+        let rid = format!("rId{}", start_id + i as u32);
         chunks.push_str(&format!(
             r#"<Relationship Id="{rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide{n}.xml"/>"#
         ));
