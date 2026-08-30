@@ -48,7 +48,7 @@ async fn real_main() -> Result<()> {
                 args.api_key.clone(),
                 args.model.clone(),
                 Some(args.audience.into()),
-                Some(args.export_pdf_effective()),
+                Some(args.export_pdf),
             );
 
             let range = args.range()?;
@@ -69,11 +69,11 @@ async fn real_main() -> Result<()> {
                         to,
                         audience: args.audience.into(),
                         prepare_only: args.prepare_only,
-                        export_pdf: args.export_pdf_effective(),
-                        review: args.review_effective(),
+                        export_pdf: args.export_pdf,
+                        review: args.review,
                         template: args.template_effective(),
-                        stream: args.stream_effective(),
-                        stop_on_error: args.stop_on_error_effective(),
+                        stream: args.stream,
+                        stop_on_error: args.stop_on_error,
                     };
                     mzbs::run(job, &cfg).await
                 }
@@ -148,7 +148,7 @@ async fn real_main() -> Result<()> {
                     audience: args.audience.into(),
                     model: cfg.cursor_model.clone(),
                     api_key,
-                    stream: args.stream_effective(),
+                    stream: args.stream,
                     root,
                 },
             )

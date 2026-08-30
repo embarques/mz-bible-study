@@ -1,6 +1,27 @@
 //! Clap CLI definitions.
+//!
+//! ## Bool flags that default to "on"
+//!
+//! For a flag that's on by default (`export_pdf`, `review`, `stream`,
+//! `stop_on_error`), clap only needs **one** real command-line flag: the
+//! negation (`--no-export-pdf`, `--no-review`, `--no-stream`,
+//! `--continue-on-error`). There's no separate `--export-pdf` etc. flag to
+//! pass — the field already defaults to `true`, so simply *not* passing the
+//! negation flag keeps it on. The pattern:
+//!
+//! ```ignore
+//! #[arg(long = "export-pdf", default_value_t = true)]
+//! #[arg(long = "no-export-pdf", action = ArgAction::SetFalse)]
+//! pub export_pdf: bool,
+//! ```
+//!
+//! Stacking two `#[arg(...)]` attributes on one field does **not** create
+//! two clap arguments (clap derive is one `Arg` per field) — the second
+//! attribute's `long` simply wins. Keep the first attribute anyway; it
+//! documents the "on" name and default for readers, even though the only
+//! argument clap registers is `--no-export-pdf`.
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 use crate::job::Audience;
@@ -77,20 +98,15 @@ pub struct PrepareArgs {
     #[arg(long)]
     pub prepare_only: bool,
 
-    /// When building, also export PDF
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    /// PDF export is on by default; pass --no-export-pdf to skip it
+    #[arg(long = "export-pdf", default_value_t = true)]
+    #[arg(long = "no-export-pdf", action = ArgAction::SetFalse)]
     pub export_pdf: bool,
 
-    /// Disable PDF export
-    #[arg(long = "no-export-pdf", overrides_with = "export_pdf")]
-    pub no_export_pdf: bool,
-
-    /// Run agent QA after prepare (default on)
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    /// Agent QA review runs by default; pass --no-review to skip it
+    #[arg(long = "review", default_value_t = true)]
+    #[arg(long = "no-review", action = ArgAction::SetFalse)]
     pub review: bool,
-
-    #[arg(long = "no-review", overrides_with = "review")]
-    pub no_review: bool,
 
     #[arg(long, value_enum, default_value_t = AudienceCli::Youth)]
     pub audience: AudienceCli,
@@ -109,17 +125,16 @@ pub struct PrepareArgs {
     #[arg(long, env = "CURSOR_API_KEY")]
     pub api_key: Option<String>,
 
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    /// Streaming agent output is on by default; pass --no-stream to disable it
+    #[arg(long = "stream", default_value_t = true)]
+    #[arg(long = "no-stream", action = ArgAction::SetFalse)]
     pub stream: bool,
 
-    #[arg(long = "no-stream", overrides_with = "stream")]
-    pub no_stream: bool,
-
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    /// Stops the batch on the first failed study by default; pass
+    /// --continue-on-error to keep going and report all failures at the end
+    #[arg(long = "stop-on-error", default_value_t = true)]
+    #[arg(long = "continue-on-error", action = ArgAction::SetFalse)]
     pub stop_on_error: bool,
-
-    #[arg(long = "continue-on-error", overrides_with = "stop_on_error")]
-    pub continue_on_error: bool,
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -167,11 +182,10 @@ pub struct ReviewArgs {
     #[arg(long, env = "CURSOR_API_KEY")]
     pub api_key: Option<String>,
 
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    /// Streaming agent output is on by default; pass --no-stream to disable it
+    #[arg(long = "stream", default_value_t = true)]
+    #[arg(long = "no-stream", action = ArgAction::SetFalse)]
     pub stream: bool,
-
-    #[arg(long = "no-stream", overrides_with = "stream")]
-    pub no_stream: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
@@ -191,38 +205,6 @@ impl From<AudienceCli> for Audience {
 }
 
 impl PrepareArgs {
-    pub fn export_pdf_effective(&self) -> bool {
-        if self.no_export_pdf {
-            false
-        } else {
-            self.export_pdf
-        }
-    }
-
-    pub fn review_effective(&self) -> bool {
-        if self.no_review {
-            false
-        } else {
-            self.review
-        }
-    }
-
-    pub fn stream_effective(&self) -> bool {
-        if self.no_stream {
-            false
-        } else {
-            self.stream
-        }
-    }
-
-    pub fn stop_on_error_effective(&self) -> bool {
-        if self.continue_on_error {
-            false
-        } else {
-            self.stop_on_error
-        }
-    }
-
     pub fn template_effective(&self) -> Option<PathBuf> {
         self.template.clone().or_else(|| self.base.clone())
     }
@@ -258,14 +240,6 @@ impl ReviewArgs {
             (None, None, Some(n)) => Ok((n, n)),
             (Some(f), Some(t), Some(n)) if f == t && f == n => Ok((n, n)),
             _ => anyhow::bail!("review requires --from/--to or -n"),
-        }
-    }
-
-    pub fn stream_effective(&self) -> bool {
-        if self.no_stream {
-            false
-        } else {
-            self.stream
         }
     }
 }
