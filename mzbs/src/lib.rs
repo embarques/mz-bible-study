@@ -71,7 +71,17 @@ pub async fn run(job: PrepareJob, cfg: &Config) -> Result<()> {
         let style = section_styles::section_style_for_study(*n);
         println!("  Section style: {} — {}", style.id, style.name);
 
-        match prepare_one_study(*n, &pdf, pages, is_last, next_pages, &job, cfg, &root).await {
+        let one = PrepareOne {
+            study: *n,
+            pdf: &pdf,
+            pages,
+            omit_proximo: is_last,
+            next_pages,
+            job: &job,
+            cfg,
+            root: &root,
+        };
+        match prepare_one_study(one).await {
             Ok(()) => {}
             Err(e) => {
                 let msg = format!("estudio {n}: {e:#}");
@@ -99,16 +109,34 @@ pub async fn run(job: PrepareJob, cfg: &Config) -> Result<()> {
     Ok(())
 }
 
-async fn prepare_one_study(
+/// Everything one `prepare_one_study` call needs — grouped into a struct so
+/// the function signature stays readable (see clippy's `too_many_arguments`).
+struct PrepareOne<'a> {
     study: u32,
-    pdf: &Path,
+    pdf: &'a Path,
     pages: (u32, u32),
+    /// True on the last study in a batch — no Próximo slide, no next title
+    /// page to read from.
     omit_proximo: bool,
+    /// Page range of the *next* study's title page, when there is one.
     next_pages: Option<(u32, u32)>,
-    job: &PrepareJob,
-    cfg: &Config,
-    root: &Path,
-) -> Result<()> {
+    job: &'a PrepareJob,
+    cfg: &'a Config,
+    root: &'a Path,
+}
+
+async fn prepare_one_study(one: PrepareOne<'_>) -> Result<()> {
+    let PrepareOne {
+        study,
+        pdf,
+        pages,
+        omit_proximo,
+        next_pages,
+        job,
+        cfg,
+        root,
+    } = one;
+
     let api_key = cfg
         .cursor_api_key
         .as_deref()
