@@ -7,20 +7,20 @@ Two ways:
 
 ---
 
-## `mzbs from-pdf` (whole PDF)
+## `mzbs prepare` — batch (`--from` / `--to`)
 
 Default: **prepare every study + build + export PDF + agent review**.
 
 ```bash
-mzbs from-pdf --pdf "Bible Study 20-22.pdf" --from 20 --to 22
+mzbs prepare --pdf "Bible Study 20-22.pdf" --from 20 --to 22
 ```
 
 - Studies must be **3 pages each**, in order, starting at `--from`
 - Middle studies: Próximo is read from the **next** study’s title page in the PDF  
 - Last study (`--to`): Próximo omitted  
-- `--prepare-only` skips build/PDF  
+- `--prepare-only` or `--no-build` skips build/PDF  
 - `--no-review` skips the final QA agent  
-- Review report: `studies/REVIEW.md` (`REVIEW_STATUS: PASS|FAIL`)
+- Review report: `studies/{audience}/REVIEW.md` (`REVIEW_STATUS: PASS|FAIL`)
 
 Re-run QA anytime:
 
@@ -28,7 +28,7 @@ Re-run QA anytime:
 mzbs review --from 20 --to 22 --pdf "Bible Study 20-22.pdf"
 ```
 
-## `mzbs prepare` (one study)
+## `mzbs prepare` — one study (`-n` / `--study`)
 
 ```bash
 pip install -e ".[prepare]"
@@ -38,8 +38,9 @@ export CURSOR_API_KEY=…   # Cursor Dashboard → Integrations
 mzbs prepare --pdf "Bible Study 20-22.pdf" -n 22 --pages 7-9 --last
 
 # Then build (or add --build to prepare)
-mzbs build studies/22.json \
+mzbs build studies/youth/22.json \
   -o "bible-studies/22 - MEJORA TU AUTOESTIMA.pptx" \
+  --audience youth \
   --export-pdf
 ```
 
@@ -68,10 +69,10 @@ Inputs:
 - Study 22 = pages 7–9 (3 content pages). Próximo: omit (last study in this PDF).
 
 Deliver only:
-1. studies/22.json  (schema like studies/20.json; faithful Spanish from the scans)
-2. studies/media/22-section1.png
-3. studies/media/22-section2.png
-4. studies/media/22-section3.png
+1. studies/youth/22.json  (schema like studies/youth/20.json; faithful Spanish from the scans)
+2. studies/youth/media/22-section1.png
+3. studies/youth/media/22-section2.png
+4. studies/youth/media/22-section3.png
 
 Rules:
 - Match AGENTS.md transcription rules (merge cross-page cuts; exclude Ideas para el maestro / Preguntas).
@@ -94,16 +95,16 @@ Adjust the study number, PDF/pages, and Próximo lines for other estudios.
 | Source PDF | `Bible Study 20-22.pdf` (repo root; gitignored) |
 | Pages | **7–9** (studies are 3 pages each: 20→1–3, 21→4–6, 22→7–9) |
 | Próximo | **Omit** (`"proximo": null` or omit the key) — 22 is last in this PDF |
-| Output JSON | `studies/22.json` |
-| Section art | `studies/media/22-section{1,2,3}.png` |
+| Output JSON | `studies/youth/22.json` (or `studies/adult/…` for adult) |
+| Section art | `studies/youth/media/22-section{1,2,3}.png` |
 
 ---
 
 ## What must be produced
 
-### 1. `studies/{N}.json`
+### 1. `studies/{audience}/{N}.json`
 
-Mirror the shape of `studies/20.json`:
+Mirror the shape of `studies/youth/20.json`:
 
 | Field | Notes |
 |-------|--------|
@@ -129,8 +130,8 @@ Faithful Spanish — fix OCR noise; don’t paraphrase theology.
 
 ### 2. Three section images
 
-- Paths: `studies/media/{N}-section1.png` … `section3.png`
-- **`mzbs prepare` / `mzbs from-pdf` assigns a style family** for that estudio number — follow it exactly (see prompt block `ASSIGNED section style`). Do not use the same style as the previous estudio; the CLI rotation already picks a different id.
+- Paths: `studies/{audience}/media/{N}-section1.png` … `section3.png`
+- **`mzbs prepare` assigns a style family** for that estudio number — follow it exactly (see prompt block `ASSIGNED section style`). Do not use the same style as the previous estudio; the CLI rotation already picks a different id.
 - Each PNG is a **finished slide background** using that family’s left text-safe treatment
 - Scene on the right; calm left for dark title + verse
 - 16:9 (≈1408×768)

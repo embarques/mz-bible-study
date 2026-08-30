@@ -7,7 +7,8 @@ import re
 from pathlib import Path
 
 from mz_bible_study.env import resolve_cursor_api_key
-from mz_bible_study.paths import generated_dir, project_root
+from mz_bible_study.audience import DEFAULT_AUDIENCE, normalize_audience
+from mz_bible_study.paths import generated_dir, project_root, studies_dir
 from mz_bible_study.section_styles import section_style_for_study, style_prompt_block
 
 
@@ -41,8 +42,10 @@ def build_prepare_prompt(
     omit_proximo: bool,
     proximo: dict | None,
     next_pages: tuple[int, int] | None = None,
+    audience: str = DEFAULT_AUDIENCE,
 ) -> str:
     root = project_root()
+    aud = normalize_audience(audience)
     guide = (root / "PREPARE_STUDY.md").read_text(encoding="utf-8")
     try:
         pdf_disp: Path | str = pdf.resolve().relative_to(root.resolve())
@@ -68,23 +71,25 @@ def build_prepare_prompt(
         raise PrepareError("próximo metadata missing and no next_pages to read from")
 
     style_block = style_prompt_block(study)
+    base = f"studies/{aud}"
 
     return f"""Follow PREPARE_STUDY.md in this repo (full text also below).
 
-Prepare **Estudio {study}** for the mzbs CLI. Do **NOT** build a .pptx and do **NOT** run `mzbs build` unless the user already asked in this run — only write the deliverables.
+Prepare **Estudio {study}** for the mzbs CLI (**audience={aud}**). Do **NOT** build a .pptx and do **NOT** run `mzbs build` unless the user already asked in this run — only write the deliverables.
 
 ## Inputs
 - PDF: `{pdf_disp}` (absolute: `{pdf.resolve()}`)
 - Pages: **{pages[0]}–{pages[1]}** (3 content pages for this study)
+- Audience: **{aud}** (deliverables under `{base}/`)
 - {proximo_block}
 
 ## Deliverables (must exist when you finish)
-1. `studies/{study}.json` — same schema as `studies/20.json`; faithful Spanish from the scans
-2. `studies/media/{study}-section1.png`
-3. `studies/media/{study}-section2.png`
-4. `studies/media/{study}-section3.png`
+1. `{base}/{study}.json` — same schema as `{base}/20.json` if present; faithful Spanish from the scans
+2. `{base}/media/{study}-section1.png`
+3. `{base}/media/{study}-section2.png`
+4. `{base}/media/{study}-section3.png`
 
-Point `section_images` in the JSON at those three PNG paths (repo-relative).
+Point `section_images` in the JSON at those three PNG paths (repo-relative). Include `"audience": "{aud}"`.
 
 ## Scratch (do not leave in repo root)
 - Put PDF page rasters, crops, OCR dumps, and other temp files under `generated/` only
@@ -103,7 +108,7 @@ Also:
 ## Rules
 - Match AGENTS.md transcription: merge cross-page cuts; exclude Ideas para el maestro / Preguntas de reflexión.
 - Pack body slides ~360–400 chars at sentence ends; Lectura/Texto = whole verses only.
-- Create `studies/`, `studies/media/`, and `generated/` if missing.
+- Create `{base}/`, `{base}/media/`, and `generated/` if missing.
 
 When finished, print a short confirmation listing the four paths, the assigned `section_style.id`, and the exact `mzbs build` command for this study.
 
@@ -114,18 +119,20 @@ When finished, print a short confirmation listing the four paths, the assigned `
 """
 
 
-def expected_paths(study: int) -> dict[str, Path]:
-    root = project_root()
+def expected_paths(study: int, audience: str = DEFAULT_AUDIENCE) -> dict[str, Path]:
+    aud = normalize_audience(audience)
+    base = studies_dir(aud)
     return {
-        "json": root / "studies" / f"{study}.json",
-        "img1": root / "studies" / "media" / f"{study}-section1.png",
-        "img2": root / "studies" / "media" / f"{study}-section2.png",
-        "img3": root / "studies" / "media" / f"{study}-section3.png",
+        "json": base / f"{study}.json",
+        "img1": base / "media" / f"{study}-section1.png",
+        "img2": base / "media" / f"{study}-section2.png",
+        "img3": base / "media" / f"{study}-section3.png",
     }
 
 
-def verify_deliverables(study: int) -> dict[str, Path]:
-    paths = expected_paths(study)
+def verify_deliverables(study: int, audience: str = DEFAULT_AUDIENCE) -> dict[str, Path]:
+    aud = normalize_audience(audience)
+    paths = expected_paths(study, aud)
     missing = [str(p) for p in paths.values() if not p.exists()]
     if missing:
         raise PrepareError(
@@ -162,6 +169,7 @@ def run_prepare_agent(
     api_key: str | None,
     stream: bool = True,
     next_pages: tuple[int, int] | None = None,
+    audience: str = DEFAULT_AUDIENCE,
 ) -> dict[str, Path]:
     """Invoke Cursor local agent; return verified deliverable paths."""
     try:
@@ -183,8 +191,9 @@ def run_prepare_agent(
     if not pdf.exists():
         raise PrepareError(f"PDF not found: {pdf}")
 
+    aud = normalize_audience(audience)
     root = project_root()
-    (root / "studies" / "media").mkdir(parents=True, exist_ok=True)
+    studies_dir(aud)  # ensures studies/{aud}/media
     (generated_dir() / "pages").mkdir(parents=True, exist_ok=True)
 
     prompt = build_prepare_prompt(
@@ -194,6 +203,7 @@ def run_prepare_agent(
         omit_proximo=omit_proximo,
         proximo=proximo,
         next_pages=next_pages,
+        audience=aud,
     )
 
     try:
@@ -219,7 +229,7 @@ def run_prepare_agent(
         rid = getattr(result, "id", "?")
         raise PrepareError(f"agent run failed mid-flight (id={rid})")
 
-    return verify_deliverables(study)
+    return verify_deliverables(study, aud)
 
 
 def _stream_run(run: object) -> None:
@@ -245,8 +255,13 @@ def _stream_run(run: object) -> None:
         pass
 
 
-def suggested_build_command(study: int, titulo: str | None = None) -> str:
-    paths = expected_paths(study)
+def suggested_build_command(
+    study: int,
+    titulo: str | None = None,
+    audience: str = DEFAULT_AUDIENCE,
+) -> str:
+    aud = normalize_audience(audience)
+    paths = expected_paths(study, aud)
     title = titulo
     if title is None and paths["json"].exists():
         try:
@@ -256,7 +271,8 @@ def suggested_build_command(study: int, titulo: str | None = None) -> str:
     title = title or "TITLE"
     out = f"bible-studies/{study} - {title}.pptx"
     return (
-        f"mzbs build studies/{study}.json \\\n"
+        f'mzbs build "studies/{aud}/{study}.json" \\\n'
         f'  -o "{out}" \\\n'
+        f"  --audience {aud} \\\n"
         f"  --export-pdf"
     )

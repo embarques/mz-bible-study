@@ -22,5 +22,5 @@ prepare = [
 mzbs = "mz_bible_study.cli:main"
 
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["python"]
 include = ["mz_bible_study*"]

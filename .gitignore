@@ -1,6 +1,9 @@
 # Generated Bible study decks & prepare inputs
 bible-studies/
-studies/
+studies/*
+!studies/README.md
+!studies/*/
+!studies/*/README.md
 
 # CLI / agent scratch (page rasters, previews, unzipped builds)
 generated/
@@ -33,6 +36,9 @@ __pycache__/
 Thumbs.db
 
 .venv/
+
+# Rust (mzbs/)
+mzbs/target/
 
 # Secrets
 .env

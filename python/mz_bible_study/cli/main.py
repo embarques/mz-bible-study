@@ -4,7 +4,6 @@ import click
 
 from mz_bible_study.cli.build_cmd import build_cmd
 from mz_bible_study.cli.export_pdf_cmd import export_pdf_cmd
-from mz_bible_study.cli.from_pdf_cmd import from_pdf_cmd
 from mz_bible_study.cli.prepare_cmd import prepare_cmd
 from mz_bible_study.cli.review_cmd import review_cmd
 from mz_bible_study.cli.validate_cmd import validate_cmd
@@ -21,7 +20,6 @@ def cli() -> None:
     load_env()
 
 
-cli.add_command(from_pdf_cmd)
 cli.add_command(prepare_cmd)
 cli.add_command(build_cmd)
 cli.add_command(validate_cmd)

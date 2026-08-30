@@ -1,6 +1,6 @@
 # AGENTS.md — Monte de Sion Bible Study PowerPoint
 
-Agent playbook for building Spanish Bible study decks from scans. Match [`template/master-template.pptx`](template/master-template.pptx) and recent decks in [`bible-studies/`](bible-studies/).
+Agent playbook for building Spanish Bible study decks from scans. Match [`template/youth/master-template.pptx`](template/youth/master-template.pptx) (default `--audience youth`) and recent decks in [`bible-studies/`](bible-studies/). Adult uses a separate builder/template (`--audience adult`) — not implemented yet.
 
 User-facing summary: [`README.md`](README.md). Template index: [`template/README.md`](template/README.md).
 
@@ -66,9 +66,10 @@ Output:
 
 | File | Role |
 |------|------|
-| [`template/master-template.pptx`](template/master-template.pptx) | **Gold standard** — clone slide XML from here |
+| [`template/youth/master-template.pptx`](template/youth/master-template.pptx) | **Youth gold standard** — clone slide XML from here (`--audience youth`, default) |
+| [`template/adult/master-template.pptx`](template/adult/master-template.pptx) | Adult gold standard (when ready; `--audience adult`) |
 
-**Never overwrite** `template/`. Scratch: `_agent-reference.pptx` or `/tmp`. Generated decks go in **`bible-studies/`**.
+**Never overwrite** `template/`. Scratch: `_agent-reference.pptx` or `/tmp` / `generated/`. Generated decks go in **`bible-studies/`**.
 
 ---
 
@@ -76,7 +77,7 @@ Output:
 
 Edit by **OOXML only**: unzip → edit XML/media → rezip `ZIP_DEFLATED`.
 
-Prefer **copying working slide XML** from `template/master-template.pptx`, then swap text/images — do not invent new layouts.
+Prefer **copying working slide XML** from `template/youth/master-template.pptx` (or a recent good deck), then swap text/images — do not invent new layouts.
 
 After adding/removing/reordering slides, update:
 
@@ -121,7 +122,7 @@ Typical Senda de Vida page map (3 consecutive study pages):
 
 ### 3. Start the deck file
 
-- Clone [`template/master-template.pptx`](template/master-template.pptx).
+- Clone [`template/youth/master-template.pptx`](template/youth/master-template.pptx) (default `--audience youth`).
 - Write `bible-studies/{N} - {TITLE}.pptx`.
 - Replace all study-specific text; generate and swap section images.
 
@@ -131,13 +132,13 @@ Follow slide order and recipes below, then the checklist.
 
 ### 5. Generate section images (1 / 2 / 3)
 
-**Just generate them — do not ask.** You already have permission to create section art. Do **not** ask the user to confirm prompts, styles, or whether to generate. When using **`mzbs prepare` / `from-pdf`**, follow the **CLI-assigned** `section_style` for that estudio (rotating catalog — different id every study). For chat-only builds, pick a design family different from prior studies yourself. Generate all three images, insert them into the deck, and move on. If a generation fails or is blocked, regenerate with a safer framing and continue — still without asking.
+**Just generate them — do not ask.** You already have permission to create section art. Do **not** ask the user to confirm prompts, styles, or whether to generate. When using **`mzbs prepare`** (single or `--from`/`--to` batch), follow the **CLI-assigned** `section_style` for that estudio (rotating catalog — different id every study). For chat-only builds, pick a design family different from prior studies yourself. Generate all three images, insert them into the deck, and move on. If a generation fails or is blocked, regenerate with a safer framing and continue — still without asking.
 
 **One design family per study; different family from other studies.**
 
 - Within a study, all three section images share the **same visual design language** (lighting, finish, edge treatment, optional accents).
 - Across studies, **change the design** — `mzbs` assigns a rotating family; chat builds must not reuse the previous study’s look (e.g. if study 16 used yellow dashed accent arcs / a particular white-curve panel, study 17 and 18 must not copy that).
-- Catalog: `mz_bible_study/section_styles.py` (parchment, lavender mist, sage paper, ink wash, dawn gold, …).
+- Catalog: `python/mz_bible_study/section_styles.py` (parchment, lavender mist, sage paper, ink wash, dawn gold, …).
 - When cloning a prior deck, **always strip** PowerPoint shapes named `Arc …` (yellow dashed/dotted arcs). That motif is retired — **do not** keep or redraw dotted/dashed arc chrome on section slides for any new study.
 - Generate three **new** illustrations every study (don’t reuse another study’s media files).
 
@@ -316,7 +317,7 @@ Do **not** call a helper that strips `b="1"` from every run with `bold=False` as
 
 1. Confirm **3 current scans**. If next title-page scan is missing, **ask** for próximo number / title / base bíblica before finishing.  
 2. Sort current by page #; extract outline; merge cross-page sections; extract próximo from scan 2 **or** from the user’s typed reply.  
-3. Create `bible-studies/{N} - {TITLE}.pptx` from master-template (never overwrite `template/`).  
+3. Create `bible-studies/{N} - {TITLE}.pptx` from the audience template (never overwrite `template/`). Prepare JSON lives under `studies/{audience}/`.  
 4. Title = current study from scans.  
 5. Lectura — whole verses; citation only on first of each range.  
 6. Propósitos + Idea/Memorizar (no duplicate footer citation in body). **Force `drawing2.xml` Propósitos body to `sz="3600"`** — spot-check Propósitos in the PDF.  
@@ -336,7 +337,7 @@ Do **not** call a helper that strips `b="1"` from every run with `bold=False` as
 These habits are why batch builds stay fast and clean — follow them; don’t reinvent:
 
 1. **Batch PDF workflow** — preview the whole PDF (counts, titles, last study / no Próximo) → wait for OK → build all decks with one reusable builder script (clone known-good → fill text → section images → validate → export PDF). Do not hand-craft each deck from scratch.
-2. **Clone, don’t invent layouts** — copy slide XML from `template/master-template.pptx` or a recent good deck; only swap text/media.
+2. **Clone, don’t invent layouts** — copy slide XML from `template/youth/master-template.pptx` or a recent good deck; only swap text/media.
 3. **Hard gates before “done”** — `mzbs validate` OK + `mzbs export-pdf` + spot-check **Propósitos**, **Conclusión font**, **logo floor**, and **one section title/verse** in the PDF.
 4. **Lock lessons into this file + `.cursor/rules/bible-study-pptx.mdc`** when a QA bug is fixed (like Propósitos 36pt). Future sessions read those first.
 5. **One design family per study for section art; change it next study** — generate all three images up front; strip retired `Arc` chrome.
@@ -367,7 +368,7 @@ PowerPoint repair dialogs mean the **ZIP package is inconsistent**. **Never deli
 
 #### Safe edit rules
 
-1. **Clone a known-good deck** (`bible-studies/16 - ….pptx` or `template/master-template.pptx`) — do not invent package structure.
+1. **Clone a known-good deck** (`bible-studies/16 - ….pptx` or `template/youth/master-template.pptx`) — do not invent package structure.
 2. **`[Content_Types].xml` and `presentation.xml.rels`**
    - Prefer **string surgery** only.
    - Must keep `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` and `<Relationships xmlns="…">`.
