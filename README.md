@@ -4,6 +4,19 @@ Spanish Bible study PowerPoints for Monte de Sion.
 
 ## CLI (`mzbs`)
 
+### Rust (preferred for volunteers — [`mzbs/`](mzbs/))
+
+```bash
+cd mzbs
+cp config.example.toml config.toml   # paste Cursor API key
+cargo run --release -- prepare --from 20 --to 22
+# or: cargo build --release && ./target/release/mzbs prepare …
+```
+
+See [`mzbs/README.md`](mzbs/README.md) (install/deploy) and [`mzbs/LEEME.md`](mzbs/LEEME.md) (Spanish 3-step). No Python at runtime.
+
+### Python (legacy — [`python/mz_bible_study/`](python/mz_bible_study/))
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
@@ -21,7 +34,7 @@ cp .env.example .env
 # edit .env → CURSOR_API_KEY=crsr_…
 ```
 
-`mzbs` loads `.env` automatically (existing shell exports still win).
+`mzbs` (Python) loads `.env` automatically (existing shell exports still win).
 
 ```bash
 # 1) Agent prepares JSON + section images
@@ -117,6 +130,6 @@ Open the PowerPoint and check that text doesn’t run into the logo.
 | [`studies/`](studies/) | Prepare JSON + section images by audience (`youth/`, `adult/`; gitignored) |
 | [`generated/`](generated/) | Scratch: page rasters, PDF previews, build work (gitignored) |
 | [`template/`](template/) | Master templates by audience (`youth/`, `adult/`) |
-| [`python/mz_bible_study/`](python/mz_bible_study/) | Python Click CLI (`mzbs`) |
-| [`mzbs/`](mzbs/) | Future Rust CLI (empty) |
+| [`python/mz_bible_study/`](python/mz_bible_study/) | Legacy Python Click CLI |
+| [`mzbs/`](mzbs/) | **Rust CLI** (`mzbs` binary) — volunteer tool |
 | [`scripts/`](scripts/) | Thin wrappers (prefer `mzbs`) |

@@ -39,6 +39,7 @@ Thumbs.db
 
 # Rust (mzbs/)
 mzbs/target/
+mzbs/config.toml
 
 # Secrets
 .env

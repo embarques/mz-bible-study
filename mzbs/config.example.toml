@@ -1,0 +1,12 @@
+# Copy to config.toml and fill in your key.
+# Load order: --config PATH → ./config.toml → mzbs/config.toml → ~/.config/mzbs/config.toml
+# Env CURSOR_API_KEY overrides the file key when set.
+
+cursor_api_key = ""
+cursor_model = "composer-2.5"
+audience = "youth"
+export_pdf = true
+
+# Optional overrides:
+# scans_dir = "scans"
+# output_dir = "bible-studies"
