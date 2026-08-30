@@ -7,18 +7,18 @@ Two ways:
 
 ---
 
-## `mzbs from-pdf` (whole PDF)
+## `mzbs prepare` — batch (`--from` / `--to`)
 
 Default: **prepare every study + build + export PDF + agent review**.
 
 ```bash
-mzbs from-pdf --pdf "Bible Study 20-22.pdf" --from 20 --to 22
+mzbs prepare --pdf "Bible Study 20-22.pdf" --from 20 --to 22
 ```
 
 - Studies must be **3 pages each**, in order, starting at `--from`
 - Middle studies: Próximo is read from the **next** study’s title page in the PDF  
 - Last study (`--to`): Próximo omitted  
-- `--prepare-only` skips build/PDF  
+- `--prepare-only` or `--no-build` skips build/PDF  
 - `--no-review` skips the final QA agent  
 - Review report: `studies/{audience}/REVIEW.md` (`REVIEW_STATUS: PASS|FAIL`)
 
@@ -28,7 +28,7 @@ Re-run QA anytime:
 mzbs review --from 20 --to 22 --pdf "Bible Study 20-22.pdf"
 ```
 
-## `mzbs prepare` (one study)
+## `mzbs prepare` — one study (`-n` / `--study`)
 
 ```bash
 pip install -e ".[prepare]"
@@ -131,7 +131,7 @@ Faithful Spanish — fix OCR noise; don’t paraphrase theology.
 ### 2. Three section images
 
 - Paths: `studies/{audience}/media/{N}-section1.png` … `section3.png`
-- **`mzbs prepare` / `mzbs from-pdf` assigns a style family** for that estudio number — follow it exactly (see prompt block `ASSIGNED section style`). Do not use the same style as the previous estudio; the CLI rotation already picks a different id.
+- **`mzbs prepare` assigns a style family** for that estudio number — follow it exactly (see prompt block `ASSIGNED section style`). Do not use the same style as the previous estudio; the CLI rotation already picks a different id.
 - Each PNG is a **finished slide background** using that family’s left text-safe treatment
 - Scene on the right; calm left for dark title + verse
 - 16:9 (≈1408×768)

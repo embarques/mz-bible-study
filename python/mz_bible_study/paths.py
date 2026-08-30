@@ -7,7 +7,8 @@ from pathlib import Path
 from mz_bible_study.audience import Audience, DEFAULT_AUDIENCE, normalize_audience
 
 _PKG_ROOT = Path(__file__).resolve().parent
-_REPO_CANDIDATE = _PKG_ROOT.parent
+# python/mz_bible_study → repo root (fallback if cwd has no template/)
+_REPO_CANDIDATE = _PKG_ROOT.parent.parent
 
 
 def _looks_like_project_root(base: Path) -> bool:
@@ -26,7 +27,8 @@ def project_root() -> Path:
         return Path(env).expanduser().resolve()
 
     cwd = Path.cwd().resolve()
-    for base in (cwd, *cwd.parents, _REPO_CANDIDATE):
+    search = (cwd, *cwd.parents, _PKG_ROOT, *_PKG_ROOT.parents, _REPO_CANDIDATE)
+    for base in search:
         if _looks_like_project_root(base):
             return base
     return _REPO_CANDIDATE

@@ -83,7 +83,7 @@ def build_review_prompt(
 
 ## Checklist (per study)
 1. **Files exist** — JSON under `studies/{aud}/`, 3 section PNGs under `studies/{aud}/media/`; if pptx expected, pptx present (and pdf if built with export).
-2. **JSON** — `numero` matches; `audience` is `{aud}`; required fields present (`titulo`, `base_biblica`, `lectura`, `propositos`×3, `idea_principal`, `para_memorizar`, `puntos`×3 with A/B, conclusión; `proximo` only if not last). `section_images` lists the 3 PNGs under `studies/{aud}/media/`. **`section_style.id` must match the CLI-assigned family for that estudio** (see `mz_bible_study/section_styles.py` — rotates; neighboring estudios must not share the same id).
+2. **JSON** — `numero` matches; `audience` is `{aud}`; required fields present (`titulo`, `base_biblica`, `lectura`, `propositos`×3, `idea_principal`, `para_memorizar`, `puntos`×3 with A/B, conclusión; `proximo` only if not last). `section_images` lists the 3 PNGs under `studies/{aud}/media/`. **`section_style.id` must match the CLI-assigned family for that estudio** (see `python/mz_bible_study/section_styles.py` — rotates; neighboring estudios must not share the same id).
 3. **Validate pptx** — run `mzbs validate "<pptx>"` (or `.venv/bin/mzbs validate …`). Must print OK.
 4. **OOXML spot-check** (unzip / inspect XML if needed):
    - Propósitos `drawing2.xml` body runs `sz="3600"` (not 5600)

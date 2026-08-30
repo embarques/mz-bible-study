@@ -132,13 +132,13 @@ Follow slide order and recipes below, then the checklist.
 
 ### 5. Generate section images (1 / 2 / 3)
 
-**Just generate them — do not ask.** You already have permission to create section art. Do **not** ask the user to confirm prompts, styles, or whether to generate. When using **`mzbs prepare` / `from-pdf`**, follow the **CLI-assigned** `section_style` for that estudio (rotating catalog — different id every study). For chat-only builds, pick a design family different from prior studies yourself. Generate all three images, insert them into the deck, and move on. If a generation fails or is blocked, regenerate with a safer framing and continue — still without asking.
+**Just generate them — do not ask.** You already have permission to create section art. Do **not** ask the user to confirm prompts, styles, or whether to generate. When using **`mzbs prepare`** (single or `--from`/`--to` batch), follow the **CLI-assigned** `section_style` for that estudio (rotating catalog — different id every study). For chat-only builds, pick a design family different from prior studies yourself. Generate all three images, insert them into the deck, and move on. If a generation fails or is blocked, regenerate with a safer framing and continue — still without asking.
 
 **One design family per study; different family from other studies.**
 
 - Within a study, all three section images share the **same visual design language** (lighting, finish, edge treatment, optional accents).
 - Across studies, **change the design** — `mzbs` assigns a rotating family; chat builds must not reuse the previous study’s look (e.g. if study 16 used yellow dashed accent arcs / a particular white-curve panel, study 17 and 18 must not copy that).
-- Catalog: `mz_bible_study/section_styles.py` (parchment, lavender mist, sage paper, ink wash, dawn gold, …).
+- Catalog: `python/mz_bible_study/section_styles.py` (parchment, lavender mist, sage paper, ink wash, dawn gold, …).
 - When cloning a prior deck, **always strip** PowerPoint shapes named `Arc …` (yellow dashed/dotted arcs). That motif is retired — **do not** keep or redraw dotted/dashed arc chrome on section slides for any new study.
 - Generate three **new** illustrations every study (don’t reuse another study’s media files).
 

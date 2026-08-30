@@ -37,6 +37,9 @@ Thumbs.db
 
 .venv/
 
+# Rust (mzbs/)
+mzbs/target/
+
 # Secrets
 .env
 .env.local

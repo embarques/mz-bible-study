@@ -31,7 +31,7 @@ mzbs prepare --pdf "Bible Study 20-22.pdf" -n 22 --pages 7-9 --last
 mzbs prepare --pdf "Bible Study 20-22.pdf" -n 22 --pages 7-9 --last --build
 
 # Or the whole PDF (prepare + build every study + agent review):
-mzbs from-pdf --pdf "Bible Study 20-22.pdf" --from 20 --to 22
+mzbs prepare --pdf "Bible Study 20-22.pdf" --from 20 --to 22
 # Default audience is youth. Use --audience adult when that builder is ready.
 # Each estudio gets a rotating section-image style (different every study).
 
@@ -39,7 +39,7 @@ mzbs from-pdf --pdf "Bible Study 20-22.pdf" --from 20 --to 22
 # mzbs build studies/youth/22.json -o "…" --template /path/to/custom.pptx
 
 # Prepare-only batch (still reviews JSON/images unless --no-review):
-mzbs from-pdf --pdf "Bible Study 20-22.pdf" --from 20 --to 22 --prepare-only
+mzbs prepare --pdf "Bible Study 20-22.pdf" --from 20 --to 22 --prepare-only
 
 # Re-run QA later:
 mzbs review --from 20 --to 22 --pdf "Bible Study 20-22.pdf"
@@ -51,9 +51,9 @@ mzbs validate "bible-studies/22 - TITLE.pptx"
 mzbs export-pdf "bible-studies/22 - TITLE.pptx"
 ```
 
-- **`mzbs from-pdf`:** every study → prepare, build + PDF, then **agent review** (`studies/{audience}/REVIEW.md`)  
+- **`mzbs prepare --from … --to …`:** batch — every study → prepare, build + PDF, then **agent review** (`studies/{audience}/REVIEW.md`)  
+- **`mzbs prepare -n …`:** one study → JSON + section images under `studies/{audience}/`  
 - **`--audience youth|adult`:** uses `template/{audience}/master-template.pptx` by default (youth if omitted). Pass `--template PATH` to override.  
-- **`mzbs prepare`:** one study → JSON + section images under `studies/{audience}/`  
 - **`mzbs build`:** clone audience (or `--template`) master, pack slides, fill OOXML, validate, export PDF  
 - **`mzbs review`:** Cursor agent double-checks outputs (files, validate, OOXML/PDF spot-checks)  
 
@@ -117,5 +117,6 @@ Open the PowerPoint and check that text doesn’t run into the logo.
 | [`studies/`](studies/) | Prepare JSON + section images by audience (`youth/`, `adult/`; gitignored) |
 | [`generated/`](generated/) | Scratch: page rasters, PDF previews, build work (gitignored) |
 | [`template/`](template/) | Master templates by audience (`youth/`, `adult/`) |
-| [`mz_bible_study/`](mz_bible_study/) | Click CLI package (`mzbs`) |
+| [`python/mz_bible_study/`](python/mz_bible_study/) | Python Click CLI (`mzbs`) |
+| [`mzbs/`](mzbs/) | Future Rust CLI (empty) |
 | [`scripts/`](scripts/) | Thin wrappers (prefer `mzbs`) |
