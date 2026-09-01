@@ -21,6 +21,13 @@ pub fn set_title_slide(path: &Path, numero: &str, titulo: &str, base: &[String])
 fn set_base_biblica_block(shape_xml: &str, base: &[String]) -> Result<String> {
     let (tb, tag) = find_txbody(shape_xml)?;
     let content = tb.inner(shape_xml, tag);
+    // Keep <a:bodyPr> / <a:lstStyle> — PowerPoint treats a txBody that starts
+    // with <a:p> (no bodyPr) as corrupt and offers Repair.
+    let p_start = super::xml::next_element(content, "a:p", 0).map(|e| e.start);
+    let head = match p_start {
+        Some(p) => &content[..p],
+        None => content,
+    };
     let sample = first_run(content);
 
     let mut p = String::from(r#"<a:p><a:pPr algn="ctr"/>"#);
@@ -32,6 +39,6 @@ fn set_base_biblica_block(shape_xml: &str, base: &[String]) -> Result<String> {
     p.push_str("</a:p>");
 
     let open_tag = tb.open_tag(shape_xml);
-    let new_txbody = format!("{open_tag}{p}</{tag}>");
+    let new_txbody = format!("{open_tag}{head}{p}</{tag}>");
     Ok(replace_range(shape_xml, tb.start, tb.end, &new_txbody))
 }

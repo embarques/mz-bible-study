@@ -36,7 +36,7 @@ pub mod zip;
 
 pub use body::{set_ab_title, set_content_body, set_section_chrome};
 pub use diagrams::{force_propositos_36pt, replace_diagram_texts, set_diagram_citation};
-pub use images::replace_section_images;
+pub use images::{replace_section_images, resize_section_png};
 pub use slides::{allocate_slides, set_active_order, slide_path};
 pub use title::set_title_slide;
 pub use verses::{set_verses, VerseKind};

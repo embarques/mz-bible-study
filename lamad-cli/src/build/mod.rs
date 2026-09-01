@@ -6,3 +6,4 @@ mod study;
 
 pub use proto::PROTO;
 pub use study::{apply_study, apply_study_value, build_study};
+pub use ooxml::resize_section_png;

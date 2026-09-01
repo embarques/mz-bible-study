@@ -1,4 +1,4 @@
-//! Swap section-image media (`image4/5/6.png`), resized to ≈1408×768.
+//! Swap section-image media (`image4/5/6.png`), resized to ≈1408×768 RGB.
 
 use std::fs;
 use std::io::Cursor;
@@ -31,8 +31,12 @@ pub fn replace_section_images(build: &Path, images: &[PathBuf]) -> Result<()> {
     Ok(())
 }
 
-/// Cover-crop resize to 1408×768 PNG (matches `agent/openai.rs`).
-fn resize_section_png(raw: &[u8]) -> Result<Vec<u8>> {
+/// Cover-crop resize to 1408×768 **RGB** PNG (no alpha).
+///
+/// PowerPoint often shows a repair dialog when section media is RGBA
+/// (PNG color type 6). Working decks (and Cursor-prepared assets) use
+/// RGB color type 2 — match that.
+pub fn resize_section_png(raw: &[u8]) -> Result<Vec<u8>> {
     let img = image::load_from_memory(raw).context("decode section PNG")?;
     let (w, h) = img.dimensions();
     if w == 0 || h == 0 {
@@ -54,9 +58,10 @@ fn resize_section_png(raw: &[u8]) -> Result<Vec<u8>> {
     };
 
     let resized = cropped.resize_exact(SECTION_W, SECTION_H, FilterType::Lanczos3);
+    // Drop alpha — RGB-only PNG (color type 2) for PowerPoint compatibility.
+    let rgb = DynamicImage::ImageRgb8(resized.to_rgb8());
     let mut out = Vec::new();
-    resized
-        .write_to(&mut Cursor::new(&mut out), ImageFormat::Png)
+    rgb.write_to(&mut Cursor::new(&mut out), ImageFormat::Png)
         .context("encode resized section PNG")?;
     Ok(out)
 }

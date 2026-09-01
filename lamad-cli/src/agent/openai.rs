@@ -13,9 +13,6 @@ const API_BASE: &str = "https://api.openai.com/v1";
 
 /// Landscape size closest to 16:9 among gpt-image-1 presets.
 pub const IMAGE_SIZE: &str = "1536x1024";
-/// Final section media size expected by the deck builder.
-pub const SECTION_W: u32 = 1408;
-pub const SECTION_H: u32 = 768;
 
 #[derive(Debug, Clone)]
 pub struct OpenAiClient {
@@ -220,40 +217,9 @@ pub fn vision_image_from_path(path: &Path) -> Result<VisionImage> {
     })
 }
 
-/// Cover-crop resize to 1408×768 PNG.
+/// Cover-crop resize to 1408×768 RGB PNG (shared with build/ooxml/images).
 fn resize_section_png(raw: &[u8]) -> Result<Vec<u8>> {
-    use image::imageops::FilterType;
-    use image::{DynamicImage, GenericImageView};
-
-    let img = image::load_from_memory(raw).context("decode generated PNG")?;
-    let (w, h) = img.dimensions();
-    if w == 0 || h == 0 {
-        bail!("generated image has zero dimensions");
-    }
-
-    let target_aspect = SECTION_W as f32 / SECTION_H as f32;
-    let src_aspect = w as f32 / h as f32;
-    let cropped = if (src_aspect - target_aspect).abs() < 0.01 {
-        img
-    } else if src_aspect > target_aspect {
-        // Too wide — crop sides.
-        let new_w = ((h as f32) * target_aspect).round() as u32;
-        let x = (w.saturating_sub(new_w)) / 2;
-        DynamicImage::ImageRgba8(img.crop_imm(x, 0, new_w, h).to_rgba8())
-    } else {
-        // Too tall — crop top/bottom.
-        let new_h = ((w as f32) / target_aspect).round() as u32;
-        let y = (h.saturating_sub(new_h)) / 2;
-        DynamicImage::ImageRgba8(img.crop_imm(0, y, w, new_h).to_rgba8())
-    };
-
-    let resized = cropped.resize_exact(SECTION_W, SECTION_H, FilterType::Lanczos3);
-    let mut out = Vec::new();
-    let mut cursor = std::io::Cursor::new(&mut out);
-    resized
-        .write_to(&mut cursor, image::ImageFormat::Png)
-        .context("encode resized PNG")?;
-    Ok(out)
+    crate::build::resize_section_png(raw)
 }
 
 fn strip_json_fence(s: &str) -> &str {
