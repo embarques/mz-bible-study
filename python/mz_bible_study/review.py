@@ -73,7 +73,7 @@ def build_review_prompt(
         else "Prepare-only run: JSON + section images required; pptx/pdf optional."
     )
 
-    return f"""You are QA for Monte de Sion Bible-study CLI output (audience={aud}).
+    return f"""You are QA for Mount Zion Church Bible-study CLI output (audience={aud}).
 
 {expect}
 {pdf_line}

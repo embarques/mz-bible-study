@@ -37,9 +37,18 @@ Thumbs.db
 
 .venv/
 
-# Rust (mzbs/)
-mzbs/target/
-mzbs/config.toml
+# Rust (lamad-cli/)
+lamad-cli/target/
+lamad-cli/config.toml
+lamad-cli/dist/
+
+# Bundled poppler (filled by package-release.sh — do not commit)
+lamad-cli/tools/pdftoppm
+lamad-cli/tools/pdftoppm.exe
+lamad-cli/tools/*.dll
+lamad-cli/tools/*.dylib
+lamad-cli/tools/lib/
+!lamad-cli/tools/README.md
 
 # Secrets
 .env

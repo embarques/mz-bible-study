@@ -1,19 +1,21 @@
-# Monte de Sion Bible Study
+# Mount Zion Church Bible Study
 
-Spanish Bible study PowerPoints for Monte de Sion.
+Spanish Bible study PowerPoints for Mount Zion Church.
 
-## CLI (`mzbs`)
+## CLI (`lamad` / `mzbs`)
 
-### Rust (preferred for volunteers — [`mzbs/`](mzbs/))
+### Rust — **lamad** (preferred for volunteers — [`lamad-cli/`](lamad-cli/))
+
+**lamad** (Hebrew **לָמַד**) means “to learn” or “to study”.
 
 ```bash
-cd mzbs
-cp config.example.toml config.toml   # paste Cursor API key
+cd lamad-cli
+cp config.example.toml config.toml   # paste Cursor API key; pdftoppm_path = tools/pdftoppm
 cargo run --release -- prepare --from 20 --to 22
-# or: cargo build --release && ./target/release/mzbs prepare …
+# or: cargo build --release && ./target/release/lamad prepare …
 ```
 
-See [`mzbs/README.md`](mzbs/README.md) (install/deploy) and [`mzbs/LEEME.md`](mzbs/LEEME.md) (Spanish 3-step). No Python at runtime.
+**Volunteer deploy (mac / Windows / Linux):** run `./scripts/package-release.sh` on each OS → zip under `lamad-cli/dist/` includes the `lamad` binary + bundled `tools/pdftoppm` + template. See [`lamad-cli/README.md`](lamad-cli/README.md) and [`lamad-cli/LEEME.md`](lamad-cli/LEEME.md). No Python at runtime.
 
 ### Python (legacy — [`python/mz_bible_study/`](python/mz_bible_study/))
 
@@ -131,5 +133,5 @@ Open the PowerPoint and check that text doesn’t run into the logo.
 | [`generated/`](generated/) | Scratch: page rasters, PDF previews, build work (gitignored) |
 | [`template/`](template/) | Master templates by audience (`youth/`, `adult/`) |
 | [`python/mz_bible_study/`](python/mz_bible_study/) | Legacy Python Click CLI |
-| [`mzbs/`](mzbs/) | **Rust CLI** (`mzbs` binary) — volunteer tool |
+| [`lamad-cli/`](lamad-cli/) | **Rust CLI** (`lamad` binary; Hebrew לָמַד, “to learn / to study”) |
 | [`scripts/`](scripts/) | Thin wrappers (prefer `mzbs`) |

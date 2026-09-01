@@ -16,7 +16,7 @@ from mz_bible_study.version import __version__
 )
 @click.version_option(version=__version__, prog_name="mzbs")
 def cli() -> None:
-    """Monte de Sion Bible-study PPTX toolkit."""
+    """Mount Zion Church Bible-study PPTX toolkit."""
     load_env()
 
 

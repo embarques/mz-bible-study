@@ -1,4 +1,4 @@
-"""Youth audience builder — current working Monte de Sion youth deck pipeline."""
+"""Youth audience builder — current working Mount Zion Church youth deck pipeline."""
 from __future__ import annotations
 
 import json

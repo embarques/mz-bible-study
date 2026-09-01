@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mz-bible-study"
 version = "0.1.0"
-description = "CLI to build Monte de Sion Bible-study PowerPoint decks from structured JSON."
+description = "CLI to build Mount Zion Church Bible-study PowerPoint decks from structured JSON."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
