@@ -1,0 +1,27 @@
+# Copy to config.toml and fill in your key(s).
+# Load order: --config PATH → ./config.toml → beside the binary → ~/.config/lamad/config.toml
+# Env overrides: CURSOR_API_KEY, OPENAI_API_KEY, LAMAD_AGENT_PROVIDER
+
+# Backend for prepare / review: "cursor" (default) or "chatgpt" (alias: "openai")
+agent_provider = "cursor"
+
+# --- Cursor Cloud Agents (default) ---
+cursor_api_key = ""
+cursor_model = "composer-2.5"
+
+# --- ChatGPT / OpenAI (when agent_provider = "chatgpt") ---
+openai_api_key = ""
+openai_model = "gpt-4o"
+openai_image_model = "gpt-image-1"
+
+audience = "youth"
+export_pdf = true
+
+# Bundled poppler — change if you move tools/.
+# Relative to the app folder (MZBS_ROOT / next to the lamad binary).
+# Windows deploy uses: pdftoppm_path = "tools/pdftoppm.exe"
+pdftoppm_path = "tools/pdftoppm"
+
+# Optional overrides:
+# scans_dir = "scans"
+# output_dir = "bible-studies"

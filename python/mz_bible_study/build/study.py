@@ -1,4 +1,4 @@
-"""Build a Monte de Sion Bible-study PPTX from structured JSON + section images.
+"""Build a Mount Zion Church Bible-study PPTX from structured JSON + section images.
 
 Clone master-template.pptx, pack text into as many slides as needed (duplicate
 prototypes; omit unused), apply JSON + section images, enforce Propósitos 36pt /
