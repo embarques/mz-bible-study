@@ -15,10 +15,10 @@ use crate::build::ooxml::shape::{
 };
 use crate::build::ooxml::title::set_adult_title_slide;
 
-/// Soft cap per body paragraph on adult `Marcador de contenido 2` shapes
-/// (~42pt in a ~5″ box). Slides exceeding this after teaching splits are
-/// flagged — the gold template never packs more than this per paragraph.
-pub const ADULT_BODY_PARA_BUDGET: usize = 430;
+/// Soft cap per body paragraph on adult `Marcador de contenido 2` shapes.
+/// See `LAYOUT_GUIDE.md` — navy footer bar is ~bottom 8–10% of slide;
+/// content must stop above it (~360–400 chars per paragraph at ~42pt).
+pub const ADULT_BODY_PARA_BUDGET: usize = 400;
 
 #[derive(Debug, Clone, Copy)]
 pub enum AbRefShape {
