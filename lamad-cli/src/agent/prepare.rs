@@ -247,6 +247,7 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
         &pages_dir,
         req.pdftoppm_path.as_deref(),
     )?;
+    crate::progress::phase("encoding page images for the agent…");
     let mut images = Vec::new();
     for r in &rasters {
         images.push(client::image_from_path(r)?);
@@ -254,19 +255,30 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
 
     let prompt = build_cloud_prepare_prompt(&req)?;
     let client = CursorClient::new(&req.api_key)?;
-    let created = client
+    let create_spin = crate::progress::Spinner::start(
+        "Starting Cursor cloud agent (upload + create)…",
+    );
+    let created = match client
         .create_agent(
             &prompt,
             &images,
             &req.model,
             &format!("lamad-prepare-{}", req.study),
         )
-        .await?;
-
-    println!(
-        "  Cursor agent {} run {}",
-        created.agent.id, created.run.id
-    );
+        .await
+    {
+        Ok(c) => {
+            create_spin.succeed(format!(
+                "agent {} · run {}",
+                c.agent.id, c.run.id
+            ));
+            c
+        }
+        Err(e) => {
+            create_spin.fail("failed to start Cursor agent");
+            return Err(e);
+        }
+    };
     client
         .wait_run(&created.agent.id, &created.run.id, req.stream)
         .await?;
@@ -276,8 +288,8 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
     if artifacts.is_empty() {
         // Agents sometimes narrate a plan and finish without writing files.
         // One follow-up in agent mode usually recovers.
-        eprintln!(
-            "  No artifacts yet — sending follow-up to write JSON + 3 PNGs under artifacts/…"
+        crate::progress::warn(
+            "no artifacts yet — sending follow-up to write JSON + 3 PNGs…",
         );
         let nudge = format!(
             "STOP. You finished without writing any files under `artifacts/`.\n\n\
@@ -329,8 +341,12 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
     std::fs::create_dir_all(dest.img1.parent().unwrap())?;
 
     let resolved = resolve_artifacts(req.study, &artifacts, &dest)?;
+    crate::progress::phase(format!(
+        "downloading {} artifact{}…",
+        resolved.len(),
+        if resolved.len() == 1 { "" } else { "s" }
+    ));
     for (art_path, dest_path) in &resolved {
-        println!("  artifact {art_path} → {}", dest_path.display());
         client
             .download_artifact(&created.agent.id, art_path, dest_path)
             .await?;

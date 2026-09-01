@@ -90,19 +90,23 @@ impl PrepareJob {
             );
         }
         println!("  Audience: {}", self.audience.as_str());
-        println!(
-            "  Mode:     {}",
-            if self.prepare_only {
-                "prepare-only"
-            } else {
-                "prepare + build (+ PDF if enabled)"
-            }
-        );
+        if self.prepare_only {
+            println!("  Deliver:  JSON + images only (--prepare-only — no PowerPoint)");
+        } else {
+            println!(
+                "  Deliver:  PowerPoint +{} in bible-studies/",
+                if self.export_pdf { " PDF" } else { "" }
+            );
+            println!("            (JSON + images in studies/{}/)", self.audience.as_str());
+        }
         println!(
             "  Review:   {}",
-            if self.review { "yes" } else { "no" }
+            if self.review {
+                "yes (cloud QA after build)"
+            } else {
+                "no — run `lamad review` later if you want a checklist"
+            }
         );
-        println!("  Output:   studies/{}/  and  bible-studies/", self.audience.as_str());
     }
 }
 

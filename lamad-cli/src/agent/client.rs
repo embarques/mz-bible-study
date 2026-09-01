@@ -177,22 +177,69 @@ impl CursorClient {
     }
 
     /// Poll until FINISHED / ERROR / CANCELLED.
+    ///
+    /// Always shows a spinner with status + elapsed. Optional `--stream` dumps
+    /// raw agent narration (often duplicated SSE chunks — opt-in only).
     pub async fn wait_run(
         &self,
         agent_id: &str,
         run_id: &str,
         stream: bool,
     ) -> Result<RunStatus> {
-        if stream {
-            let _ = self.stream_run(agent_id, run_id).await;
-        }
+        use crate::progress;
+        use std::time::Instant;
+
+        let started = Instant::now();
+        let spinner = progress::Spinner::start(format!(
+            "Waiting for Cursor agent (run {run_id})…"
+        ));
+
+        // Stream in the background so the spinner keeps ticking; raw text is
+        // noisy so we only enable it when the user asked for `--stream`.
+        let stream_handle = if stream {
+            progress::phase("agent log streaming enabled (--stream)");
+            let this = self.clone();
+            let aid = agent_id.to_string();
+            let rid = run_id.to_string();
+            Some(tokio::spawn(async move {
+                let _ = this.stream_run(&aid, &rid).await;
+            }))
+        } else {
+            None
+        };
+
+        let mut last_status = String::new();
         loop {
             let st = self.get_run(agent_id, run_id).await?;
             let s = st.status.to_uppercase();
+            if s != last_status {
+                last_status = s.clone();
+                spinner.set_message(format!(
+                    "Waiting for Cursor agent… {s} ({})",
+                    progress::fmt_elapsed(started.elapsed())
+                ));
+            } else {
+                // Refresh elapsed even when status is unchanged.
+                spinner.set_message(format!(
+                    "Waiting for Cursor agent… {s} ({})",
+                    progress::fmt_elapsed(started.elapsed())
+                ));
+            }
             if s == "FINISHED" || s == "COMPLETED" || s == "DONE" {
+                if let Some(h) = stream_handle {
+                    h.abort();
+                }
+                spinner.succeed(format!(
+                    "agent finished ({})",
+                    progress::fmt_elapsed(started.elapsed())
+                ));
                 return Ok(st);
             }
             if s == "ERROR" || s == "FAILED" || s == "CANCELLED" || s == "CANCELED" {
+                if let Some(h) = stream_handle {
+                    h.abort();
+                }
+                spinner.fail(format!("agent ended with status {}", st.status));
                 bail!("agent run ended with status {}", st.status);
             }
             tokio::time::sleep(Duration::from_secs(3)).await;
@@ -280,6 +327,9 @@ impl CursorClient {
     }
 
     pub async fn download_artifact(&self, agent_id: &str, path: &str, dest: &Path) -> Result<()> {
+        use crate::progress;
+
+        let spin = progress::Spinner::start(format!("Downloading {path}…"));
         let resp = self
             .http
             .get(format!("{API_BASE}/v1/agents/{agent_id}/artifacts/download"))
@@ -291,15 +341,19 @@ impl CursorClient {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
         if !status.is_success() {
+            spin.fail(format!("download failed HTTP {status}"));
             bail!("artifact download HTTP {status}: {text}");
         }
         let url: DownloadUrl = serde_json::from_str(&text)
             .or_else(|_| {
                 // Some responses may be a redirect URL string
-                Ok::<_, serde_json::Error>(DownloadUrl { url: text.trim().trim_matches('"').to_string() })
+                Ok::<_, serde_json::Error>(DownloadUrl {
+                    url: text.trim().trim_matches('"').to_string(),
+                })
             })
             .context("parse download url")?;
 
+        spin.set_message(format!("Fetching bytes for {path}…"));
         let bytes = self
             .http
             .get(&url.url)
@@ -313,6 +367,14 @@ impl CursorClient {
         }
         std::fs::write(dest, &bytes)
             .with_context(|| format!("write artifact {}", dest.display()))?;
+        let kb = bytes.len() / 1024;
+        spin.succeed(format!(
+            "{} → {} ({kb} KB)",
+            path,
+            dest.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file")
+        ));
         Ok(())
     }
 }

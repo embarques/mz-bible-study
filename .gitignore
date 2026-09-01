@@ -24,6 +24,22 @@ __pycache__/
 # Source scan / batch PDFs (large inputs)
 *.pdf
 
+# lamad-cli scan tray — PDFs, error logs, archives (keep folder placeholders only)
+lamad-cli/scans/**
+!lamad-cli/scans/.gitkeep
+!lamad-cli/scans/complete/
+!lamad-cli/scans/complete/.gitkeep
+!lamad-cli/scans/error/
+!lamad-cli/scans/error/.gitkeep
+
+# Alternate repo-root scans tray (if used)
+scans/**
+!scans/.gitkeep
+!scans/complete/
+!scans/complete/.gitkeep
+!scans/error/
+!scans/error/.gitkeep
+
 # IDE & local settings
 .cursor/
 .vscode/

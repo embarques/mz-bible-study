@@ -17,8 +17,8 @@ Herramienta para voluntarios: un solo binario. **No necesita Python.** `lamad --
    ```bash
    ./lamad prepare --from 23 --to 26
    ```
-   o solo `./lamad prepare` para el formulario interactivo (terminal).
-   Con ChatGPT: `./lamad prepare --provider chatgpt --from 23 --to 26`
+   Eso genera el **PowerPoint y el PDF** en `bible-studies/` (un comando, sin pasos extra).
+   Revisión QA opcional después: `./lamad review --from 23 --to 26`
 
 El zip **incluye** `tools/pdftoppm` — no hace falta instalar poppler aparte. Si mueve la carpeta `tools/`, actualice `pdftoppm_path` en `config.toml`.
 

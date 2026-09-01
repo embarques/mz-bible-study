@@ -17,6 +17,7 @@ pub mod model;
 pub mod pack;
 pub mod paths;
 pub mod pdftoppm;
+pub mod progress;
 pub mod scans;
 pub mod section_styles;
 pub mod tui;
@@ -44,30 +45,45 @@ pub async fn run(job: PrepareJob, cfg: &Config) -> Result<()> {
     let root = paths::project_root()?;
     let studies = (job.from..=job.to).collect::<Vec<_>>();
     let mut errors: Vec<String> = Vec::new();
+    let mut outputs: Vec<StudyOutput> = Vec::new();
 
     // Pre-resolve page slices (discover once for -n, or page-math for --from/--to).
     let slices = resolve_study_slices(&job, &pdf, page_count, cfg.pdftoppm_path.as_deref())?;
+    let total = slices.len();
+    progress::info(format!(
+        "preparing {} estudio{} ({}–{}) from {}",
+        total,
+        if total == 1 { "" } else { "s" },
+        job.from,
+        job.to,
+        pdf.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("(pdf)")
+    ));
 
-    for slice in &slices {
+    for (i, slice) in slices.iter().enumerate() {
         let n = slice.study;
         let pages = slice.pages;
         let omit_proximo = slice.proximo_title_page.is_none();
         let next_pages = slice.proximo_title_page.map(|p| (p, p + 2));
 
-        println!(
-            "\n=== Estudio {n} pages {}–{}{} ===",
-            pages.0,
-            pages.1,
-            if omit_proximo {
-                " (no Próximo — no following title page in PDF)".to_string()
-            } else {
-                let np = next_pages.unwrap();
-                format!("; próximo from page {}", np.0)
-            }
+        progress::step(
+            i + 1,
+            total,
+            format!(
+                "Estudio {n} · pages {}–{}{}",
+                pages.0,
+                pages.1,
+                if omit_proximo {
+                    " · no Próximo".to_string()
+                } else {
+                    format!(" · próximo p.{}", next_pages.unwrap().0)
+                }
+            ),
         );
 
         let style = section_styles::section_style_for_study(n);
-        println!("  Section style: {} — {}", style.id, style.name);
+        progress::phase(format!("section style: {} — {}", style.id, style.name));
 
         let one = PrepareOne {
             study: n,
@@ -79,8 +95,15 @@ pub async fn run(job: PrepareJob, cfg: &Config) -> Result<()> {
             cfg,
             root: &root,
         };
+        let study_started = std::time::Instant::now();
         match prepare_one_study(one).await {
-            Ok(()) => {}
+            Ok(out) => {
+                outputs.push(out);
+                progress::ok(format!(
+                    "Estudio {n} ready ({})",
+                    progress::fmt_elapsed(study_started.elapsed())
+                ));
+            }
             Err(e) => {
                 let msg = format!("estudio {n}: {e:#}");
                 eprintln!("FAIL: {msg}");
@@ -96,6 +119,8 @@ pub async fn run(job: PrepareJob, cfg: &Config) -> Result<()> {
         finish_with_prepare_errors(&pdf, &errors, &slices, page_count)?;
     }
 
+    print_run_summary(&outputs, &job, &root);
+
     if job.review {
         run_review(&studies, &pdf, !job.prepare_only, &job, cfg, &root).await?;
     }
@@ -109,12 +134,12 @@ pub async fn run(job: PrepareJob, cfg: &Config) -> Result<()> {
     let started_at_page_one = slices.first().map(|s| s.pages.0 == 1).unwrap_or(false);
     if started_at_page_one && covered_through >= page_count {
         scans::move_to_complete(&pdf)?;
-        println!("\nDone: {} prepared.", studies.len());
+        progress::info(format!("done — {} prepared", studies.len()));
     } else {
-        println!(
-            "\nDone: {} prepared. PDF left in scans/ (more pages remain for other estudios).",
+        progress::info(format!(
+            "done — {} prepared; PDF left in scans/ (more pages remain)",
             studies.len()
-        );
+        ));
     }
     Ok(())
 }
@@ -210,6 +235,14 @@ fn resolve_study_slices(
     Ok(out)
 }
 
+#[derive(Debug, Clone)]
+struct StudyOutput {
+    study: u32,
+    json: PathBuf,
+    pptx: Option<PathBuf>,
+    pdf: Option<PathBuf>,
+}
+
 /// Everything one `prepare_one_study` call needs — grouped into a struct so
 /// the function signature stays readable (see clippy's `too_many_arguments`).
 struct PrepareOne<'a> {
@@ -226,7 +259,7 @@ struct PrepareOne<'a> {
     root: &'a Path,
 }
 
-async fn prepare_one_study(one: PrepareOne<'_>) -> Result<()> {
+async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
     let PrepareOne {
         study,
         pdf,
@@ -239,11 +272,11 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<()> {
     } = one;
 
     let creds = cfg.provider_creds()?;
-    println!(
-        "  Backend: {} (model={})",
+    progress::phase(format!(
+        "backend: {} (model={})",
         creds.provider.display_name(),
         creds.model
-    );
+    ));
 
     let deliverables = agent::prepare::run_prepare_agent(
         agent::prepare::PrepareRequest {
@@ -267,11 +300,16 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<()> {
     agent::prepare::verify_deliverables(study, job.audience, root)?;
 
     if job.prepare_only {
-        println!(
-            "  Prepare OK (prepare-only). Next:\n  {}",
-            suggested_build_command(study, job.audience)
+        progress::ok(
+            "prepare-only — JSON + images saved (no PowerPoint). \
+             Re-run without --prepare-only to build the deck.",
         );
-        return Ok(());
+        return Ok(StudyOutput {
+            study,
+            json: deliverables.json,
+            pptx: None,
+            pdf: None,
+        });
     }
 
     let json_path = &deliverables.json;
@@ -284,14 +322,21 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<()> {
     let out = root
         .join("bible-studies")
         .join(format!("{study} - {title}.pptx"));
-    println!("  Building {}…", out.display());
 
+    let build_spin = progress::Spinner::start(format!(
+        "Building PPTX{}…",
+        if job.export_pdf {
+            " + exporting PDF"
+        } else {
+            ""
+        }
+    ));
     let template = job
         .template
         .clone()
         .unwrap_or_else(|| paths::master_template(job.audience).expect("youth template"));
 
-    tokio::task::spawn_blocking({
+    let build_result = tokio::task::spawn_blocking({
         let json_path = json_path.clone();
         let out = out.clone();
         let template = template.clone();
@@ -299,9 +344,38 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<()> {
         let audience = job.audience;
         move || build::build_study(&json_path, &out, Some(&template), audience, export_pdf)
     })
-    .await??;
+    .await?;
+    match build_result {
+        Ok(_) => build_spin.succeed(format!(
+            "built {}",
+            out.file_name().unwrap_or_default().to_string_lossy()
+        )),
+        Err(e) => {
+            build_spin.fail("build failed");
+            return Err(e);
+        }
+    }
 
-    Ok(())
+    let pdf = if job.export_pdf {
+        let p = out.with_extension("pdf");
+        if p.exists() { Some(p) } else { None }
+    } else {
+        None
+    };
+
+    progress::info(format!("  PPTX → {}", rel_from_root(root, &out)));
+    if let Some(ref pdf_path) = pdf {
+        progress::info(format!("  PDF  → {}", rel_from_root(root, pdf_path)));
+    } else if job.export_pdf {
+        progress::info("  PDF  → (not exported — needs macOS + Microsoft PowerPoint)");
+    }
+
+    Ok(StudyOutput {
+        study,
+        json: json_path.clone(),
+        pptx: Some(out),
+        pdf,
+    })
 }
 
 async fn run_review(
@@ -336,9 +410,62 @@ async fn run_review(
 pub fn suggested_build_command(study: u32, audience: Audience) -> String {
     let aud = audience.as_str();
     format!(
-        "lamad build studies/{aud}/{study}.json -o \"bible-studies/{study} - TITLE.pptx\" \
-         --audience {aud} --export-pdf"
+        "lamad prepare --from {study} --to {study}   # or: lamad build studies/{aud}/{study}.json --export-pdf"
     )
+}
+
+fn rel_from_root(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| path.display().to_string())
+}
+
+fn print_run_summary(outputs: &[StudyOutput], job: &PrepareJob, root: &Path) {
+    if outputs.is_empty() {
+        return;
+    }
+
+    if job.prepare_only {
+        println!("\n=== Prepared (JSON + images only) ===");
+        for o in outputs {
+            println!("  Estudio {}: {}", o.study, rel_from_root(root, &o.json));
+        }
+        if outputs.len() == 1 {
+            let n = outputs[0].study;
+            println!(
+                "\nTo build PowerPoint + PDF, run:\n  lamad prepare --from {n} --to {n}"
+            );
+        } else {
+            println!(
+                "\nTo build PowerPoint + PDF, run without --prepare-only:\n  \
+                 lamad prepare --from {} --to {}",
+                job.from, job.to
+            );
+        }
+        return;
+    }
+
+    println!("\n=== Your files ===");
+    for o in outputs {
+        println!("Estudio {}", o.study);
+        if let Some(p) = &o.pptx {
+            println!("  PPTX: {}", rel_from_root(root, p));
+        }
+        if let Some(p) = &o.pdf {
+            println!("  PDF:  {}", rel_from_root(root, p));
+        } else if job.export_pdf {
+            println!("  PDF:  (not exported — needs macOS + Microsoft PowerPoint)");
+        }
+    }
+
+    if !job.review {
+        let hint = if job.from == job.to {
+            format!("lamad review -n {}", job.from)
+        } else {
+            format!("lamad review --from {} --to {}", job.from, job.to)
+        };
+        println!("\nOptional QA checklist: {hint}");
+    }
 }
 
 /// Count pages in a PDF (lopdf).
@@ -360,6 +487,7 @@ pub fn rasterize_pages(
 ) -> Result<Vec<PathBuf>> {
     std::fs::create_dir_all(out_dir)?;
     let bin = pdftoppm::resolve(pdftoppm_path)?;
+    let pb = progress::bar(pages.len() as u64, "Rasterizing PDF pages");
     let mut outs = Vec::new();
     for &p in pages {
         let prefix = out_dir.join(format!("page-{p}"));
@@ -379,13 +507,17 @@ pub fn rasterize_pages(
             .status()
             .with_context(|| format!("pdftoppm failed to start ({})", bin.display()))?;
         if !status.success() {
+            pb.abandon_with_message("Rasterizing PDF pages failed");
             bail!("pdftoppm exited nonzero for page {p} ({})", bin.display());
         }
         let png = out_dir.join(format!("page-{p}.png"));
         if !png.exists() {
+            pb.abandon_with_message("Rasterizing PDF pages failed");
             bail!("expected raster missing: {}", png.display());
         }
         outs.push(png);
+        pb.inc(1);
     }
+    pb.finish_with_message("Rasterized PDF pages");
     Ok(outs)
 }

@@ -2,9 +2,9 @@
 //!
 //! ## Bool flags that default to "on"
 //!
-//! For a flag that's on by default (`export_pdf`, `review`, `stream`,
+//! For a flag that's on by default (`export_pdf`, `stream`,
 //! `stop_on_error`), clap only needs **one** real command-line flag: the
-//! negation (`--no-export-pdf`, `--no-review`, `--no-stream`,
+//! negation (`--no-export-pdf`, `--no-stream`,
 //! `--continue-on-error`). There's no separate `--export-pdf` etc. flag to
 //! pass — the field already defaults to `true`, so simply *not* passing the
 //! negation flag keeps it on. The pattern:
@@ -52,7 +52,11 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
-    /// Prepare study JSON + section images from a PDF (single or batch).
+    /// Scan PDF → study JSON + images → PowerPoint + PDF (default full run).
+    ///
+    /// **Default:** writes `bible-studies/{N} - {TITLE}.pptx` (+ `.pdf` on macOS).
+    /// **Optional:** `--prepare-only` (JSON/images only), `--review` (cloud QA).
+    /// QA later without re-preparing: `lamad review -n N`.
     ///
     /// Looks for `*.pdf` directly under `scans/` (not `scans/complete/` or `scans/error/`).
     /// Batch: `--from N --to M`. Single: `-n N` (OCR discover) or `--from F -n N` (page math).
@@ -101,7 +105,7 @@ pub struct PrepareArgs {
     #[arg(short = 'n', long = "study")]
     pub study: Option<u32>,
 
-    /// Skip build + PDF (JSON + section images only)
+    /// JSON + section images only — skips PowerPoint and PDF (power-user / debug)
     #[arg(long)]
     pub prepare_only: bool,
 
@@ -110,9 +114,8 @@ pub struct PrepareArgs {
     #[arg(long = "no-export-pdf", action = ArgAction::SetFalse)]
     pub export_pdf: bool,
 
-    /// Agent QA review runs by default; pass --no-review to skip it
-    #[arg(long = "review", default_value_t = true)]
-    #[arg(long = "no-review", action = ArgAction::SetFalse)]
+    /// Run cloud QA after build (off by default — use `lamad review` separately)
+    #[arg(long, default_value_t = false)]
     pub review: bool,
 
     #[arg(long, value_enum, default_value_t = AudienceCli::Youth)]
@@ -137,9 +140,9 @@ pub struct PrepareArgs {
     #[arg(long)]
     pub api_key: Option<String>,
 
-    /// Streaming agent output is on by default; pass --no-stream to disable it
-    #[arg(long = "stream", default_value_t = true)]
-    #[arg(long = "no-stream", action = ArgAction::SetFalse)]
+    /// Live agent narration (noisy / often duplicated). Off by default — progress
+    /// spinner + elapsed time is clearer. Pass `--stream` to dump agent text.
+    #[arg(long = "stream", action = ArgAction::SetTrue)]
     pub stream: bool,
 
     /// Stops the batch on the first failed study by default; pass
@@ -199,9 +202,9 @@ pub struct ReviewArgs {
     #[arg(long)]
     pub api_key: Option<String>,
 
-    /// Streaming agent output is on by default; pass --no-stream to disable it
-    #[arg(long = "stream", default_value_t = true)]
-    #[arg(long = "no-stream", action = ArgAction::SetFalse)]
+    /// Live agent narration (noisy / often duplicated). Off by default — progress
+    /// spinner + elapsed time is clearer. Pass `--stream` to dump agent text.
+    #[arg(long = "stream", action = ArgAction::SetTrue)]
     pub stream: bool,
 }
 

@@ -66,7 +66,7 @@ end tell
     if meta.len() < 1000 {
         bail!("PDF missing or too small: {}", pdf.display());
     }
-    println!("OK: {} ({} bytes)", pdf.display(), meta.len());
+    // Caller (build_study) owns the spinner; keep a quiet OK for standalone export-pdf.
     Ok(pdf)
 }
 

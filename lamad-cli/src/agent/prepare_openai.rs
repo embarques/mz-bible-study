@@ -40,36 +40,45 @@ pub async fn run_prepare_openai(req: &PrepareRequest) -> Result<Deliverables> {
     std::fs::create_dir_all(dest.img1.parent().unwrap())?;
 
     let client = OpenAiClient::new(&req.api_key)?;
-    println!(
-        "  ChatGPT prepare (model={}, images={})",
+    crate::progress::phase(format!(
+        "ChatGPT prepare (model={}, images={})",
         req.model, req.image_model
-    );
+    ));
 
     let (system, user) = build_openai_prepare_prompts(req)?;
-    println!("  Extracting study JSON from scans…");
-    let mut study_json = client
-        .chat_json(&req.model, &system, &user, &images)
-        .await
-        .context("OpenAI vision → study JSON")?;
+    let json_spin = crate::progress::Spinner::start("Extracting study JSON from scans…");
+    let mut study_json = match client.chat_json(&req.model, &system, &user, &images).await {
+        Ok(v) => {
+            json_spin.succeed("study JSON extracted");
+            v
+        }
+        Err(e) => {
+            json_spin.fail("study JSON extraction failed");
+            return Err(e).context("OpenAI vision → study JSON");
+        }
+    };
 
     normalize_study_json(&mut study_json, req, &dest)?;
     let pretty = serde_json::to_string_pretty(&study_json)?;
     std::fs::write(&dest.json, &pretty)
         .with_context(|| format!("write {}", dest.json.display()))?;
-    println!("  wrote {}", dest.json.display());
+    crate::progress::ok(format!("wrote {}", dest.json.display()));
 
     let prompts = section_image_prompts(req.study, &study_json)?;
     let slots = [&dest.img1, &dest.img2, &dest.img3];
+    let img_bar = crate::progress::bar(3, "Generating section images");
     for (i, (prompt, path)) in prompts.iter().zip(slots.iter()).enumerate() {
         let n = i + 1;
-        println!("  Generating section image {n}/3…");
+        img_bar.set_message(format!("Generating section image {n}/3"));
         let png = match client
             .generate_section_png(&req.image_model, prompt)
             .await
         {
             Ok(b) => b,
             Err(e) => {
-                eprintln!("  section {n} blocked/failed ({e:#}); retrying safer prompt…");
+                crate::progress::warn(format!(
+                    "section {n} blocked/failed ({e:#}); retrying safer prompt…"
+                ));
                 let safer = format!(
                     "{prompt}\n\nSafer framing: no graphic violence, no addiction paraphernalia \
                      close-ups, respectful biblical illustration suitable for youth ministry."
@@ -82,8 +91,9 @@ pub async fn run_prepare_openai(req: &PrepareRequest) -> Result<Deliverables> {
         };
         std::fs::write(path, &png)
             .with_context(|| format!("write {}", path.display()))?;
-        println!("  wrote {}", path.display());
+        img_bar.inc(1);
     }
+    img_bar.finish_with_message("Section images ready");
 
     stamp_audience(&dest.json, req.audience)?;
     verify_deliverables(req.study, req.audience, &req.root)

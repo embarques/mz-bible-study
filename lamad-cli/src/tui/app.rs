@@ -90,9 +90,9 @@ impl Model {
             audience: self.audience,
             prepare_only: false,
             export_pdf: true,
-            review: true,
+            review: false,
             template: None,
-            stream: true,
+            stream: false,
             stop_on_error: true,
         })
     }

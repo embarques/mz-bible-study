@@ -81,14 +81,29 @@ pub fn build_study(
             .with_context(|| format!("mkdir {}", parent.display()))?;
     }
     ooxml::zip_pptx(&work, &output)?;
-    println!("Wrote {}", output.display());
+    crate::progress::phase(format!("wrote {}", output.display()));
 
+    crate::progress::phase("validating PPTX…");
     crate::validate::validate_pptx(&output)
         .context("validation failed — not exporting PDF")?;
 
     if export_pdf {
         if cfg!(target_os = "macos") {
-            crate::export::export_one(&output)?;
+            let spin = crate::progress::Spinner::start(
+                "Exporting PDF via PowerPoint (this can take a minute)…",
+            );
+            match crate::export::export_one(&output) {
+                Ok(pdf) => spin.succeed(format!(
+                    "PDF {}",
+                    pdf.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("exported")
+                )),
+                Err(e) => {
+                    spin.fail("PDF export failed");
+                    return Err(e);
+                }
+            }
         } else {
             eprintln!(
                 "note: skipping PDF export (requires macOS + PowerPoint). \

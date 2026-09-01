@@ -164,11 +164,12 @@ fn page_texts(
     std::fs::create_dir_all(&root)?;
 
     let bin = crate::pdftoppm::resolve(pdftoppm_path)?;
-    println!(
-        "  Discover: rasterizing {page_count} pages @200dpi + tesseract ({})",
+    crate::progress::phase(format!(
+        "Discover: rasterizing {page_count} pages @200dpi + tesseract ({})",
         tesseract.display()
-    );
+    ));
 
+    let pb = crate::progress::bar(page_count as u64, "OCR pages");
     let mut texts = Vec::with_capacity(page_count);
     for p in 1..=page_count as u32 {
         let prefix = root.join(format!("page-{p}"));
@@ -190,17 +191,15 @@ fn page_texts(
             .status()
             .with_context(|| format!("pdftoppm page {p}"))?;
         if !status.success() {
+            pb.abandon_with_message("OCR failed");
             bail!("pdftoppm failed for page {p}");
         }
         let png = root.join(format!("page-{p}.png"));
         let text = tesseract_ocr(&tesseract, &png)?;
         texts.push(text);
-        if p % 3 == 0 || p as usize == page_count {
-            print!("\r  Discover: OCR {p}/{page_count}");
-            let _ = std::io::Write::flush(&mut std::io::stdout());
-        }
+        pb.inc(1);
     }
-    println!();
+    pb.finish_with_message("OCR complete");
     Ok(texts)
 }
 

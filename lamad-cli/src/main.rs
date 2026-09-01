@@ -39,6 +39,8 @@ fn normalize_argv(raw: Vec<String>) -> Vec<String> {
         }
         out.push(arg);
     }
+    // Obsolete flags — drop so older scripts/docs keep working.
+    out.retain(|a| a != "--no-stream" && a != "--no-review");
     out
 }
 
@@ -94,7 +96,6 @@ mod argv_tests {
                 "-n",
                 "23",
                 "--prepare-only",
-                "--no-review",
             ]
         );
     }
@@ -106,7 +107,7 @@ mod argv_tests {
             "--prepare-only".into(),
             "--no-review".into(),
         ]);
-        assert_eq!(out, vec!["lamad", "--prepare-only", "--no-review"]);
+        assert_eq!(out, vec!["lamad", "--prepare-only"]);
     }
 }
 
@@ -222,8 +223,23 @@ async fn real_main() -> Result<()> {
             Ok(())
         }
         Some(Commands::ExportPdf { pptx }) => {
-            export::export_one(&pptx)?;
-            Ok(())
+            let spin = lamad::progress::Spinner::start(
+                "Exporting PDF via PowerPoint (this can take a minute)…",
+            );
+            match export::export_one(&pptx) {
+                Ok(pdf) => {
+                    spin.succeed(format!(
+                        "{} ({} bytes)",
+                        pdf.display(),
+                        std::fs::metadata(&pdf).map(|m| m.len()).unwrap_or(0)
+                    ));
+                    Ok(())
+                }
+                Err(e) => {
+                    spin.fail("PDF export failed");
+                    Err(e)
+                }
+            }
         }
         Some(Commands::Review(args)) => {
             cfg.apply_cli_overrides(

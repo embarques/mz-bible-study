@@ -9,7 +9,7 @@ Two ways:
 
 ## `lamad prepare` — batch (`--from` / `--to`)
 
-Default: **prepare every study + build + export PDF + agent review**.
+Default: **prepare every study + build + export PDF** (PowerPoint + PDF in `bible-studies/`).
 
 ```bash
 lamad prepare --pdf "Bible Study 20-22.pdf" --from 20 --to 22
@@ -18,8 +18,8 @@ lamad prepare --pdf "Bible Study 20-22.pdf" --from 20 --to 22
 - Studies must be **3 pages each**, in order, starting at `--from`
 - Middle studies: Próximo is read from the **next** study’s title page in the PDF  
 - Last study (`--to`): Próximo omitted  
-- `--prepare-only` or `--no-build` skips build/PDF  
-- `--no-review` skips the final QA agent  
+- `--prepare-only` skips PowerPoint/PDF (JSON + images only)  
+- `--review` runs optional cloud QA (off by default — use `lamad review` separately)  
 - Review report: `studies/{audience}/REVIEW.md` (`REVIEW_STATUS: PASS|FAIL`)
 
 Re-run QA anytime:

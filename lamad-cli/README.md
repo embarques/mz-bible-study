@@ -20,8 +20,7 @@ cp config.example.toml config.toml   # paste API key(s); set agent_provider
 # Optional: put the scan PDF in scans/
 
 cargo run -- doctor
-cargo run -- prepare -n 23 --prepare-only --no-review
-cargo run -- prepare --from 23 --to 26
+cargo run -- prepare --from 23 --to 26    # full run → PPTX + PDF
 cargo run -- prepare   # interactive form (TTY)
 ```
 
@@ -41,7 +40,6 @@ cargo build                  # → target/debug/lamad
 # or: cargo build --release  # → target/release/lamad
 
 ./target/debug/lamad doctor
-./target/debug/lamad prepare -n 23 --prepare-only --no-review
 ./target/debug/lamad prepare --from 23 --to 26
 ```
 
@@ -56,38 +54,60 @@ Volunteer zip packages already include a prebuilt `lamad` (or `lamad.exe`) next 
 
 | Command | Purpose |
 |---------|---------|
-| `prepare` | Unified batch/single: cloud agent → JSON + 3 section PNGs → build → PDF → review |
-| `build` | JSON + images → PPTX (+ optional PDF) |
+| `prepare` | **Default full run:** scan PDF → JSON + images → **PowerPoint + PDF** |
+| `build` | Rebuild PPTX from existing JSON (+ optional PDF) |
 | `validate` | Package integrity (must print `OK`) |
 | `export-pdf` | Sibling PDF via PowerPoint AppleScript (macOS) |
-| `review` | Re-run cloud QA → `studies/{audience}/REVIEW.md` or `REVIEW-{N}.md` |
+| `review` | Optional cloud QA → `studies/{audience}/REVIEW.md` or `REVIEW-{N}.md` |
 | `doctor` | Template, provider + API keys, scans/, PowerPoint, pdftoppm |
 
 ### Prepare
 
+**One command gives you the deck.** Put a PDF in `scans/`, then:
+
 ```bash
 # Batch (3 pages per estudio; last study has no Próximo)
 lamad prepare --from 20 --to 22
-# PDF optional if exactly one *.pdf sits in scans/
 
-# Single via OCR discover (finds ESTUDIO N inside a multi-study PDF)
-lamad prepare -n 25 --prepare-only --no-review
+# Single study (PDF page 1 = estudio 23)
+lamad prepare --from 23 --to 23
+```
 
-# Single via page math when you know PDF page 1 = estudio 23
-lamad prepare --from 23 -n 25
+**You get:** `bible-studies/{N} - {TITLE}.pptx` and `.pdf` (PDF needs macOS + PowerPoint).
 
-# Batch (PDF page 1 = estudio 20; prepare 20–22)
-lamad prepare --from 20 --to 22
+**Optional flags:**
 
+| Flag | When to use |
+|------|-------------|
+| `--prepare-only` | JSON + images only — **no** PowerPoint (debug / re-run agent) |
+| `--no-export-pdf` | PPTX only, skip PDF |
+| `--review` | Also run cloud QA checklist after build |
+| `-n N` | Find estudio N inside a multi-study PDF (OCR) |
+
+```bash
+# Power-user: agent only, no deck
 lamad prepare --prepare-only --from 20 --to 22
-lamad prepare --no-review --no-export-pdf --from 20 --to 22
+
+# QA checklist later (deck must exist)
+lamad review --from 20 --to 22
 
 # ChatGPT / OpenAI backend instead of Cursor
 lamad prepare --provider chatgpt --from 20 --to 22
-# or set agent_provider = "chatgpt" in config.toml
+```
+
+More examples:
+
+```bash
+# Single via OCR discover (finds ESTUDIO N inside a multi-study PDF)
+lamad prepare -n 25
+
+# Single via page math when you know PDF page 1 = estudio 23
+lamad prepare --from 23 -n 25
 ```
 
 Study numbers come **only** from `--from`/`--to`/`-n` or the TUI — never from filenames.
+
+While prepare runs you’ll see rustup-style progress on stderr: `info:` / `[1/4]` steps, spinning waits for the cloud agent (with elapsed time), and bars for rasterize / OCR / section images / artifact downloads. Agent narration is **off by default** (it was noisy); pass `--stream` only if you want the raw log.
 
 Page math (`--from` / `--to`): study `n` with PDF start `F` uses pages `((n-F)*3+1)` … `+2`. The PDF must be long enough for the last prepared study; longer PDFs are fine.
 
