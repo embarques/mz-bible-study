@@ -9,7 +9,7 @@
 //! field (`comentario` vs `comentario_slides`, etc.) — callers should never
 //! need to duplicate that fallback logic.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::pack;
 
@@ -69,6 +69,94 @@ pub struct Lectura {
     pub versiculos: Vec<String>,
 }
 
+/// Agent JSON may use a flat verse list or `{ cita, versiculos }` (same as Lectura).
+fn parse_verse_list_value(v: &serde_json::Value) -> Result<Vec<String>, String> {
+    match v {
+        serde_json::Value::Array(arr) => arr
+            .iter()
+            .map(|item| {
+                item.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| "expected string verses".to_string())
+            })
+            .collect(),
+        serde_json::Value::Object(_) => {
+            let vers = v
+                .get("versiculos")
+                .and_then(|v| v.as_array())
+                .ok_or("verse block needs versiculos array")?;
+            Ok(string_array(vers))
+        }
+        _ => Err("expected verse array or {cita, versiculos} object".to_string()),
+    }
+}
+
+fn string_array(arr: &[serde_json::Value]) -> Vec<String> {
+    arr.iter()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect()
+}
+
+/// `lectura_slides` / `texto_slides` may be string[], string[][], or
+/// `{cita, versiculos}[]` (agent-prepacked slides).
+fn parse_verse_slides_value(v: &serde_json::Value) -> Result<Vec<Vec<String>>, String> {
+    let arr = v
+        .as_array()
+        .ok_or("expected slide array")?;
+    if arr.is_empty() {
+        return Ok(vec![]);
+    }
+    match &arr[0] {
+        serde_json::Value::String(_) => Ok(arr
+            .iter()
+            .filter_map(|item| {
+                item.as_str().map(|s| {
+                    s.split('\n')
+                        .map(str::trim)
+                        .filter(|l| !l.is_empty())
+                        .map(str::to_string)
+                        .collect()
+                })
+            })
+            .collect()),
+        serde_json::Value::Array(_) => serde_json::from_value(v.clone()).map_err(|e| e.to_string()),
+        serde_json::Value::Object(_) => arr
+            .iter()
+            .map(|slide| {
+                slide
+                    .get("versiculos")
+                    .and_then(|v| v.as_array())
+                    .map(|vers| string_array(vers))
+                    .ok_or_else(|| "slide object missing versiculos".to_string())
+            })
+            .collect(),
+        _ => Err("unexpected slide element type".to_string()),
+    }
+}
+
+fn deserialize_texto_biblico<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let v = serde_json::Value::deserialize(deserializer)?;
+    parse_verse_list_value(&v).map_err(serde::de::Error::custom)
+}
+
+fn deserialize_verse_slides_option<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<Vec<String>>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let v: Option<serde_json::Value> = Option::deserialize(deserializer)?;
+    match v {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(v) => parse_verse_slides_value(&v)
+            .map(Some)
+            .map_err(serde::de::Error::custom),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParaMemorizar {
     pub texto: String,
@@ -105,9 +193,14 @@ pub struct Punto {
     pub n: u32,
     pub titulo: String,
     pub rango: String,
+    #[serde(deserialize_with = "deserialize_texto_biblico")]
     pub texto_biblico: Vec<String>,
     /// Pre-packed whole-verse groups, one `Vec<String>` per Texto slide.
-    #[serde(default)]
+    #[serde(
+        default,
+        alias = "texto_biblico_slides",
+        deserialize_with = "deserialize_verse_slides_option"
+    )]
     pub texto_slides: Option<Vec<Vec<String>>>,
     #[serde(rename = "A")]
     pub a: AbBlock,
@@ -147,7 +240,7 @@ pub struct Study {
     pub lectura: Lectura,
     /// Pre-packed whole-verse groups; else the builder packs with
     /// `pack_verses` (budget 280).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_verse_slides_option")]
     pub lectura_slides: Option<Vec<Vec<String>>>,
 
     /// Exactly 3 purpose strings.
@@ -257,6 +350,52 @@ mod tests {
     fn numero_display_matches_authored_form() {
         assert_eq!(Numero::Int(17).to_string(), "17");
         assert_eq!(Numero::Text("17B".to_string()).to_string(), "17B");
+    }
+
+    #[test]
+    fn deserializes_agent_verse_block_shapes() {
+        let json = serde_json::json!({
+            "numero": 24,
+            "titulo": "SUPERA EL RECHAZO",
+            "lectura": {"cita": "Génesis 45:1-7", "versiculos": ["1 verse"]},
+            "lectura_slides": [
+                {"cita": "Génesis 45:1-7", "versiculos": ["1 verse"]},
+                {"cita": null, "versiculos": ["2 verse", "3 verse"]}
+            ],
+            "propositos": ["a", "b", "c"],
+            "idea_principal": "idea",
+            "para_memorizar": {"texto": "texto"},
+            "comentario_slides": ["c"],
+            "introduccion_slides": ["i"],
+            "puntos": [
+                {
+                    "n": 1, "titulo": "T1", "rango": "R1",
+                    "texto_biblico": {"cita": "Gén 1:1", "versiculos": ["1 x", "2 y"]},
+                    "texto_biblico_slides": [
+                        {"cita": "Gén 1:1", "versiculos": ["1 x"]},
+                        {"cita": null, "versiculos": ["2 y"]}
+                    ],
+                    "A": {"titulo": "A1", "cuerpo": "a body"},
+                    "B": {"titulo": "B1", "cuerpo": "b body"}
+                },
+                {
+                    "n": 2, "titulo": "T2", "rango": "R2", "texto_biblico": ["2 x"],
+                    "A": {"titulo": "A2", "cuerpo": "a body"},
+                    "B": {"titulo": "B2", "cuerpo": "b body"}
+                },
+                {
+                    "n": 3, "titulo": "T3", "rango": "R3", "texto_biblico": ["3 x"],
+                    "A": {"titulo": "A3", "cuerpo": "a body"},
+                    "B": {"titulo": "B3", "cuerpo": "b body"}
+                }
+            ],
+            "conclusion_slides": ["end"],
+            "section_images": ["a.png", "b.png", "c.png"]
+        });
+        let study: Study = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(study.lectura_packs().len(), 2);
+        assert_eq!(study.puntos[0].texto_biblico.len(), 2);
+        assert_eq!(study.puntos[0].punto_texto_packs().len(), 2);
     }
 
     #[test]
