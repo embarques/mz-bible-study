@@ -46,14 +46,26 @@ fn set_base_biblica_block(shape_xml: &str, base: &[String]) -> Result<String> {
     let sample = first_run(content);
 
     let mut p = String::from(r#"<a:p><a:pPr algn="ctr"/>"#);
-    p.push_str(&clone_run(sample.as_deref(), "Base Bíblica:", Some(true), None, None)?);
-    for line in base {
-        p.push_str("<a:br/>");
-        p.push_str(&clone_run(sample.as_deref(), line, Some(false), None, None)?);
-    }
+    p.push_str(&clone_run(sample.as_deref(), "Base Bíblica: ", Some(true), None, None)?);
     p.push_str("</a:p>");
 
+    let cite_line: String = base
+        .iter()
+        .map(|line| {
+            let t = line.trim();
+            if t.ends_with(';') {
+                format!("{t} ")
+            } else {
+                t.to_string()
+            }
+        })
+        .collect();
+
+    let mut p2 = String::from(r#"<a:p><a:pPr algn="ctr"/>"#);
+    p2.push_str(&clone_run(sample.as_deref(), &cite_line, Some(false), None, None)?);
+    p2.push_str("</a:p>");
+
     let open_tag = tb.open_tag(shape_xml);
-    let new_txbody = format!("{open_tag}{head}{p}</{tag}>");
+    let new_txbody = format!("{open_tag}{head}{p}{p2}</{tag}>");
     Ok(replace_range(shape_xml, tb.start, tb.end, &new_txbody))
 }

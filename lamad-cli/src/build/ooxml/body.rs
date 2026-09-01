@@ -6,7 +6,8 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use super::shape::{
-    set_body_with_refs_block, set_simple_text_block, transform_shape,
+    set_body_with_refs_block, set_body_with_refs_paragraphs, set_simple_text_block,
+    split_teaching_paragraphs, transform_shape,
 };
 
 pub fn set_section_chrome(path: &Path, title: &str, rango: &str, n: u32) -> Result<()> {
@@ -66,6 +67,18 @@ pub fn set_content_body(path: &Path, text: &str, shape: Option<&str>, conclusion
     };
     let xml = transform_shape(&xml, effective_name, |b| {
         set_body_with_refs_block(b, text, conclusion)
+    })?;
+    fs::write(path, xml).with_context(|| format!("write {}", path.display()))
+}
+
+/// Adult / multi-paragraph body: split at `(1)`, `(2)`, … teaching markers
+/// before writing (matches gold adult template paragraph breaks).
+pub fn set_content_body_teaching(path: &Path, text: &str, shape: Option<&str>) -> Result<()> {
+    let shape_name = shape.unwrap_or("Marcador de contenido 2");
+    let paragraphs = split_teaching_paragraphs(text);
+    let xml = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let xml = transform_shape(&xml, shape_name, |b| {
+        set_body_with_refs_paragraphs(b, &paragraphs, false)
     })?;
     fs::write(path, xml).with_context(|| format!("write {}", path.display()))
 }

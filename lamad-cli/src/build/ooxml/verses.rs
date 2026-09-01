@@ -94,10 +94,105 @@ fn pick_verse_samples(runs: &[String]) -> VerseSamples {
     }
 }
 
+/// Expand verse lines where multiple verses were glued into one string
+/// (`…pronto; 3 no…`, `…derecha, 4 para…`, poetry after `porque:`).
+pub fn expand_glued_verses(verses: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for v in verses {
+        out.extend(split_glued_verse_line(v));
+    }
+    out
+}
+
+fn split_glued_verse_line(line: &str) -> Vec<String> {
+    let re = Regex::new(r"(?:;\s*|\,\s*)(\d+)\s+").unwrap();
+    let mut parts: Vec<String> = Vec::new();
+    let mut last = 0usize;
+    for m in re.find_iter(line) {
+        if m.start() == 0 {
+            continue;
+        }
+        let before = line[last..m.start()]
+            .trim_end_matches(';')
+            .trim_end_matches(',')
+            .trim();
+        if !before.is_empty() {
+            parts.push(before.to_string());
+        }
+        last = m.start() + m.as_str().find(|c: char| c.is_ascii_digit()).unwrap_or(0);
+    }
+    if last < line.len() {
+        parts.extend(split_poetry_lines(line[last..].trim()));
+    }
+    if parts.is_empty() && !line.trim().is_empty() {
+        parts.push(line.trim().to_string());
+    }
+    parts
+}
+
+fn split_poetry_lines(line: &str) -> Vec<String> {
+    if let Some(idx) = line.find("porque:") {
+        let (head, tail) = line.split_at(idx);
+        let head = head.trim();
+        let mut out = Vec::new();
+        if !head.is_empty() {
+            out.push(head.to_string());
+        }
+        let poetry = tail.trim_start_matches("porque:").trim();
+        if poetry.contains(",Y ") {
+            let pieces: Vec<&str> = poetry.split(",Y ").collect();
+            if let Some(first) = pieces.first() {
+                out.push(first.trim().to_string());
+            }
+            for piece in pieces.iter().skip(1) {
+                out.push(format!("Y {piece}"));
+            }
+        } else if !poetry.is_empty() {
+            out.push(poetry.to_string());
+        }
+        return out;
+    }
+    vec![line.trim().to_string()]
+}
+
+fn format_citation_from_template(
+    shape_xml: &str,
+    cite: &str,
+    kind: VerseKind,
+) -> Result<String> {
+    match kind {
+        VerseKind::Texto => super::shape::format_ref_citation_from_template(shape_xml, cite),
+        VerseKind::Lectura => {
+            let nodes = super::xml::all_elements(shape_xml, "a:t");
+            let sample = nodes
+                .iter()
+                .map(|e| e.inner(shape_xml, "a:t"))
+                .find(|t| !t.trim().is_empty())
+                .unwrap_or("");
+            let base = cite.trim().trim_end_matches(';').trim();
+            if sample.contains(';') {
+                Ok(format!("{base}; "))
+            } else {
+                Ok(base.to_string())
+            }
+        }
+    }
+}
+
 /// Fill a Lectura/Texto Bíblico slide with whole verses (+ optional
 /// citation on the first slide of a range). One paragraph per citation /
 /// per verse — no soft `a:br` breaks (matches known-good decks).
 pub fn set_verses(path: &Path, verses: &[String], citation: Option<&str>, kind: VerseKind) -> Result<()> {
+    let expanded = expand_glued_verses(verses);
+    set_verses_expanded(path, &expanded, citation, kind)
+}
+
+fn set_verses_expanded(
+    path: &Path,
+    verses: &[String],
+    citation: Option<&str>,
+    kind: VerseKind,
+) -> Result<()> {
     let shape_name = match kind {
         VerseKind::Lectura => "CuadroTexto 5",
         VerseKind::Texto => "TextBox 4",
@@ -129,17 +224,29 @@ pub fn set_verses(path: &Path, verses: &[String], citation: Option<&str>, kind: 
 
         let mut body = String::new();
         if let Some(cite) = citation {
-            let r = clone_run(samples.cite.as_deref(), cite, Some(true), Some(Some(accent)), None)?;
+            let formatted = format_citation_from_template(shape_xml, cite, kind)?;
+            let r = clone_run(samples.cite.as_deref(), &formatted, Some(true), Some(Some(accent)), None)?;
             body.push_str(&format!("<a:p>{ppr}{r}</a:p>"));
         }
         for v in verses {
-            let (num, verse_body) = split_verse(v)?;
-            let r_num = clone_run(samples.num.as_deref(), &num, Some(true), Some(Some(accent)), None)?;
-            // body_rgb=None means "leave inherited" (lectura black body) —
-            // color=None (outer Option) skips touching the fill entirely.
-            let color_opt = body_rgb.map(Some);
-            let r_body = clone_run(samples.body.as_deref(), &verse_body, Some(false), color_opt, None)?;
-            body.push_str(&format!("<a:p>{ppr}{r_num}{r_body}</a:p>"));
+            let trimmed = v.trim();
+            match split_verse(trimmed) {
+                Ok((num, verse_body)) => {
+                    let r_num = clone_run(samples.num.as_deref(), &num, Some(true), Some(Some(accent)), None)?;
+                    let color_opt = body_rgb.map(Some);
+                    let r_body = clone_run(samples.body.as_deref(), &verse_body, Some(false), color_opt, None)?;
+                    body.push_str(&format!("<a:p>{ppr}{r_num}{r_body}</a:p>"));
+                }
+                Err(_) => {
+                    let body_text = if trimmed.starts_with(' ') {
+                        trimmed.to_string()
+                    } else {
+                        format!(" {trimmed}")
+                    };
+                    let r_body = clone_run(samples.body.as_deref(), &body_text, Some(false), body_rgb.map(Some), None)?;
+                    body.push_str(&format!("<a:p>{ppr}{r_body}</a:p>"));
+                }
+            }
         }
 
         let new_content = format!("{head}{body}");

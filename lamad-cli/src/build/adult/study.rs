@@ -332,10 +332,9 @@ fn fill_ab_block(
         &block.texto_biblico.cita,
         ref_shape,
     )?;
-    let verses = normalize_verses(&block.texto_biblico.cita, &block.texto_biblico.versiculos);
     ooxml::set_verses(
         &ooxml::slide_path(build, texto_slide),
-        &verses,
+        &block.texto_biblico.versiculos,
         Some(block.texto_biblico.cita.as_str()),
         VerseKind::Texto,
     )?;
@@ -345,34 +344,6 @@ fn fill_ab_block(
         set_ab_body_slide(&ooxml::slide_path(build, slide_n), &body_title, text)?;
     }
     Ok(())
-}
-
-/// Gold-deck JSON sometimes omits the leading verse number on single-verse
-/// Texto Bíblico slides — `set_verses` requires `N text…` lines.
-fn normalize_verses(cita: &str, verses: &[String]) -> Vec<String> {
-  let default_num = verse_num_from_cita(cita);
-  verses
-    .iter()
-    .map(|v| {
-      if v.trim_start().chars().next().is_some_and(|c| c.is_ascii_digit()) {
-        v.clone()
-      } else if let Some(n) = &default_num {
-        format!("{n} {}", v.trim())
-      } else {
-        v.clone()
-      }
-    })
-    .collect()
-}
-
-fn verse_num_from_cita(cita: &str) -> Option<String> {
-  let tail = cita.rsplit(':').next()?.trim();
-  let num = tail.split([',', '-']).next()?.trim();
-  if num.chars().all(|c| c.is_ascii_digit()) {
-    Some(num.to_string())
-  } else {
-    None
-  }
 }
 
 pub fn apply_adult_study_value(build: &Path, study: &Value) -> Result<Vec<u32>> {

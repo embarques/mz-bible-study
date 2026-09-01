@@ -1,6 +1,8 @@
 # Adult template slide map — study 24 (`24 EL VALOR DE LA MODESTIA.pptx`)
 
 Source template: `lamad-cli/template/adult/24 EL VALOR DE LA MODESTIA.pptx`  
+Build template: `lamad-cli/template/adult/master-template.pptx` (copy of gold + repaired `notesSlide` rels — run `scripts/prepare_adult_master_template.py`)
+
 Total slides in `sldIdLst`: **62** (`slide1.xml` … `slide62.xml`)
 
 This document maps each slide index to its **slide type**, the **shape names** the Rust adult builder should target for text replacement, and implementation notes (SmartArt, media, layout quirks).
