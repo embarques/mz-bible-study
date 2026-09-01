@@ -24,18 +24,8 @@ pub fn build_study(
     study_path: &Path,
     output: &Path,
     template: Option<&Path>,
-    audience: Audience,
     export_pdf: bool,
 ) -> Result<PathBuf> {
-    if audience == Audience::Adult {
-        bail!(
-            "audience=adult is not implemented yet. Use --audience youth (default), or wait \
-             until the adult template and fill rules are wired. (study={}, output={})",
-            study_path.display(),
-            output.display()
-        );
-    }
-
     let study_path = study_path
         .canonicalize()
         .with_context(|| format!("study JSON not found: {}", study_path.display()))?;
@@ -61,7 +51,7 @@ pub fn build_study(
             root.join(p)
         }
     } else {
-        paths::master_template(audience)?
+        paths::master_template(Audience::Youth)?
     };
     if !base_pptx.is_file() {
         bail!("template not found: {}", base_pptx.display());

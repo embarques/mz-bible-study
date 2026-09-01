@@ -183,9 +183,6 @@ async fn real_main() -> Result<()> {
         }
         Some(Commands::Build(args)) => {
             let audience: Audience = args.audience.into();
-            if audience == Audience::Adult {
-                bail!("audience=adult is not implemented yet. Use --audience youth.");
-            }
             let template = args.template.clone().or(args.base.clone());
             let output = match args.output {
                 Some(o) => o,

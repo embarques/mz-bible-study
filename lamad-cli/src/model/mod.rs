@@ -4,6 +4,8 @@
 //! view of the same data for callers (agents, validators, TUI) that want
 //! typed access instead.
 
+pub mod adult_study;
 pub mod study;
 
+pub use adult_study::AdultStudy;
 pub use study::Study;

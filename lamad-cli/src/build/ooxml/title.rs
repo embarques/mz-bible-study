@@ -10,10 +10,25 @@ use super::shape::{
 };
 
 pub fn set_title_slide(path: &Path, numero: &str, titulo: &str, base: &[String]) -> Result<()> {
+  fill_title_slide(path, numero, titulo, base, "CuadroTexto 13")
+}
+
+/// Adult title / próximo slides use `CuadroTexto 1` for the study title.
+pub fn set_adult_title_slide(path: &Path, numero: &str, titulo: &str, base: &[String]) -> Result<()> {
+  fill_title_slide(path, numero, titulo, base, "CuadroTexto 1")
+}
+
+fn fill_title_slide(
+    path: &Path,
+    numero: &str,
+    titulo: &str,
+    base: &[String],
+    title_shape: &str,
+) -> Result<()> {
     let xml = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let xml = transform_shape(&xml, "TextBox 4", |b| set_simple_text_block(b, numero, Some(true)))?;
     // Verlag Black title — never force bold=true; leave template weight as-is.
-    let xml = transform_shape(&xml, "CuadroTexto 13", |b| set_simple_text_block(b, titulo, Some(false)))?;
+    let xml = transform_shape(&xml, title_shape, |b| set_simple_text_block(b, titulo, Some(false)))?;
     let xml = transform_shape(&xml, "TextBox 7", |b| set_base_biblica_block(b, base))?;
     fs::write(path, xml).with_context(|| format!("write {}", path.display()))
 }
