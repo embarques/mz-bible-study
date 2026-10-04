@@ -1,5 +1,17 @@
-# Generated Bible study decks & prepare inputs
-bible-studies/
+# Generated Bible study decks (PPTX/PDF) — NEVER commit these
+bible-studies/**
+!bible-studies/.gitkeep
+lamad-cli/bible-studies/**
+!lamad-cli/bible-studies/.gitkeep
+# Also catch decks dropped at repo root by mistake
+*-working-progress.pptx
+*-working-progress.pdf
+*.pptx
+!template/**/*.pptx
+!lamad-cli/template/**/*.pptx
+!lamad-cli/tests/fixtures/**/*.pptx
+
+# Prepare JSON + section images (local agent artifacts)
 studies/**
 !studies/**/
 !studies/README.md
