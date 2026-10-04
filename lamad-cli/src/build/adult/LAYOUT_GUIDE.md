@@ -27,7 +27,7 @@ Every text-heavy slide has a **hard floor** where content stops. Nothing may sit
 
 | Slide type | Guard rail | Approx. safe height |
 |------------|------------|---------------------|
-| `intro_body` / `definicion` / `ab_body` | Navy footer bar at bottom of slide | Content ends **above** the footer (~bottom 8–10% of slide is chrome only) |
+| `intro_body` / `ab_body` | Navy footer bar at bottom of slide | Content ends **above** the footer (~bottom 8–10% of slide is chrome only) |
 | `lectura_antifonal` | Bottom of white/blue content panel | Pack whole verses; split slide before next verse crosses the floor |
 | `texto_biblico` | Empty black margin at bottom | Leave **~20–25%** of slide height below last verse line |
 | `tema_header` | Bottom gradient bar | Title + reference live **inside** the bar (~bottom 20–25% of slide) |
@@ -75,10 +75,13 @@ Match the reference deck’s paragraph breaks:
 - Study number badge, `ESCUELA BIBLICA`, church logo, centred title, `Base Bíblica:` label + citations in black rounded pill.
 - `Base Bíblica:` **space after colon**; citations separated with `; ` on one line.
 
-### Lectura antifonal (5 slides in study 02)
+### Lectura antifonal
 
-- Header `LECTURA ANTIFONAL` + citation with semicolon.
-- Red citation + verse numbers; black body; pack whole verses per slide.
+- Same verse formatting as youth **Lectura Bíblica** (`set_verses` + `VerseKind::Lectura`): red citation/numbers, black body, whole verses only.
+- Pack at adult `ADULT_LECTURA_BUDGET` (400 chars) after expanding glued verses — denser than youth 280 because adult Lectura uses ~36pt in a taller panel; still split before overflow (do not dump Mateo 6:1–4 onto one slide). Citation only on the first slide of each passage.
+- **Colours (match youth Lectura):** citation + verse numbers **red** `#FF0000` bold; verse body **black** `#000000` regular — forced explicitly (never inherit a wrong sample fill).
+- Template ships 4 prototype slides (2–5). If more packs are needed, **duplicate** the lectura prototype and insert into the active order (same allocate pattern as youth). Unused prototypes stay on disk but drop out of `sldIdLst`.
+- Header `LECTURA ANTIFONAL` + citation with semicolon when the template sample has one.
 
 ### Objetivos / Pensamiento / Enseñanza+Datos
 
@@ -90,11 +93,48 @@ Match the reference deck’s paragraph breaks:
 1. **`intro_header`** — full-bleed image + centred translucent box, “INTRODUCCIÓN” only.
 2. **`intro_body`** (×N) — blue header bar + white justified body + navy footer. Split before footer.
 
+### Definición y etimología (`definicion`) — **image card design**
+
+**Visual authority:** [`reference/definicion-etimologia-design.png`](reference/definicion-etimologia-design.png).
+
+Do **not** dump definitions as a plain blue-header body slide. Each tema’s definición slide is a **composed 16:9 graphic** (full-bleed) matching this layout:
+
+| Region | Spec |
+|--------|------|
+| Background | Soft landscape / scenic photo (muted blues–greys), faint white wash under the cards |
+| Header | Open-book icon + title `DEFINICIÓN Y ETIMOLOGÍA` (bold navy) + thin navy rule ending in a dot |
+| Rows | One horizontal rounded white card **per term** (stack 2–4; if more terms, split across slides) |
+
+**Each row (left → right):**
+
+1. **Left icon** — circular/flat icon that matches the *term* (different every row; invent from the wording)
+2. **Chevron / arrow panel** — coloured, pointed right; white bold text = quoted `termino` + optional `referencia`
+3. **Vertical grey rule**
+4. **Definition body** — black sans text = `texto`
+5. **Right icon** — second motif that matches the *explanation* (again, unique per row)
+
+**Row colours** rotate per card (blue → darker blue → teal → purple, etc.) so adjacent rows never share the same chevron colour.
+
+**Icons are content-specific** — do not reuse the sample’s clock/storm/brain icons when the study talks about *justicia*, *modestia*, *humildad*, etc. Generate new icon pairs that fit each termino/texto.
+
+**Build path:** generate `definicion-{tema}.png` (≈1408×768+) with all of the above baked into the image (including title + body text — this is a composed slide, not chrome-over-photo). Swap onto the definición prototype slide’s picture fill / main image shape. Clear leftover text placeholders so they do not double-render.
+
+JSON fields per term (`Definicion`):
+
+| Field | Role |
+|-------|------|
+| `termino` | Chevron title (quoted on the art) |
+| `texto` | Definition body |
+| `referencia` | Optional verse/ref in the chevron |
+| `icono_izq` / `icono_der` | Optional motif hints for the image generator |
+
+---
+
 ### Tema block (per theme)
 
 ```
 tema_header          → full-bleed image + bottom gradient bar (TEMA N, title, ref)
-definicion           → blue header + white body (may be 1–2 slides)
+definicion           → composed card PNG (header + icon/chevron/def/icon rows)
 ab_title             → full-bleed image + left torn panel (point label, title, ref)
 texto_biblico        → black slide, yellow/white verses (1+ slides)
 ab_body              → blue header + white body + navy footer (N slides)
@@ -105,6 +145,10 @@ Study 02 tema II has **three** points (A.2, B.2, C.2); tema I and III have two. 
 
 ### Texto Bíblico
 
+- Same pipeline as youth **Texto Bíblico**: `expand_glued_verses` → `pack_verses(VERSE_BUDGET=280)` → `set_verses(VerseKind::Texto)`.
+- Yellow citation + verse numbers; white body on black; citation only on the first slide of each passage.
+- Leave **~20–25%** empty margin at the bottom. If verses exceed the budget, **duplicate** the texto prototype and continue (do not dump overflow onto one slide).
+- `set_verses` forces `noAutofit` on the verse box — `spAutoFit` can collapse text until the slide looks blank.
 - Black full-slide background.
 - Citation in yellow parens on first slide of range: `(JOSUÉ 3:14-16)` when template uses parens.
 - Verse numbers yellow bold; body white.
@@ -148,14 +192,16 @@ For each study, generate **full-bleed 16:9 PNGs** (~1408×768 or larger):
 |-------|---------|
 | `intro-header.png` | `intro_header` |
 | `tema-{1,2,3}.png` | Each `tema_header` |
+| `definicion-{1,2,3}.png` | Each `definicion` — **card layout** (see design ref above); icons unique per term |
 | `ab-{tema}{letter}.png` | Each `ab_title` (e.g. `ab-1A.png`, `ab-2B.png`) |
 
 Requirements:
 
-- **Full bleed** — subject/scene fills the frame; no letterboxing.
-- **Text-safe zones baked in:** tema = calm/dark lower third for gradient bar; ab_title = calm **left third** for torn panel (match study 02, not youth’s left fade).
-- **No text, logos, or watermarks** in the image.
-- **New style each study** — do not reuse another study’s art.
+- **Full bleed** — subject/scene fills the **entire** slide edge-to-edge (same as adult 2.A reference). Builder forces pic `xfrm` to `0,0` / `12192000×6858000` and strips `srcRect` crops.
+- **Multiple designs per study** — intro, each tema, and each A/B title get **different** cinematic looks (palette/lighting/composition). Do not reuse one motif for every slide.
+- **Text-safe lower third:** soft dark wash in the photo’s lower band so white OOXML title/ref chrome stays readable (bottom-left layout like 2.A — point label, title, orange ref bar).
+- **No text, logos, or watermarks** in the image itself (chrome is OOXML).
+- Video tema headers (II/III): strip video; use still full-bleed poster art.
 
 Insert via OOXML media replace (`ppt/media/imageN.png`) — same pattern as youth section images but more assets per study.
 
@@ -165,10 +211,11 @@ Insert via OOXML media replace (`ppt/media/imageN.png`) — same pattern as yout
 
 1. Open PDF side-by-side with reference study PDF.
 2. **Texto Bíblico** — every slide shows yellow/white verses on black (no “empty” slides).
-3. **Body slides** — no text touching or crossing the navy footer bar.
-4. **Tema / A-B image slides** — image is full-bleed; text only in bar/panel.
-5. **Paragraph breaks** — teaching markers `(1)`/`(2)`/`(3)` start new paragraphs.
-6. `lamad validate` → OK; export PDF.
+3. **Definición** — matches card design (header + icon/chevron/text/icon rows); icons fit the terms, not the sample stock set.
+4. **Body slides** — no text touching or crossing the navy footer bar.
+5. **Tema / A-B image slides** — image is full-bleed; text only in bar/panel.
+6. **Paragraph breaks** — teaching markers `(1)`/`(2)`/`(3)` start new paragraphs.
+7. `lamad validate` → OK; export PDF.
 
 ---
 
@@ -176,6 +223,7 @@ Insert via OOXML media replace (`ppt/media/imageN.png`) — same pattern as yout
 
 | File | Role |
 |------|------|
+| `reference/definicion-etimologia-design.png` | Visual authority for definición cards |
 | `SLIDE_MAP.md` | OOXML shape names for study 24 prototype |
 | `scripts/prepare_adult_master_template.py` | Build `master-template.pptx` from gold PPTX |
 | `scripts/extract_adult_study_json.py` | Extract JSON from a finished deck |

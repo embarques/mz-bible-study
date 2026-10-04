@@ -212,5 +212,26 @@
         }
       }
     }
-  ]
+  ],
+  "definicion_images": [
+    "lamad-cli/tests/fixtures/adult/24/definicion-1.png",
+    "lamad-cli/tests/fixtures/adult/24/definicion-2.png",
+    "lamad-cli/tests/fixtures/adult/24/definicion-3.png"
+  ],
+  "scenic_images": {
+    "intro_header": "lamad-cli/tests/fixtures/adult/24/intro-header.png",
+    "tema": [
+      "lamad-cli/tests/fixtures/adult/24/tema-1.png",
+      "lamad-cli/tests/fixtures/adult/24/tema-2.png",
+      "lamad-cli/tests/fixtures/adult/24/tema-3.png"
+    ],
+    "ab": [
+      "lamad-cli/tests/fixtures/adult/24/ab-1A.png",
+      "lamad-cli/tests/fixtures/adult/24/ab-1B.png",
+      "lamad-cli/tests/fixtures/adult/24/ab-2A.png",
+      "lamad-cli/tests/fixtures/adult/24/ab-2B.png",
+      "lamad-cli/tests/fixtures/adult/24/ab-3A.png",
+      "lamad-cli/tests/fixtures/adult/24/ab-3B.png"
+    ]
+  }
 }

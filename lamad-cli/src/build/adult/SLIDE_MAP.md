@@ -54,6 +54,8 @@ Layout: `slideLayout16.xml`
 | `Título 1` | Header `LECTURA ANTIFONAL` | Static |
 | `CuadroTexto 5` | Citation + verse text (packed, multi-verse) | **Yes** |
 
+**Packing (HARD):** `expand_glued_verses` → `pack_verses(ADULT_LECTURA_BUDGET=400)` → `set_verses(VerseKind::Lectura)`. Colours match youth: red citation/numbers, black body (forced). Citation only on the first slide of each passage. Extra packs allocate new slides by duplicating slide 2. JSON `lectura_antifonal` is a list of **passages**, not a fixed slide count.
+
 ### Texto bíblico (`texto_biblico`)
 
 Layout: `slideLayout6.xml` (distinct from most body slides)
@@ -61,6 +63,9 @@ Layout: `slideLayout6.xml` (distinct from most body slides)
 | Shape | Role | Replace? |
 |-------|------|----------|
 | `CuadroTexto 3` | Header `Texto Bíblico` | Static |
+| `TextBox 4` | Citation + verses (yellow/white) | **Yes** |
+
+**Packing (HARD):** same as youth Texto Bíblico — `expand_glued_verses` → `pack_verses(VERSE_BUDGET=280)` → `set_verses(VerseKind::Texto)` with `noAutofit`. Citation only on first slide of the passage. Extra packs duplicate this prototype and insert into the active order before the A/B body slides.
 | `TextBox 4` | Citation + verse text | **Yes** |
 
 ### Introducción body (`intro_body`)
@@ -76,10 +81,14 @@ Decorative `Rectangle 14/16/18/20/22` shapes — do not edit.
 
 ### Definición (`definicion`)
 
+**Design:** composed full-bleed card art — see `LAYOUT_GUIDE.md` + `reference/definicion-etimologia-design.png`. Not a plain text body dump.
+
 | Shape | Role | Replace? |
 |-------|------|----------|
-| `Título 1` | `DEFINICIÓN Y ETIMOLOGÍA` | Static |
-| `Marcador de contenido 2` | Etymology / word definitions | **Yes** |
+| Main picture / slide image | Full composed `definicion-{n}.png` (title + rows + icons baked in) | **Yes** |
+| `Título 1` / `Marcador de contenido 2` | Clear or hide after image swap so text does not double-render | Clear |
+
+Prototype slides today (15 / 30 / 45) still use the old blue-header layout until media swap is wired; treat the PNG design as the target.
 
 ### A/B body (`ab_body`)
 

@@ -291,6 +291,22 @@ pub(crate) fn replace_text_preserving_runs(shape_xml: &str, new_text: &str) -> R
     Ok(out)
 }
 
+/// Put the entire string in the first `<a:t>` and clear the rest.
+/// Use for titles where proportional run-splitting mid-word is unacceptable.
+pub(crate) fn replace_text_single_run(shape_xml: &str, new_text: &str) -> Result<String> {
+    let nodes = xml::all_elements(shape_xml, "a:t");
+    if nodes.is_empty() {
+        bail!("shape has no a:t nodes");
+    }
+    let mut out = shape_xml.to_string();
+    for (i, el) in nodes.iter().enumerate().rev() {
+        let content = if i == 0 { new_text } else { "" };
+        let new_t = xml::build_t(content);
+        out = replace_range(&out, el.start, el.end, &new_t);
+    }
+    Ok(out)
+}
+
 /// Keep the first `<a:t>` slot exact; distribute `rest` across the remaining
 /// slots by their original character proportions (preserves accent colours).
 pub(crate) fn replace_text_with_leading_run(

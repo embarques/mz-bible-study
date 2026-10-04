@@ -107,12 +107,12 @@ pub fn verify_deliverables(study: u32, audience: Audience, root: &Path) -> Resul
 ///
 /// Rules (checked in order):
 /// 1. basename equals `{study}.json`, or the path ends with `/{study}.json`.
-/// 2. basename equals `{study}-section{1,2,3}.png` (also accept the bare
-///    `section{1,2,3}.png`, without the study-number prefix).
+/// 2. basename equals `{study}-section{1,2,3}.{png,jpg,jpeg}` (also accept the
+///    bare `section{1,2,3}.{png,jpg,jpeg}`, without the study-number prefix).
 ///
 /// Returns `None` when neither rule matches. Callers should then fall back
 /// to positional matching (see [`resolve_artifacts`]) — never guess a JSON
-/// artifact positionally, only PNGs.
+/// artifact positionally, only images.
 fn map_artifact(study: u32, art_path: &str, dest: &Deliverables) -> Option<PathBuf> {
     let basename = art_path.rsplit('/').next().unwrap_or(art_path);
 
@@ -122,14 +122,24 @@ fn map_artifact(study: u32, art_path: &str, dest: &Deliverables) -> Option<PathB
     }
 
     for (n, slot) in [(1, &dest.img1), (2, &dest.img2), (3, &dest.img3)] {
-        let named = format!("{study}-section{n}.png");
-        let bare = format!("section{n}.png");
-        if basename.eq_ignore_ascii_case(&named) || basename.eq_ignore_ascii_case(&bare) {
-            return Some(slot.clone());
+        for ext in ["png", "jpg", "jpeg", "webp"] {
+            let named = format!("{study}-section{n}.{ext}");
+            let bare = format!("section{n}.{ext}");
+            if basename.eq_ignore_ascii_case(&named) || basename.eq_ignore_ascii_case(&bare) {
+                return Some(slot.clone());
+            }
         }
     }
 
     None
+}
+
+fn is_section_image_path(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    lower.ends_with(".png")
+        || lower.ends_with(".jpg")
+        || lower.ends_with(".jpeg")
+        || lower.ends_with(".webp")
 }
 
 /// Assign every downloaded artifact to its local destination, per
@@ -140,9 +150,9 @@ fn map_artifact(study: u32, art_path: &str, dest: &Deliverables) -> Option<PathB
 ///   two slots and one slot can't be filled twice.
 /// - **Pass 2 (positional fallback):** any of the 3 section-image slots
 ///   still empty after pass 1 are filled from the *remaining* (unmatched)
-///   `.png` artifacts, taken in sorted-path order, lowest-numbered missing
-///   slot first. The JSON slot is never guessed positionally — an
-///   unresolved JSON is a hard error.
+///   image artifacts (png/jpg/jpeg/webp), taken in sorted-path order,
+///   lowest-numbered missing slot first. The JSON slot is never guessed
+///   positionally — an unresolved JSON is a hard error.
 ///
 /// Returns `(artifact_path, destination)` pairs for every filled slot, or a
 /// clear error listing what was found vs. what's still missing.
@@ -180,15 +190,15 @@ fn resolve_artifacts(
         }
     }
 
-    // Pass 2 — fill remaining section-image slots from leftover PNGs.
-    let mut leftover_pngs: Vec<&Artifact> = artifacts
+    // Pass 2 — fill remaining section-image slots from leftover images.
+    let mut leftover_imgs: Vec<&Artifact> = artifacts
         .iter()
         .enumerate()
-        .filter(|(idx, art)| !used[*idx] && art.path.to_lowercase().ends_with(".png"))
+        .filter(|(idx, art)| !used[*idx] && is_section_image_path(&art.path))
         .map(|(_, art)| art)
         .collect();
-    leftover_pngs.sort_by(|a, b| a.path.cmp(&b.path));
-    let mut leftover = leftover_pngs.into_iter();
+    leftover_imgs.sort_by(|a, b| a.path.cmp(&b.path));
+    let mut leftover = leftover_imgs.into_iter();
 
     for (slot, dest_slot) in [(1, &dest.img1), (2, &dest.img2), (3, &dest.img3)] {
         if slots[slot].is_some() {
@@ -209,7 +219,8 @@ fn resolve_artifacts(
         let found: Vec<&str> = artifacts.iter().map(|a| a.path.as_str()).collect();
         bail!(
             "could not map artifacts to deliverables for estudio {study} — missing: {}. \
-             Artifacts found ({}): {:?}. Expected {study}.json + 3 section PNGs under artifacts/.",
+             Artifacts found ({}): {:?}. Expected {study}.json + 3 section images \
+             (png/jpg) under artifacts/.",
             missing.join(", "),
             found.len(),
             found
@@ -217,6 +228,27 @@ fn resolve_artifacts(
     }
 
     Ok(slots.into_iter().map(|s| s.unwrap()).collect())
+}
+
+/// If `path` is not already a PNG (by magic bytes), decode and rewrite as RGB PNG.
+/// Cloud agents sometimes emit `.jpg` while destinations are always `*-sectionN.png`.
+fn ensure_png_file(path: &Path) -> Result<()> {
+    let raw = std::fs::read(path)
+        .map_err(|e| anyhow::anyhow!("read {}: {e}", path.display()))?;
+    if raw.len() >= 8 && raw.starts_with(&[0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n']) {
+        return Ok(());
+    }
+    let img = image::load_from_memory(&raw)
+        .map_err(|e| anyhow::anyhow!("decode image {}: {e}", path.display()))?;
+    let rgb = image::DynamicImage::ImageRgb8(img.to_rgb8());
+    let mut out = Vec::new();
+    rgb.write_to(
+        &mut std::io::Cursor::new(&mut out),
+        image::ImageFormat::Png,
+    )
+    .map_err(|e| anyhow::anyhow!("encode PNG {}: {e}", path.display()))?;
+    std::fs::write(path, out).map_err(|e| anyhow::anyhow!("write {}: {e}", path.display()))?;
+    Ok(())
 }
 
 pub async fn run_prepare_agent(req: PrepareRequest) -> Result<Deliverables> {
@@ -350,6 +382,10 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
         client
             .download_artifact(&created.agent.id, art_path, dest_path)
             .await?;
+        // Agents sometimes write .jpg; destinations are always .png — normalize.
+        if dest_path.extension().and_then(|e| e.to_str()) == Some("png") {
+            ensure_png_file(dest_path)?;
+        }
     }
 
     // Stamp audience
@@ -659,6 +695,15 @@ mod tests {
             map_artifact(17, "artifacts/17-section3.png", &dest),
             Some(dest.img3.clone())
         );
+        // JPG (common agent miss) maps to the same PNG destinations.
+        assert_eq!(
+            map_artifact(1, "artifacts/assets/1-section1.jpg", &dest),
+            Some(dest.img1.clone())
+        );
+        assert_eq!(
+            map_artifact(1, "artifacts/assets/1-section2.jpeg", &dest),
+            Some(dest.img2.clone())
+        );
     }
 
     #[test]
@@ -719,6 +764,24 @@ mod tests {
         assert_eq!(by_dest["artifacts/17-section1.png"], dest.img1);
         assert_eq!(by_dest["artifacts/leftover.png"], dest.img2);
         assert_eq!(by_dest["artifacts/17-section3.png"], dest.img3);
+    }
+
+    #[test]
+    fn resolve_artifacts_accepts_jpg_section_images() {
+        let dest = fake_dest();
+        let artifacts = vec![
+            art("artifacts/1.json"),
+            art("artifacts/assets/1-section1.jpg"),
+            art("artifacts/assets/1-section2.jpg"),
+            art("artifacts/assets/1-section3.jpg"),
+        ];
+        // Remap fake_dest study number: map_artifact uses study arg, not dest paths.
+        let resolved = resolve_artifacts(1, &artifacts, &dest).expect("resolves jpg");
+        assert_eq!(resolved.len(), 4);
+        let by_dest: std::collections::HashMap<_, _> = resolved.into_iter().collect();
+        assert_eq!(by_dest["artifacts/assets/1-section1.jpg"], dest.img1);
+        assert_eq!(by_dest["artifacts/assets/1-section2.jpg"], dest.img2);
+        assert_eq!(by_dest["artifacts/assets/1-section3.jpg"], dest.img3);
     }
 
     #[test]

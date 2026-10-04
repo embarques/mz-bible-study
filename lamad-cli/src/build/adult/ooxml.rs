@@ -6,11 +6,12 @@
 use std::fs;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
+use regex::Regex;
 
 use crate::build::ooxml::body::set_content_body_teaching;
 use crate::build::ooxml::shape::{
-    format_ref_citation_from_template, replace_text_preserving_runs,
+    format_ref_citation_from_template, replace_text_preserving_runs, replace_text_single_run,
     replace_text_with_leading_run, transform_shape,
 };
 use crate::build::ooxml::title::set_adult_title_slide;
@@ -48,6 +49,12 @@ pub fn set_title_or_proximo(
     set_adult_title_slide(path, numero, titulo, base)
 }
 
+fn fill_shape_single(path: &Path, shape: &str, text: &str) -> Result<()> {
+    let xml = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let xml = transform_shape(&xml, shape, |b| replace_text_single_run(b, text))?;
+    fs::write(path, xml).with_context(|| format!("write {}", path.display()))
+}
+
 fn fill_shape_preserving(path: &Path, shape: &str, text: &str) -> Result<()> {
     let xml = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let xml = transform_shape(&xml, shape, |b| replace_text_preserving_runs(b, text))?;
@@ -74,21 +81,137 @@ pub fn set_ensenanza_datos(
 }
 
 pub fn set_tema_header_image(path: &Path, tema_label: &str, titulo: &str, rango: &str) -> Result<()> {
-    fill_shape_leading(path, "CuadroTexto 3", &format!("{tema_label} "), &format!(" {titulo}"))?;
+    fill_shape_single(path, "CuadroTexto 3", &format!("{tema_label}  {titulo}"))?;
     let cite = rango.trim();
     let cite = if cite.starts_with('(') {
         cite.to_string()
     } else {
         format!("({cite})")
     };
-    fill_shape_preserving(path, "CuadroTexto 5", &cite)?;
+    fill_shape_single(path, "CuadroTexto 5", &cite)?;
     Ok(())
 }
 
-pub fn set_tema_header_video(path: &Path, tema_label: &str, titulo: &str, rango: &str) -> Result<()> {
-    fill_shape_leading(path, "Título 1", &format!("{tema_label}   "), &format!(" {titulo}"))?;
-    let cite = rango.trim().trim_start_matches('(').trim_end_matches(')');
-    fill_shape_preserving(path, "CuadroTexto 4", cite)?;
+/// Replace a video-poster tema header (template slides 29 / 44) with the
+/// clean still-image tema layout from slide 14. Half-stripping `p:video` /
+/// `p14:media` leaves PowerPoint repair dialogs; cloning the known-good
+/// image slide does not.
+pub fn convert_video_tema_to_image_layout(
+    build: &Path,
+    slide_num: u32,
+    proto: u32,
+) -> Result<()> {
+    let slide = crate::build::ooxml::slide_path(build, slide_num);
+    let proto_slide = crate::build::ooxml::slide_path(build, proto);
+    let rels_dir = build.join("ppt").join("slides").join("_rels");
+    let rels_path = rels_dir.join(format!("slide{slide_num}.xml.rels"));
+    let proto_rels_path = rels_dir.join(format!("slide{proto}.xml.rels"));
+
+    let rels = if rels_path.is_file() {
+        fs::read_to_string(&rels_path).with_context(|| format!("read {}", rels_path.display()))?
+    } else {
+        String::new()
+    };
+
+    // Keep the existing poster/image media file when present.
+    let img_re = Regex::new(
+        r#"Type="[^"]*/relationships/image"[^>]*Target="\.\./media/([^"]+)""#,
+    )
+    .unwrap();
+    let media_name = if let Some(caps) = img_re.captures(&rels) {
+        caps[1].to_string()
+    } else {
+        // Fallback: copy proto's media file under a new name.
+        let proto_rels = fs::read_to_string(&proto_rels_path)
+            .with_context(|| format!("read {}", proto_rels_path.display()))?;
+        let proto_media = img_re
+            .captures(&proto_rels)
+            .map(|c| c[1].to_string())
+            .context("tema image prototype has no image relationship")?;
+        let media_dir = build.join("ppt").join("media");
+        let new_name = next_media_png_name(&media_dir)?;
+        fs::copy(media_dir.join(&proto_media), media_dir.join(&new_name)).with_context(|| {
+            format!("copy proto media {} -> {}", proto_media, new_name)
+        })?;
+        new_name
+    };
+
+    let layout_re = Regex::new(
+        r#"Type="[^"]*/relationships/slideLayout"[^>]*Target="([^"]+)""#,
+    )
+    .unwrap();
+    let layout_target = if let Some(caps) = layout_re.captures(&rels) {
+        caps[1].to_string()
+    } else if proto_rels_path.is_file() {
+        let proto_rels = fs::read_to_string(&proto_rels_path)
+            .with_context(|| format!("read {}", proto_rels_path.display()))?;
+        layout_re
+            .captures(&proto_rels)
+            .map(|c| c[1].to_string())
+            .unwrap_or_else(|| "../slideLayouts/slideLayout2.xml".to_string())
+    } else {
+        "../slideLayouts/slideLayout2.xml".to_string()
+    };
+
+    // Image tema layout uses rId1=layout, rId3=image (matches slide 14).
+    let new_rels = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="{layout_target}"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/{media_name}"/></Relationships>"#
+    );
+    fs::copy(&proto_slide, &slide)
+        .with_context(|| format!("copy {} -> {}", proto_slide.display(), slide.display()))?;
+    fs::write(&rels_path, new_rels).with_context(|| format!("write {}", rels_path.display()))?;
+    Ok(())
+}
+
+/// Delete unreferenced `ppt/media/*.mp4` left after converting video temas
+/// to stills (orphans can confuse PowerPoint repair).
+pub fn remove_orphan_videos(build: &Path) -> Result<()> {
+    let media_dir = build.join("ppt").join("media");
+    if !media_dir.is_dir() {
+        return Ok(());
+    }
+    let mut referenced = std::collections::HashSet::new();
+    let rels_root = build.join("ppt");
+    fn walk_rels(dir: &Path, referenced: &mut std::collections::HashSet<String>) -> Result<()> {
+        if !dir.is_dir() {
+            return Ok(());
+        }
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                walk_rels(&path, referenced)?;
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if !name.ends_with(".rels") {
+                continue;
+            }
+            let text = fs::read_to_string(&path)?;
+            for caps in Regex::new(r#"Target="[^"]*/media/([^"]+\.mp4)""#)
+                .unwrap()
+                .captures_iter(&text)
+            {
+                referenced.insert(caps[1].to_string());
+            }
+        }
+        Ok(())
+    }
+    walk_rels(&rels_root, &mut referenced)?;
+    for entry in fs::read_dir(&media_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if name.ends_with(".mp4") && !referenced.contains(name) {
+            fs::remove_file(&path)
+                .with_context(|| format!("remove orphan video {}", path.display()))?;
+        }
+    }
     Ok(())
 }
 
@@ -99,14 +222,14 @@ pub fn set_ab_title_header(
     cita: &str,
     reference: AbRefShape,
 ) -> Result<()> {
-    let heading = format!("{point_label} ");
-    fill_shape_leading(path, "Título 1", &heading, &format!(" {titulo}"))?;
+    // One clean string in a single run — no mid-word splits.
+    fill_shape_single(path, "Título 1", &format!("{point_label}  {titulo}"))?;
 
     let xml = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let ref_shape = reference.name();
     let xml = transform_shape(&xml, ref_shape, |b| {
         let cite = format_ref_citation_from_template(b, cita)?;
-        replace_text_preserving_runs(b, &cite)
+        replace_text_single_run(b, &cite)
     })?;
     fs::write(path, xml).with_context(|| format!("write {}", path.display()))
 }
@@ -126,9 +249,419 @@ pub fn set_definicion(path: &Path, text: &str) -> Result<()> {
     set_content_body_teaching(path, text, None)
 }
 
+/// Replace a definición slide with a full-bleed composed card PNG
+/// (DEFINICIÓN Y ETIMOLOGÍA design). Clears old text chrome so it does
+/// not double-render over the art.
+pub fn set_definicion_image(build: &Path, slide_num: u32, image: &Path) -> Result<()> {
+    if !image.is_file() {
+        anyhow::bail!("definicion image not found: {}", image.display());
+    }
+    let media_dir = build.join("ppt").join("media");
+    std::fs::create_dir_all(&media_dir)
+        .with_context(|| format!("mkdir {}", media_dir.display()))?;
+
+    let media_name = next_media_png_name(&media_dir)?;
+    let dest = media_dir.join(&media_name);
+    let raw = fs::read(image).with_context(|| format!("read {}", image.display()))?;
+    // Full-width, top-aligned — never center-crop (that cuts the title off).
+    let png = crate::build::ooxml::resize_definicion_png(&raw)
+        .with_context(|| format!("resize definicion {}", image.display()))?;
+    fs::write(&dest, png).with_context(|| format!("write {}", dest.display()))?;
+
+    let slide = crate::build::ooxml::slide_path(build, slide_num);
+    let xml = fs::read_to_string(&slide).with_context(|| format!("read {}", slide.display()))?;
+    // PowerPoint is picky about relationship Ids — use numeric `rIdN` only
+    // (never `rIdDefImg`); that form has triggered repair dialogs.
+    let embed_rid = next_numeric_rid(&xml, &{
+        let rels_path = build
+            .join("ppt")
+            .join("slides")
+            .join("_rels")
+            .join(format!("slide{slide_num}.xml.rels"));
+        if rels_path.is_file() {
+            fs::read_to_string(&rels_path).unwrap_or_default()
+        } else {
+            String::new()
+        }
+    });
+    let new_xml = rewrite_slide_as_fullbleed_pic(&xml, &embed_rid)?;
+    fs::write(&slide, new_xml).with_context(|| format!("write {}", slide.display()))?;
+
+    let rels_path = build
+        .join("ppt")
+        .join("slides")
+        .join("_rels")
+        .join(format!("slide{slide_num}.xml.rels"));
+    let mut rels = if rels_path.is_file() {
+        fs::read_to_string(&rels_path).with_context(|| format!("read {}", rels_path.display()))?
+    } else {
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>"#
+            .to_string()
+    };
+    // Drop prior image relationships; keep layout (+ notes if present).
+    let img_re = regex::Regex::new(
+        r#"<Relationship\b[^>]*Type="[^"]*/relationships/image"[^>]*/>\s*"#,
+    )
+    .unwrap();
+    rels = img_re.replace_all(&rels, "").into_owned();
+    let rel_tag = format!(
+        r#"<Relationship Id="{embed_rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/{media_name}"/>"#
+    );
+    if !rels.contains(&embed_rid) {
+        rels = rels.replacen("</Relationships>", &format!("{rel_tag}</Relationships>"), 1);
+    }
+    fs::write(&rels_path, rels).with_context(|| format!("write {}", rels_path.display()))?;
+    Ok(())
+}
+
+fn next_numeric_rid(slide_xml: &str, rels: &str) -> String {
+    let re = Regex::new(r#"\brId(\d+)\b"#).unwrap();
+    let mut max_n = 0u32;
+    for caps in re.captures_iter(slide_xml).chain(re.captures_iter(rels)) {
+        if let Ok(n) = caps[1].parse::<u32>() {
+            max_n = max_n.max(n);
+        }
+    }
+    format!("rId{}", max_n + 1)
+}
+
+fn next_media_png_name(media_dir: &Path) -> Result<String> {
+    let mut max_n = 0u32;
+    if media_dir.is_dir() {
+        for entry in fs::read_dir(media_dir).with_context(|| format!("read_dir {}", media_dir.display()))? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let Some(s) = name.to_str() else { continue };
+            if let Some(rest) = s.strip_prefix("image") {
+                if let Some(num) = rest.strip_suffix(".png") {
+                    if let Ok(n) = num.parse::<u32>() {
+                        max_n = max_n.max(n);
+                    }
+                }
+            }
+        }
+    }
+    Ok(format!("image{}.png", max_n + 1))
+}
+
+fn rewrite_slide_as_fullbleed_pic(slide_xml: &str, embed_rid: &str) -> Result<String> {
+    // Keep the opening <p:sld ...> through nvGrpSpPr / grpSpPr, then a single
+    // full-bleed pic, then the original trailer after </p:spTree>.
+    let tree_start = slide_xml
+        .find("<p:spTree>")
+        .context("slide missing <p:spTree>")?;
+    let tree_end = slide_xml
+        .find("</p:spTree>")
+        .context("slide missing </p:spTree>")?
+        + "</p:spTree>".len();
+
+    let head = &slide_xml[..tree_start];
+    let tree = &slide_xml[tree_start..tree_end];
+    let tail = &slide_xml[tree_end..];
+
+    // Preserve group shape preamble (required by PPTX), excluding the
+    // outer <p:spTree> tag which we re-open below.
+    let grp_end = tree
+        .find("</p:grpSpPr>")
+        .context("slide missing </p:grpSpPr>")?
+        + "</p:grpSpPr>".len();
+    let preamble = tree
+        .strip_prefix("<p:spTree>")
+        .map(|s| &s[..grp_end - "<p:spTree>".len()])
+        .context("spTree preamble strip failed")?;
+
+    // EMUs for 13.333" × 7.5" (standard 16:9 widescreen).
+    let pic = format!(
+        r#"<p:pic><p:nvPicPr><p:cNvPr id="2" name="DefinicionCard"/><p:cNvPicPr><a:picLocks noChangeAspect="0"/></p:cNvPicPr><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="{embed_rid}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="12192000" cy="6858000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>"#
+    );
+
+    Ok(format!("{head}<p:spTree>{preamble}{pic}</p:spTree>{tail}"))
+}
+
 pub fn set_intro_body(path: &Path, text: &str) -> Result<()> {
     warn_if_over_budget(text);
     set_content_body_teaching(path, text, None)
+}
+
+/// Youth intro body slides include the Mount Zion logo at bottom-right
+/// (`Imagen 8`). Adult intro body prototypes omit it — inject the same
+/// geometry for intro slides only (not A/B / conclusión).
+pub fn ensure_intro_body_logo(build: &Path, slide_num: u32, logo_png: &Path) -> Result<()> {
+    if !logo_png.is_file() {
+        bail!("intro logo not found: {}", logo_png.display());
+    }
+    let slide = crate::build::ooxml::slide_path(build, slide_num);
+    let mut xml = fs::read_to_string(&slide).with_context(|| format!("read {}", slide.display()))?;
+    if xml.contains("name=\"Imagen 8\"") || xml.contains("name=\"MzLogo\"") {
+        return Ok(());
+    }
+
+    let media_dir = build.join("ppt").join("media");
+    fs::create_dir_all(&media_dir)?;
+    // Stable media name so every intro body slide can share one file.
+    let media_name = "mzLogo.png";
+    let dest = media_dir.join(media_name);
+    if !dest.is_file() {
+        let raw = fs::read(logo_png).with_context(|| format!("read {}", logo_png.display()))?;
+        fs::write(&dest, raw).with_context(|| format!("write {}", dest.display()))?;
+    }
+
+    let rels_path = build
+        .join("ppt")
+        .join("slides")
+        .join("_rels")
+        .join(format!("slide{slide_num}.xml.rels"));
+    let mut rels = if rels_path.is_file() {
+        fs::read_to_string(&rels_path).with_context(|| format!("read {}", rels_path.display()))?
+    } else {
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>"#
+            .to_string()
+    };
+
+    // Reuse existing image rid pointing at mzLogo.png, or allocate next numeric.
+    let logo_rid = if let Some(caps) = Regex::new(
+        r#"Id="(rId\d+)"[^>]*Target="\.\./media/mzLogo\.png""#,
+    )
+    .unwrap()
+    .captures(&rels)
+    {
+        caps[1].to_string()
+    } else if let Some(caps) = Regex::new(
+        r#"Target="\.\./media/mzLogo\.png"[^>]*Id="(rId\d+)""#,
+    )
+    .unwrap()
+    .captures(&rels)
+    {
+        caps[1].to_string()
+    } else {
+        let rid = next_numeric_rid(&xml, &rels);
+        let tag = format!(
+            r#"<Relationship Id="{rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/{media_name}"/>"#
+        );
+        rels = rels.replacen("</Relationships>", &format!("{tag}</Relationships>"), 1);
+        fs::write(&rels_path, &rels).with_context(|| format!("write {}", rels_path.display()))?;
+        rid
+    };
+
+    // Next free shape id on the slide.
+    let id_re = Regex::new(r#"<p:cNvPr id="(\d+)""#).unwrap();
+    let mut max_id = 1u32;
+    for caps in id_re.captures_iter(&xml) {
+        if let Ok(n) = caps[1].parse::<u32>() {
+            max_id = max_id.max(n);
+        }
+    }
+    let shape_id = max_id + 1;
+
+    // Geometry copied from youth master-template intro body (`Imagen 8`).
+    let pic = format!(
+        r#"<p:pic><p:nvPicPr><p:cNvPr id="{shape_id}" name="Imagen 8"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="{logo_rid}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="11281505" y="6196152"/><a:ext cx="815245" cy="582318"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>"#
+    );
+    if !xml.contains("</p:spTree>") {
+        bail!("slide {slide_num} missing </p:spTree>");
+    }
+    xml = xml.replacen("</p:spTree>", &format!("{pic}</p:spTree>"), 1);
+    fs::write(&slide, xml).with_context(|| format!("write {}", slide.display()))?;
+    if !rels_path.is_file() {
+        fs::write(&rels_path, &rels).with_context(|| format!("write {}", rels_path.display()))?;
+    }
+    Ok(())
+}
+
+/// Force every `<p:pic>` on the slide to true full-bleed (edge-to-edge
+/// 16:9) and strip `srcRect` crops. Matches the adult 2.A layout the user
+/// approved — image fills the whole slide; text chrome sits on top.
+pub fn force_pics_fullbleed(slide_path: &Path) -> Result<()> {
+    let xml = fs::read_to_string(slide_path)
+        .with_context(|| format!("read {}", slide_path.display()))?;
+    // Simpler per-pic rewrite:
+    let mut out = String::new();
+    let mut rest = xml.as_str();
+    let mut changed = false;
+    while let Some(start) = rest.find("<p:pic") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start..];
+        let end_rel = after
+            .find("</p:pic>")
+            .context("unclosed <p:pic>")?
+            + "</p:pic>".len();
+        let mut pic = after[..end_rel].to_string();
+        // Remove srcRect crops that letterbox/zoom the photo.
+        let src_re = Regex::new(r#"<a:srcRect\b[^/]*/>"#).unwrap();
+        pic = src_re.replace_all(&pic, "").into_owned();
+        // Force xfrm off/ext inside p:spPr (last xfrm in pic is the frame).
+        if let Some(xfrm_start) = pic.rfind("<a:xfrm>") {
+            if let Some(xfrm_end_rel) = pic[xfrm_start..].find("</a:xfrm>") {
+                let xfrm_end = xfrm_start + xfrm_end_rel + "</a:xfrm>".len();
+                let new_xfrm = r#"<a:xfrm><a:off x="0" y="0"/><a:ext cx="12192000" cy="6858000"/></a:xfrm>"#;
+                pic = format!("{}{}{}", &pic[..xfrm_start], new_xfrm, &pic[xfrm_end..]);
+                changed = true;
+            }
+        }
+        // Ensure stretch fillRect exists.
+        if !pic.contains("<a:stretch>") {
+            pic = pic.replace("</a:blip>", "</a:blip><a:stretch><a:fillRect/></a:stretch>");
+            changed = true;
+        }
+        out.push_str(&pic);
+        rest = &after[end_rel..];
+    }
+    out.push_str(rest);
+    if changed {
+        fs::write(slide_path, &out).with_context(|| format!("write {}", slide_path.display()))?;
+    }
+    // Full-bleed pics that sit *after* title shapes in the tree paint over
+    // the headings (TEMA / 1.A / …). Send scenic pics behind chrome.
+    send_fullbleed_pics_to_back(slide_path)?;
+    Ok(())
+}
+
+/// Move full-bleed scenic `<p:pic>` elements to just after `</p:grpSpPr>`
+/// so title/chrome shapes paint on top. Skips footer logos (`Imagen 8`).
+fn send_fullbleed_pics_to_back(slide_path: &Path) -> Result<()> {
+    let xml = fs::read_to_string(slide_path)
+        .with_context(|| format!("read {}", slide_path.display()))?;
+    let tree_start = match xml.find("<p:spTree>") {
+        Some(i) => i,
+        None => return Ok(()),
+    };
+    let tree_end = match xml.find("</p:spTree>") {
+        Some(i) => i,
+        None => return Ok(()),
+    };
+    let head = &xml[..tree_start];
+    let tree = &xml[tree_start..tree_end];
+    let tail = &xml[tree_end..];
+
+    let grp_end_rel = match tree.find("</p:grpSpPr>") {
+        Some(i) => i + "</p:grpSpPr>".len(),
+        None => return Ok(()),
+    };
+    let preamble = &tree[..grp_end_rel];
+    let body = &tree[grp_end_rel..];
+
+    let mut pics = Vec::new();
+    let mut other = String::new();
+    let mut rest = body;
+    let mut moved = false;
+    while let Some(start) = rest.find("<p:pic") {
+        other.push_str(&rest[..start]);
+        let after = &rest[start..];
+        let end_rel = after
+            .find("</p:pic>")
+            .context("unclosed <p:pic>")?
+            + "</p:pic>".len();
+        let pic = &after[..end_rel];
+        let name = Regex::new(r#"name="([^"]*)""#)
+            .unwrap()
+            .captures(pic)
+            .map(|c| c[1].to_string())
+            .unwrap_or_default();
+        let is_logo = name == "Imagen 8" || name == "MzLogo" || name.contains("Logo");
+        let is_fullbleed = pic.contains(r#"x="0""#)
+            && pic.contains(r#"y="0""#)
+            && pic.contains(r#"cx="12192000""#)
+            && pic.contains(r#"cy="6858000""#);
+        if is_fullbleed && !is_logo {
+            pics.push(pic.to_string());
+            moved = true;
+        } else {
+            other.push_str(pic);
+        }
+        rest = &after[end_rel..];
+    }
+    other.push_str(rest);
+
+    if !moved {
+        return Ok(());
+    }
+    // `preamble` includes `<p:spTree>…</p:grpSpPr>`; `tail` starts at `</p:spTree>`.
+    let new_xml = format!("{head}{preamble}{}{other}{tail}", pics.join(""));
+    fs::write(slide_path, new_xml).with_context(|| format!("write {}", slide_path.display()))?;
+    Ok(())
+}
+
+/// Replace the slide's scenic image media. When `fullbleed` is true (intro /
+/// 2.A-style slides), force edge-to-edge geometry and put the pic behind
+/// chrome. When false (TEMA header / inset 1.A), **keep template geometry**
+/// so the top title bar stays visible and the photo sits in its frame.
+pub fn apply_scenic_image(
+    build: &Path,
+    slide_num: u32,
+    image: &Path,
+    fullbleed: bool,
+) -> Result<()> {
+    if !image.is_file() {
+        bail!("scenic image not found: {}", image.display());
+    }
+    let slide = crate::build::ooxml::slide_path(build, slide_num);
+    let rels_path = build
+        .join("ppt")
+        .join("slides")
+        .join("_rels")
+        .join(format!("slide{slide_num}.xml.rels"));
+    let mut rels = fs::read_to_string(&rels_path)
+        .with_context(|| format!("read {}", rels_path.display()))?;
+
+    // Drop video relationships (tema II/III templates).
+    let video_re = Regex::new(
+        r#"<Relationship\b[^>]*Type="[^"]*/relationships/(?:video|media)"[^>]*/>\s*"#,
+    )
+    .unwrap();
+    rels = video_re.replace_all(&rels, "").into_owned();
+
+    let img_re = Regex::new(
+        r#"Type="[^"]*/relationships/image"[^>]*Target="\.\./media/([^"]+)""#,
+    )
+    .unwrap();
+    let media_name = img_re
+        .captures(&rels)
+        .map(|c| c[1].to_string())
+        .context("slide has no image relationship to replace")?;
+
+    let dest = build.join("ppt").join("media").join(&media_name);
+    let raw = fs::read(image).with_context(|| format!("read {}", image.display()))?;
+    // Cover-crop for scenic art (text is OOXML chrome, not baked in).
+    let png = crate::build::ooxml::resize_section_png(&raw)
+        .with_context(|| format!("resize scenic {}", image.display()))?;
+    fs::write(&dest, png).with_context(|| format!("write {}", dest.display()))?;
+    fs::write(&rels_path, &rels).with_context(|| format!("write {}", rels_path.display()))?;
+
+    // Strip leftover video XML if this was a video-poster slide.
+    let mut xml = fs::read_to_string(&slide).with_context(|| format!("read {}", slide.display()))?;
+    let video_nv = Regex::new(r#"<p:video[^>]*>[\s\S]*?</p:video>"#).unwrap();
+    xml = video_nv.replace_all(&xml, "").into_owned();
+    let video_file = Regex::new(r#"<a:videoFile\b[^>]*/?>"#).unwrap();
+    xml = video_file.replace_all(&xml, "").into_owned();
+    let p14_ext = Regex::new(
+        r#"<p:ext\b[^>]*>\s*<p14:media\b[^>]*/?>\s*</p:ext>"#,
+    )
+    .unwrap();
+    xml = p14_ext.replace_all(&xml, "").into_owned();
+    let p14_media = Regex::new(r#"<p14:media\b[^>]*/?>"#).unwrap();
+    xml = p14_media.replace_all(&xml, "").into_owned();
+    let timing = Regex::new(r#"<p:timing>[\s\S]*?</p:timing>"#).unwrap();
+    xml = timing.replace_all(&xml, "").into_owned();
+    xml = xml.replace("<p:extLst></p:extLst>", "");
+    xml = xml.replace("<p:extLst/>", "");
+    let media_click = Regex::new(
+        r#"<a:hlinkClick\b[^>]*action="ppaction://media"[^>]*/?>"#,
+    )
+    .unwrap();
+    xml = media_click.replace_all(&xml, "").into_owned();
+    fs::write(&slide, xml).with_context(|| format!("write {}", slide.display()))?;
+
+    if fullbleed {
+        force_pics_fullbleed(&slide)?;
+    }
+    Ok(())
+}
+
+/// Back-compat alias — full-bleed scenic swap.
+pub fn apply_scenic_fullbleed(build: &Path, slide_num: u32, image: &Path) -> Result<()> {
+    apply_scenic_image(build, slide_num, image, true)
 }
 
 fn warn_if_over_budget(text: &str) {

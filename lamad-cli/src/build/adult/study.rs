@@ -6,16 +6,30 @@ use anyhow::{bail, Context, Result};
 use serde_json::Value;
 
 use crate::build::adult::ooxml::{
-    set_ab_body_slide, set_ab_title_header, set_definicion, set_ensenanza_datos,
-    set_intro_body, set_tema_header_image, set_tema_header_video, set_title_or_proximo,
-    AbRefShape,
+    apply_scenic_image, convert_video_tema_to_image_layout, ensure_intro_body_logo,
+    remove_orphan_videos, set_ab_body_slide, set_ab_title_header, set_definicion,
+    set_definicion_image, set_ensenanza_datos, set_intro_body, set_tema_header_image,
+    set_title_or_proximo, AbRefShape,
 };
 use crate::build::ooxml::{self, VerseKind};
+use crate::build::ooxml::verses::expand_glued_verses;
 use crate::job::Audience;
 use crate::model::adult_study::{AdultStudy, TemaAdult};
+use crate::model::study::VERSE_BUDGET;
+use crate::pack;
 use crate::paths;
 
 const ADULT_SLIDE_COUNT: u32 = 62;
+/// Prototype lectura antifonal slides in the adult master template.
+const LECTURA_PROTOS: [u32; 4] = [2, 3, 4, 5];
+/// First non-lectura slide after the template lectura block.
+const AFTER_LECTURA: u32 = 6;
+const INTRO_HEADER_SLIDE: u32 = 9;
+/// Adult Lectura Antifonal packs denser than youth: template uses ~36pt
+/// Times New Roman in a taller white panel. Youth `VERSE_BUDGET` (280) at
+/// 44pt is too conservative here and orphans short verses. Stay under the
+/// overflow that gold hit when dumping Mateo 6:1–4 on one slide (~547 chars).
+const ADULT_LECTURA_BUDGET: usize = 400;
 
 struct TemaLayout {
     header: u32,
@@ -164,7 +178,6 @@ pub fn build_study(
 pub fn apply_adult_study(build: &Path, study: &AdultStudy) -> Result<Vec<u32>> {
     validate_counts(study)?;
 
-    let order: Vec<u32> = (1..=ADULT_SLIDE_COUNT).collect();
     let diagrams = build.join("ppt").join("diagrams");
 
     set_title_or_proximo(
@@ -174,20 +187,26 @@ pub fn apply_adult_study(build: &Path, study: &AdultStudy) -> Result<Vec<u32>> {
         &study.base_biblica_lines(),
     )?;
 
-    if study.lectura_antifonal.len() != 4 {
-        bail!(
-            "lectura_antifonal must have 4 slides, got {}",
-            study.lectura_antifonal.len()
-        );
+    let lectura_packs = lectura_antifonal_packs(study);
+    if lectura_packs.is_empty() {
+        bail!("lectura_antifonal produced no verse packs");
     }
-    for (i, block) in study.lectura_antifonal.iter().enumerate() {
+    let lectura_nums = allocate_lectura_slides(build, lectura_packs.len())?;
+    for ((verses, cite), &slide_n) in lectura_packs.iter().zip(lectura_nums.iter()) {
         ooxml::set_verses(
-            &ooxml::slide_path(build, 2 + i as u32),
-            &block.versiculos,
-            Some(block.cita.as_str()),
+            &ooxml::slide_path(build, slide_n),
+            verses,
+            cite.as_deref(),
             VerseKind::Lectura,
         )?;
     }
+
+    // Title → lectura → fixed mid block (objetivos…intro) → temas (with
+    // dynamic Texto Bíblico packs) → próximo. Extra texto slides are
+    // duplicated from each block's prototype and inserted in place.
+    let mut order = vec![1u32];
+    order.extend(&lectura_nums);
+    order.extend(AFTER_LECTURA..=13);
 
     if study.objetivos.len() != 3 {
         bail!("objetivos must have 3 entries, got {}", study.objetivos.len());
@@ -222,14 +241,30 @@ pub fn apply_adult_study(build: &Path, study: &AdultStudy) -> Result<Vec<u32>> {
         );
     }
     for (i, text) in study.introduccion_slides.iter().enumerate() {
-        set_intro_body(&ooxml::slide_path(build, 10 + i as u32), text)?;
+        let slide_num = 10 + i as u32;
+        set_intro_body(&ooxml::slide_path(build, slide_num), text)?;
+        // Adult intro body prototypes lack the Mount Zion logo; youth has it.
+        // Copy youth bottom-right logo onto intro body slides only.
+        ensure_intro_body_logo(build, slide_num, &youth_intro_logo_path()?)?;
     }
+
+    // Tema II/III templates are video posters — convert to the still-image
+    // tema layout (slide 14) BEFORE scenic swaps / text fill. Stripping
+    // video XML in place triggers PowerPoint "Repair".
+    for layout in &TEMA_LAYOUTS {
+        if layout.video_header {
+            convert_video_tema_to_image_layout(build, layout.header, 14)?;
+        }
+    }
+
+    apply_scenic_images(build, study)?;
+    remove_orphan_videos(build)?;
 
     if study.temas.len() != 3 {
         bail!("expected 3 temas, got {}", study.temas.len());
     }
     for (idx, tema) in study.temas.iter().enumerate() {
-        fill_tema(build, idx, tema, study)?;
+        fill_tema(build, idx, tema, study, &mut order)?;
     }
 
     let prox_base = study
@@ -239,17 +274,21 @@ pub fn apply_adult_study(build: &Path, study: &AdultStudy) -> Result<Vec<u32>> {
         .map(|b| b.as_lines())
         .unwrap_or_default();
     set_title_or_proximo(
-        &ooxml::slide_path(build, 62),
+        &ooxml::slide_path(build, ADULT_SLIDE_COUNT),
         &study.proximo.numero.to_string(),
         &study.proximo.titulo,
         &prox_base,
     )?;
+    order.push(ADULT_SLIDE_COUNT);
 
     println!("Filled adult deck with {} slides", order.len());
     Ok(order)
 }
 
 fn validate_counts(study: &AdultStudy) -> Result<()> {
+    if study.lectura_antifonal.is_empty() {
+        bail!("lectura_antifonal must have at least one passage");
+    }
     if study.temas.len() != TEMA_LAYOUTS.len() {
         bail!("expected {} temas", TEMA_LAYOUTS.len());
     }
@@ -274,7 +313,57 @@ fn validate_counts(study: &AdultStudy) -> Result<()> {
     Ok(())
 }
 
-fn fill_tema(build: &Path, idx: usize, tema: &TemaAdult, study: &AdultStudy) -> Result<()> {
+/// Same rules as youth Lectura Bíblica colours/structure, with an
+/// adult denser pack budget (see [`ADULT_LECTURA_BUDGET`]). Consecutive
+/// JSON passages that share the same `cita` are merged before packing so
+/// continuation slides do not repeat the citation title.
+fn lectura_antifonal_packs(study: &AdultStudy) -> Vec<(Vec<String>, Option<String>)> {
+    let mut passages: Vec<(String, Vec<String>)> = Vec::new();
+    for block in &study.lectura_antifonal {
+        let cite_key = block.cita.trim().trim_end_matches(';').trim().to_string();
+        let expanded = expand_glued_verses(&block.versiculos);
+        if let Some(last) = passages.last_mut() {
+            if last.0.eq_ignore_ascii_case(&cite_key) {
+                last.1.extend(expanded);
+                continue;
+            }
+        }
+        passages.push((cite_key, expanded));
+    }
+
+    let mut out = Vec::new();
+    for (cita, verses) in passages {
+        let packs = pack::pack_verses(&verses, ADULT_LECTURA_BUDGET);
+        for (i, pack) in packs.into_iter().enumerate() {
+            let cite = if i == 0 { Some(cita.clone()) } else { None };
+            out.push((pack, cite));
+        }
+    }
+    out
+}
+
+/// Reuse template slides 2–5; duplicate slide 2 when more packs are needed
+/// (youth allocate pattern). Unused prototype slides stay on disk but drop
+/// out of `sldIdLst`.
+fn allocate_lectura_slides(build: &Path, count: usize) -> Result<Vec<u32>> {
+    let mut nums = Vec::with_capacity(count);
+    for i in 0..count {
+        if i < LECTURA_PROTOS.len() {
+            nums.push(LECTURA_PROTOS[i]);
+        } else {
+            nums.push(ooxml::duplicate_slide(build, LECTURA_PROTOS[0])?);
+        }
+    }
+    Ok(nums)
+}
+
+fn fill_tema(
+    build: &Path,
+    idx: usize,
+    tema: &TemaAdult,
+    study: &AdultStudy,
+    order: &mut Vec<u32>,
+) -> Result<()> {
     let layout = &TEMA_LAYOUTS[idx];
     let tema_label = match idx {
         0 => "TEMA I",
@@ -282,14 +371,28 @@ fn fill_tema(build: &Path, idx: usize, tema: &TemaAdult, study: &AdultStudy) -> 
         _ => "TEMA III",
     };
     let header_path = ooxml::slide_path(build, layout.header);
-    if layout.video_header {
-        set_tema_header_video(&header_path, tema_label, &tema.titulo, &tema.rango)?;
-    } else {
-        set_tema_header_image(&header_path, tema_label, &tema.titulo, &tema.rango)?;
-    }
+    // All tema headers use the image layout (video slides converted earlier).
+    set_tema_header_image(&header_path, tema_label, &tema.titulo, &tema.rango)?;
+    order.push(layout.header);
 
     let defs = study.definiciones_text(&tema.definiciones);
-    set_definicion(&ooxml::slide_path(build, layout.definicion), &defs)?;
+    if let Some(imgs) = study.definicion_images.as_ref() {
+        if imgs.len() != study.temas.len() {
+            bail!(
+                "definicion_images must have {} paths (one per tema), got {}",
+                study.temas.len(),
+                imgs.len()
+            );
+        }
+        let img_path = resolve_study_path(&imgs[idx])?;
+        set_definicion_image(build, layout.definicion, &img_path)?;
+    } else {
+        eprintln!(
+            "warning: no definicion_images[{idx}] — falling back to plain text (card design missing)"
+        );
+        set_definicion(&ooxml::slide_path(build, layout.definicion), &defs)?;
+    }
+    order.push(layout.definicion);
 
     let point = idx + 1;
     fill_ab_block(
@@ -301,6 +404,7 @@ fn fill_tema(build: &Path, idx: usize, tema: &TemaAdult, study: &AdultStudy) -> 
         layout.a_ref,
         layout.texto_a,
         layout.a_bodies,
+        order,
     )?;
     fill_ab_block(
         build,
@@ -311,6 +415,7 @@ fn fill_tema(build: &Path, idx: usize, tema: &TemaAdult, study: &AdultStudy) -> 
         layout.b_ref,
         layout.texto_b,
         layout.b_bodies,
+        order,
     )
 }
 
@@ -321,8 +426,9 @@ fn fill_ab_block(
     block: &crate::model::adult_study::BloqueAdult,
     title_slide: u32,
     ref_shape: AbRefShape,
-    texto_slide: u32,
+    texto_proto: u32,
     body_slides: &[u32],
+    order: &mut Vec<u32>,
 ) -> Result<()> {
     let label = format!("{point}.{letter}");
     set_ab_title_header(
@@ -332,16 +438,168 @@ fn fill_ab_block(
         &block.texto_biblico.cita,
         ref_shape,
     )?;
-    ooxml::set_verses(
-        &ooxml::slide_path(build, texto_slide),
-        &block.texto_biblico.versiculos,
-        Some(block.texto_biblico.cita.as_str()),
-        VerseKind::Texto,
-    )?;
+    order.push(title_slide);
+
+    // Same rules as youth Texto Bíblico: expand → pack at VERSE_BUDGET →
+    // allocate continuation slides; citation only on first pack.
+    let packs = texto_biblico_packs(&block.texto_biblico);
+    if packs.is_empty() {
+        bail!("{label} texto_biblico produced no verse packs");
+    }
+    let texto_nums = allocate_from_proto(build, texto_proto, packs.len())?;
+    for ((verses, cite), &slide_n) in packs.iter().zip(texto_nums.iter()) {
+        ooxml::set_verses(
+            &ooxml::slide_path(build, slide_n),
+            verses,
+            cite.as_deref(),
+            VerseKind::Texto,
+        )?;
+    }
+    order.extend(&texto_nums);
 
     let body_title = format!("{label} - {}", block.titulo);
     for (&slide_n, text) in body_slides.iter().zip(block.texto_slides.iter()) {
         set_ab_body_slide(&ooxml::slide_path(build, slide_n), &body_title, text)?;
+        order.push(slide_n);
+    }
+    Ok(())
+}
+
+fn texto_biblico_packs(
+    passage: &crate::model::study::Lectura,
+) -> Vec<(Vec<String>, Option<String>)> {
+    let expanded = expand_glued_verses(&passage.versiculos);
+    let packs = pack::pack_verses(&expanded, VERSE_BUDGET);
+    packs
+        .into_iter()
+        .enumerate()
+        .map(|(i, pack)| {
+            let cite = if i == 0 {
+                Some(passage.cita.clone())
+            } else {
+                None
+            };
+            (pack, cite)
+        })
+        .collect()
+}
+
+fn allocate_from_proto(build: &Path, proto: u32, count: usize) -> Result<Vec<u32>> {
+    if count == 0 {
+        bail!("allocate_from_proto requires count >= 1");
+    }
+    let mut nums = Vec::with_capacity(count);
+    nums.push(proto);
+    for _ in 1..count {
+        nums.push(ooxml::duplicate_slide(build, proto)?);
+    }
+    Ok(nums)
+}
+
+fn resolve_study_path(p: &str) -> Result<PathBuf> {
+    let path = PathBuf::from(p);
+    if path.is_absolute() {
+        return Ok(path);
+    }
+    let root = paths::project_root()?;
+    Ok(root.join(path))
+}
+
+/// Mount Zion logo used on youth intro body slides (`ppt/media/image1.png`).
+fn youth_intro_logo_path() -> Result<PathBuf> {
+    let root = paths::project_root()?;
+    // Prefer extracted copy next to adult assets; fall back to unpacking youth template.
+    let cached = root.join("lamad-cli/template/adult/assets/mz-logo.png");
+    if cached.is_file() {
+        return Ok(cached);
+    }
+    let studies_copy = root.join("studies/adult/24/mz-logo.png");
+    if studies_copy.is_file() {
+        return Ok(studies_copy);
+    }
+    // Last resort: extract from youth master template into adult assets.
+    let youth_pptx = root.join("template/youth/master-template.pptx");
+    if !youth_pptx.is_file() {
+        bail!(
+            "youth logo not found (expected {} or {})",
+            cached.display(),
+            youth_pptx.display()
+        );
+    }
+    if let Some(parent) = cached.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    extract_media_from_pptx(&youth_pptx, "ppt/media/image1.png", &cached)?;
+    Ok(cached)
+}
+
+fn extract_media_from_pptx(pptx: &Path, inner: &str, dest: &Path) -> Result<()> {
+    use std::io::Read;
+    let file = std::fs::File::open(pptx).with_context(|| format!("open {}", pptx.display()))?;
+    let mut archive =
+        zip::ZipArchive::new(file).with_context(|| format!("zip {}", pptx.display()))?;
+    let mut entry = archive
+        .by_name(inner)
+        .with_context(|| format!("missing {inner} in {}", pptx.display()))?;
+    let mut buf = Vec::new();
+    entry
+        .read_to_end(&mut buf)
+        .with_context(|| format!("read {inner}"))?;
+    std::fs::write(dest, buf).with_context(|| format!("write {}", dest.display()))?;
+    Ok(())
+}
+
+/// Swap scenic art onto intro / tema / A-B title slides.
+///
+/// - Intro + 2.A-style A/B (slides 31/37/46/53): full-bleed behind chrome.
+/// - TEMA headers + inset 1.A/1.B (14/16/22/29/44): **keep template frame**
+///   (white top bar + photo below — do not stretch the photo over the title).
+fn apply_scenic_images(build: &Path, study: &AdultStudy) -> Result<()> {
+    let Some(scenic) = study.scenic_images.as_ref() else {
+        eprintln!("warning: no scenic_images — image slides keep template art (may be inset)");
+        return Ok(());
+    };
+    if scenic.tema.len() != study.temas.len() {
+        bail!(
+            "scenic_images.tema must have {} paths, got {}",
+            study.temas.len(),
+            scenic.tema.len()
+        );
+    }
+    let ab_needed = study.temas.len() * 2;
+    if scenic.ab.len() != ab_needed {
+        bail!(
+            "scenic_images.ab must have {ab_needed} paths (A+B per tema), got {}",
+            scenic.ab.len()
+        );
+    }
+
+    // Intro header — already nearly full-bleed in the template.
+    apply_scenic_image(
+        build,
+        INTRO_HEADER_SLIDE,
+        &resolve_study_path(&scenic.intro_header)?,
+        true,
+    )?;
+
+    // TEMA headers — keep top title bar; photo stays in the lower frame.
+    for (idx, path) in scenic.tema.iter().enumerate() {
+        apply_scenic_image(build, TEMA_LAYOUTS[idx].header, &resolve_study_path(path)?, false)?;
+    }
+
+    // A/B titles: 2.A-style slides are already full-bleed; 1.A/1.B keep inset frame.
+    let mut ab_i = 0usize;
+    for layout in &TEMA_LAYOUTS {
+        for &slide in &[layout.a_title, layout.b_title] {
+            let fullbleed = matches!(slide, 31 | 37 | 46 | 53);
+            apply_scenic_image(
+                build,
+                slide,
+                &resolve_study_path(&scenic.ab[ab_i])?,
+                fullbleed,
+            )?;
+            ab_i += 1;
+        }
     }
     Ok(())
 }
@@ -365,6 +623,20 @@ mod tests {
         let study: AdultStudy = serde_json::from_str(&text).expect("deserialize");
         assert_eq!(study.numero_string(), "24");
         assert_eq!(study.temas.len(), 3);
-        assert_eq!(study.lectura_antifonal.len(), 4);
+        assert!(!study.lectura_antifonal.is_empty());
+        let packs = lectura_antifonal_packs(&study);
+        // Denser adult budget still splits long Mateo 6:1-4 across slides.
+        assert!(
+            packs.len() >= study.lectura_antifonal.len(),
+            "expected at least one pack per passage, got {} packs from {} passages",
+            packs.len(),
+            study.lectura_antifonal.len()
+        );
+        let mateo = &packs[0];
+        assert!(
+            mateo.0.len() <= 3,
+            "Mateo first pack should not dump all long verses (overflow risk), got {}",
+            mateo.0.len()
+        );
     }
 }

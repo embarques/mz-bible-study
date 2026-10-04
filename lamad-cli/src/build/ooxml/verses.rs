@@ -6,9 +6,7 @@ use std::path::Path;
 use anyhow::{anyhow, bail, Context, Result};
 use regex::Regex;
 
-use super::shape::{
-    all_runs, clone_run, find_txbody, first_para_ppr, replace_range, transform_shape,
-};
+use super::shape::{find_txbody, first_para_ppr, replace_range, transform_shape};
 use super::xml;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,74 +22,6 @@ pub(crate) fn split_verse(v: &str) -> Result<(String, String)> {
         .captures(v.trim_start())
         .ok_or_else(|| anyhow!("verse must start with number: {:.60}", v))?;
     Ok((caps[1].to_string(), format!(" {}", &caps[2])))
-}
-
-struct VerseSamples {
-    cite: Option<String>,
-    num: Option<String>,
-    body: Option<String>,
-}
-
-/// Pick cite/number/body run samples by content, not fixed index —
-/// continuation Lectura/Texto slides start with a number run, so
-/// index-based picking would swap colors (port of `pick_verse_samples`).
-fn pick_verse_samples(runs: &[String]) -> VerseSamples {
-    let mut sample_num: Option<String> = None;
-    let mut sample_body: Option<String> = None;
-    let mut sample_cite: Option<String> = None;
-
-    for r in runs {
-        let text = xml::run_text(r);
-        let stripped = text.trim();
-        if stripped.is_empty() {
-            continue;
-        }
-        if !stripped.is_empty() && stripped.chars().all(|c| c.is_ascii_digit()) {
-            if sample_num.is_none() {
-                sample_num = Some(r.clone());
-            }
-            continue;
-        }
-        if sample_cite.is_none() && stripped.contains(':') && stripped.chars().count() < 40 {
-            sample_cite = Some(r.clone());
-            continue;
-        }
-        if sample_body.is_none() && (text.starts_with(' ') || stripped.chars().count() > 15) {
-            sample_body = Some(r.clone());
-        }
-    }
-
-    if sample_num.is_none() {
-        sample_num = runs
-            .iter()
-            .find(|r| {
-                let t = xml::run_text(r);
-                let s = t.trim();
-                !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())
-            })
-            .cloned()
-            .or_else(|| runs.first().cloned());
-    }
-    if sample_body.is_none() {
-        sample_body = runs
-            .iter()
-            .find(|r| {
-                let t = xml::run_text(r);
-                let s = t.trim();
-                !(!s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))
-            })
-            .cloned()
-            .or_else(|| runs.last().cloned());
-    }
-    if sample_cite.is_none() {
-        sample_cite = sample_num.clone();
-    }
-
-    VerseSamples {
-        cite: sample_cite,
-        num: sample_num,
-        body: sample_body,
-    }
 }
 
 /// Expand verse lines where multiple verses were glued into one string
@@ -179,6 +109,21 @@ fn format_citation_from_template(
     }
 }
 
+/// Youth-style verse run: minimal `rPr` so colour is never lost to polluted
+/// adult template samples (Verlag + ln/effectLst, or a lone `"1"` from
+/// `"1 Corintios"` mistaken as a verse number).
+fn clean_verse_run(text: &str, bold: bool, color: Option<&str>, sz: u32) -> String {
+    let bold_attr = if bold { r#" b="1""# } else { "" };
+    let fill = match color {
+        Some(rgb) => format!(r#"<a:solidFill><a:srgbClr val="{rgb}"/></a:solidFill>"#),
+        None => String::new(),
+    };
+    format!(
+        r#"<a:r><a:rPr lang="es-DO" sz="{sz}" dirty="0"{bold_attr}>{fill}</a:rPr>{}</a:r>"#,
+        xml::build_t(text)
+    )
+}
+
 /// Fill a Lectura/Texto Bíblico slide with whole verses (+ optional
 /// citation on the first slide of a range). One paragraph per citation /
 /// per verse — no soft `a:br` breaks (matches known-good decks).
@@ -197,24 +142,16 @@ fn set_verses_expanded(
         VerseKind::Lectura => "CuadroTexto 5",
         VerseKind::Texto => "TextBox 4",
     };
-    let accent = match kind {
-        VerseKind::Lectura => "FF0000",
-        VerseKind::Texto => "FFFF00",
-    };
-    let body_rgb: Option<&str> = match kind {
-        VerseKind::Lectura => None, // default black — leave inherited
-        VerseKind::Texto => Some("FFFFFF"),
+    // Match youth Lectura / Texto colour + weight exactly.
+    let (accent, body_rgb, sz): (&str, Option<&str>, u32) = match kind {
+        VerseKind::Lectura => ("FF0000", None, 4400), // red cite/num; body inherits black
+        VerseKind::Texto => ("FFFF00", Some("FFFFFF"), 4400), // yellow cite/num; white body
     };
 
     let xml = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let xml = transform_shape(&xml, shape_name, |shape_xml| {
         let (tb, tag) = find_txbody(shape_xml)?;
         let content = tb.inner(shape_xml, tag);
-        let runs = all_runs(content);
-        if runs.is_empty() {
-            bail!("no sample runs in shape {shape_name}");
-        }
-        let samples = pick_verse_samples(&runs);
 
         let p_start = xml::next_element(content, "a:p", 0)
             .map(|e| e.start)
@@ -225,16 +162,17 @@ fn set_verses_expanded(
         let mut body = String::new();
         if let Some(cite) = citation {
             let formatted = format_citation_from_template(shape_xml, cite, kind)?;
-            let r = clone_run(samples.cite.as_deref(), &formatted, Some(true), Some(Some(accent)), None)?;
-            body.push_str(&format!("<a:p>{ppr}{r}</a:p>"));
+            body.push_str(&format!(
+                "<a:p>{ppr}{}</a:p>",
+                clean_verse_run(&formatted, true, Some(accent), sz)
+            ));
         }
         for v in verses {
             let trimmed = v.trim();
             match split_verse(trimmed) {
                 Ok((num, verse_body)) => {
-                    let r_num = clone_run(samples.num.as_deref(), &num, Some(true), Some(Some(accent)), None)?;
-                    let color_opt = body_rgb.map(Some);
-                    let r_body = clone_run(samples.body.as_deref(), &verse_body, Some(false), color_opt, None)?;
+                    let r_num = clean_verse_run(&num, true, Some(accent), sz);
+                    let r_body = clean_verse_run(&verse_body, false, body_rgb, sz);
                     body.push_str(&format!("<a:p>{ppr}{r_num}{r_body}</a:p>"));
                 }
                 Err(_) => {
@@ -243,7 +181,7 @@ fn set_verses_expanded(
                     } else {
                         format!(" {trimmed}")
                     };
-                    let r_body = clone_run(samples.body.as_deref(), &body_text, Some(false), body_rgb.map(Some), None)?;
+                    let r_body = clean_verse_run(&body_text, false, body_rgb, sz);
                     body.push_str(&format!("<a:p>{ppr}{r_body}</a:p>"));
                 }
             }
@@ -252,7 +190,37 @@ fn set_verses_expanded(
         let new_content = format!("{head}{body}");
         let open_tag = tb.open_tag(shape_xml);
         let new_txbody = format!("{open_tag}{new_content}</{tag}>");
-        Ok(replace_range(shape_xml, tb.start, tb.end, &new_txbody))
+        let shape_xml = replace_range(shape_xml, tb.start, tb.end, &new_txbody);
+        Ok(force_verse_no_autofit(&shape_xml))
     })?;
     fs::write(path, xml).with_context(|| format!("write {}", path.display()))
+}
+
+fn force_verse_no_autofit(shape_xml: &str) -> String {
+    let re = Regex::new(r"<a:(?:spAutoFit|normAutofit)\s*/>").unwrap();
+    let replaced = re.replace_all(shape_xml, "<a:noAutofit/>");
+    if replaced.contains("<a:noAutofit") {
+        return replaced.into_owned();
+    }
+    // No autofit node yet — insert into bodyPr.
+    let Some(el) = xml::next_element(shape_xml, "a:bodyPr", 0) else {
+        return replaced.into_owned();
+    };
+    if el.self_closing {
+        let open = el.open_tag(shape_xml);
+        let attrs = open
+            .trim_start_matches("<a:bodyPr")
+            .trim_end_matches("/>")
+            .trim_end_matches('>');
+        let expanded = format!("<a:bodyPr{attrs}><a:noAutofit/></a:bodyPr>");
+        return replace_range(shape_xml, el.start, el.end, &expanded);
+    }
+    let inner = el.inner(shape_xml, "a:bodyPr");
+    let open = el.open_tag(shape_xml);
+    replace_range(
+        shape_xml,
+        el.start,
+        el.end,
+        &format!("{open}{inner}<a:noAutofit/></a:bodyPr>"),
+    )
 }

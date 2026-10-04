@@ -22,6 +22,15 @@ pub struct DatosGenerales {
 pub struct Definicion {
     pub termino: String,
     pub texto: String,
+    /// Optional verse/ref shown in the chevron, e.g. `(Mateo 6:1)` or `12:1`.
+    #[serde(default)]
+    pub referencia: Option<String>,
+    /// Optional left-icon motif hint for image generation (e.g. "clock", "mask").
+    #[serde(default)]
+    pub icono_izq: Option<String>,
+    /// Optional right-icon motif hint for image generation.
+    #[serde(default)]
+    pub icono_der: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +69,25 @@ pub struct AdultStudy {
     pub template: Option<String>,
     #[serde(default)]
     pub audience: Option<String>,
+    /// One composed PNG per tema for DEFINICIÓN Y ETIMOLOGÍA card slides
+    /// (paths relative to repo root unless absolute). Length must equal
+    /// `temas.len()` when present.
+    #[serde(default)]
+    pub definicion_images: Option<Vec<String>>,
+    /// Full-bleed scenic art for intro / tema / A-B title slides.
+    /// Multiple distinct designs per study (not one shared look).
+    #[serde(default)]
+    pub scenic_images: Option<AdultScenicImages>,
+}
+
+/// Paths for adult full-bleed image slides (16:9 cinematic PNGs, no baked text).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdultScenicImages {
+    pub intro_header: String,
+    /// One per tema (usually 3).
+    pub tema: Vec<String>,
+    /// Order: 1.A, 1.B, 2.A, 2.B, 3.A, 3.B (tema×A/B).
+    pub ab: Vec<String>,
 }
 
 impl AdultStudy {
