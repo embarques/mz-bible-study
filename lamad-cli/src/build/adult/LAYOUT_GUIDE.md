@@ -15,7 +15,7 @@ These are enforced in `lamad-cli` build + QC. Do not “match gold” when gold 
 |------|--------|
 | **No `()` on citations** | Image chrome (TEMA / A-B verse under gray line) and **Texto Bíblico** citation titles are plain: `MATEO 6:1-4` — never `(MATEO 6:1-4)`. Strip parens from JSON/`rango`/`cita` on fill. Inline body refs like `(Génesis 16:13)` stay bold with parens (body prose only). |
 | **Title = youth style** | No cyan `<a:highlight>` chip behind the study title (or próximo). Black Verlag title on white — strip all `a:highlight` on title/próximo fills. |
-| **Text too big → shrink** | If title/verse/diagram text overflows or collides, **decrease font** (TEMA/A-B titles: 18–32pt by length). Never leave title overlapping the verse under the gray line. |
+| **Text too big → shrink** | If title/verse/diagram text overflows or collides, **decrease font** (TEMA/A-B image titles: 18–32pt; A/B **body** headers `Título 1`: 22–36pt by length, top-anchored, no orphan `1.B -` before a break). Never leave title overlapping the verse under the gray line or climbing off the top of the slide. |
 | **Scenic image visible** | After cloning youth section chrome, **remove** the full-bleed black `!!Rectangle`. Normalize pic to one `<a:stretch><a:fillRect/></a:stretch>` full-bleed. QC fails if `!!Rectangle` remains or `<p:pic>` is missing. |
 | **Texto Áureo citation line** | Quote on its own paragraph; biblical citation (`1 Corintios 10:33`) on the **next line** (never same line as the end of the quote). No parentheses on that citation. Shrink long Pensamiento/Áureo body text so it fits the SmartArt boxes. |
 | **Texto verse box** | Clamp `TextBox 4` so verses sit below the “Texto Bíblico” header (`y ≥ 856357` EMU). Never overlap header. |

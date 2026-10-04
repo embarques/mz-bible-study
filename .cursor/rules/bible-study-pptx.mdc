@@ -36,7 +36,7 @@ Full guide: `lamad-cli/src/build/adult/LAYOUT_GUIDE.md`. Builder: `lamad-cli` ad
 
 - **No `()`** on Texto Bíblico citations or TEMA/A-B image verse lines (`MATEO 6:1-4`, not `(MATEO 6:1-4)`). Body inline refs may keep `(Libro …)`.
 - **Title/próximo:** strip `<a:highlight>` — no cyan chip behind the title (match youth).
-- **Text overflow:** if text is too big, **decrease the font** (long TEMA/A-B titles → 18–20pt). Title must never overlap the verse under the gray line.
+- **Text overflow:** if text is too big, **decrease the font** (long TEMA/A-B image titles → 18–20pt; A/B body headers → next smaller size, top-anchored). Title must never overlap the verse under the gray line or climb off the top of the slide.
 - **Image slides:** clone youth chrome at bottom-left; **remove** black `!!Rectangle`; force full-bleed `<a:stretch><a:fillRect/></a:stretch>`; scenic pic must be visible.
 - **Pensamiento / Texto Áureo:** correct SmartArt slots; citation on the **next line** under the quote; no `()`; shrink long diagram text.
 - **Texto box:** clamp verse box below “Texto Bíblico” header; no overlap.

@@ -11,8 +11,7 @@ use regex::Regex;
 
 use crate::build::ooxml::body::{set_content_body_teaching, strip_arc_shapes};
 use crate::build::ooxml::shape::{
-    replace_text_preserving_runs, replace_text_single_run, replace_text_with_leading_run,
-    set_simple_text_block, transform_shape,
+    replace_text_preserving_runs, replace_text_single_run, set_simple_text_block, transform_shape,
 };
 use crate::build::ooxml::title::set_adult_title_slide;
 use crate::paths;
@@ -60,12 +59,6 @@ fn fill_shape_single(path: &Path, shape: &str, text: &str) -> Result<()> {
 fn fill_shape_preserving(path: &Path, shape: &str, text: &str) -> Result<()> {
     let xml = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let xml = transform_shape(&xml, shape, |b| replace_text_preserving_runs(b, text))?;
-    fs::write(path, xml).with_context(|| format!("write {}", path.display()))
-}
-
-fn fill_shape_leading(path: &Path, shape: &str, leading: &str, rest: &str) -> Result<()> {
-    let xml = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let xml = transform_shape(&xml, shape, |b| replace_text_with_leading_run(b, leading, rest))?;
     fs::write(path, xml).with_context(|| format!("write {}", path.display()))
 }
 
@@ -426,13 +419,122 @@ pub fn remove_orphan_videos(build: &Path) -> Result<()> {
 }
 
 pub fn set_ab_body_slide(path: &Path, point_title: &str, body: &str) -> Result<()> {
-    if let Some((label, rest)) = point_title.split_once(" - ") {
-        fill_shape_leading(path, "Título 1", &format!("{label} - "), rest)?;
-    } else {
-        fill_shape_preserving(path, "Título 1", point_title)?;
-    }
+    set_ab_body_title(path, point_title)?;
     warn_if_over_budget(body);
     set_content_body_teaching(path, body, None)
+}
+
+/// A/B body header (`Título 1`). Gold uses `anchor="b"` + a soft `<a:br>` that
+/// our leading-run fill turned into a lone `1.B -` on line 1 and the full
+/// title on line 2 — bottom-anchored overflow then paints **above** the slide.
+/// Put the whole title in one flow, top-anchor, and shrink font until it fits.
+fn set_ab_body_title(path: &Path, title: &str) -> Result<()> {
+    let sz = ab_body_title_font_sz(title);
+    let xml = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let xml = transform_shape(&xml, "Título 1", |b| {
+        let mut s = set_simple_text_block(b, title, Some(true))?;
+        // Grow downward if anything wraps — never off the top of the slide.
+        s = s.replacen(r#"anchor="b""#, r#"anchor="t""#, 1);
+        s = force_all_run_sz(&s, sz);
+        Ok(s)
+    })?;
+    let xml = deepen_title_box_if_needed(&xml, "Título 1", title, sz)?;
+    fs::write(path, xml).with_context(|| format!("write {}", path.display()))?;
+    eprintln!(
+        "  ab-title {}: sz={} ({})",
+        path.file_name().and_then(|s| s.to_str()).unwrap_or("?"),
+        sz,
+        title.chars().count()
+    );
+    Ok(())
+}
+
+/// Hundredths of a point — step down when the header would overflow.
+fn ab_body_title_font_sz(title: &str) -> u32 {
+    let n = title.chars().count();
+    if n > 72 {
+        2200 // 22pt
+    } else if n > 58 {
+        2600
+    } else if n > 48 {
+        3000
+    } else if n > 36 {
+        3400
+    } else {
+        3600
+    }
+}
+
+fn force_all_run_sz(shape_xml: &str, sz: u32) -> String {
+    // Only visible text runs — never rewrite endParaRPr (self-closing form
+    // is easy to corrupt and breaks XML validation).
+    let re = Regex::new(r#"<a:rPr\b[^>]*/?>"#).unwrap();
+    re.replace_all(shape_xml, |caps: &regex::Captures| {
+        let tag = caps[0].to_string();
+        let self_close = tag.ends_with("/>");
+        let inner = tag
+            .trim_start_matches("<a:rPr")
+            .trim_end_matches("/>")
+            .trim_end_matches('>')
+            .to_string();
+        let attrs = if inner.contains("sz=\"") {
+            Regex::new(r#"sz="\d+""#)
+                .unwrap()
+                .replace_all(&inner, format!(r#"sz="{sz}""#).as_str())
+                .into_owned()
+        } else {
+            format!(r#"{inner} sz="{sz}""#)
+        };
+        if self_close {
+            format!("<a:rPr{attrs}/>")
+        } else {
+            format!("<a:rPr{attrs}>")
+        }
+    })
+    .into_owned()
+}
+
+/// Long two-line headers need a taller `Título 1` box so top-anchored text
+/// does not collide with the body.
+fn deepen_title_box_if_needed(
+    xml: &str,
+    shape: &str,
+    title: &str,
+    sz: u32,
+) -> Result<String> {
+    let n = title.chars().count();
+    // Rough: >48 chars or ≤28pt usually wraps to 2 lines on the wide header.
+    if n <= 48 && sz >= 3400 {
+        return Ok(xml.to_string());
+    }
+    let marker = format!(r#"name="{shape}""#);
+    let Some(name_pos) = xml.find(&marker) else {
+        return Ok(xml.to_string());
+    };
+    // Stay inside this shape: from name → closing </p:sp>.
+    let shape_end = xml[name_pos..]
+        .find("</p:sp>")
+        .map(|i| name_pos + i)
+        .unwrap_or(xml.len());
+    let shape_xml = &xml[name_pos..shape_end];
+    // Prefer the spPr xfrm ext (shape frame), not nested text xfrm.
+    let ext_re = Regex::new(r#"<a:ext cx="(\d+)" cy="(\d+)"\s*/>"#).unwrap();
+    let Some(caps) = ext_re.captures(shape_xml) else {
+        return Ok(xml.to_string());
+    };
+    let cx = &caps[1];
+    let cy: i64 = caps[2].parse().unwrap_or(679_677);
+    let new_cy = (cy + 280_000).min(1_100_000);
+    let old_ext = caps.get(0).unwrap().as_str();
+    let new_ext = format!(r#"<a:ext cx="{cx}" cy="{new_cy}"/>"#);
+    let abs_start = name_pos + caps.get(0).unwrap().start();
+    let abs_end = abs_start + old_ext.len();
+    Ok(format!(
+        "{}{}{}",
+        &xml[..abs_start],
+        new_ext,
+        &xml[abs_end..]
+    ))
 }
 
 pub fn set_definicion(path: &Path, text: &str) -> Result<()> {
