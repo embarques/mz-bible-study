@@ -1,9 +1,8 @@
 # Generated Bible study decks (PPTX/PDF) — NEVER commit these
+# Output dir is repo-root bible-studies/ only (not lamad-cli/bible-studies).
 bible-studies/**
 !bible-studies/.gitkeep
-lamad-cli/bible-studies/**
-!lamad-cli/bible-studies/.gitkeep
-# Also catch decks dropped at repo root by mistake
+# Also catch decks dropped at repo root / wrong CLI paths by mistake
 *-working-progress.pptx
 *-working-progress.pdf
 *.pptx
@@ -18,7 +17,9 @@ studies/**
 !studies/*/README.md
 
 # CLI / agent scratch (page rasters, previews, unzipped builds)
+# Always under repo-root generated/ — never commit; safe to delete locally.
 generated/
+lamad-cli/generated/
 
 # Legacy scratch paths (kept ignored if anything still lands here)
 tmp/
