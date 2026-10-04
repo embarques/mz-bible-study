@@ -99,7 +99,8 @@ impl AdultStudy {
         self.base_biblica.as_lines()
     }
 
-    pub fn texto_aureo_diagram_text(&self) -> String {
+    /// Quote body for the Texto Áureo SmartArt slot (no citation, no parens).
+    pub fn texto_aureo_quote(&self) -> String {
         let mut quote = self.texto_aureo.texto.trim().to_string();
         if !quote.starts_with('"') && !quote.starts_with('“') {
             quote = format!("“{quote}");
@@ -107,7 +108,19 @@ impl AdultStudy {
         if !quote.ends_with('"') && !quote.ends_with('”') {
             quote.push('”');
         }
-        format!("{quote} ({})", self.texto_aureo.cita)
+        quote
+    }
+
+    /// Citation for the Texto Áureo footer slot — never parentheses.
+    pub fn texto_aureo_cita_plain(&self) -> String {
+        self.texto_aureo
+            .cita
+            .trim()
+            .trim_start_matches('(')
+            .trim_end_matches(')')
+            .trim_end_matches('.')
+            .trim()
+            .to_string()
     }
 
     pub fn definiciones_text(&self, defs: &[Definicion]) -> String {

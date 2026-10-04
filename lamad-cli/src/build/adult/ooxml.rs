@@ -132,6 +132,10 @@ fn rewrite_as_youth_section_bottom(path: &Path, title: &str, verse: &str) -> Res
     // Leaving ns2/ns3/ns4 in an adult package gets remapped to a16/x3/x4 and
     // triggers PowerPoint "Repair" for some users — core p/a/r is enough.
     xml = strip_office_ext_cruft(&xml);
+    // Youth section slides ship a full-bleed black `!!Rectangle` under the
+    // photo. After we send the pic to back, that rect paints *over* the
+    // scenic image → solid black slide. Remove it.
+    xml = strip_named_shape(&xml, "!!Rectangle");
 
     // Same youth gaps; whole stack anchored above a 0.25" bottom margin.
     const SLIDE_H: i64 = 6_858_000;
@@ -161,11 +165,10 @@ fn rewrite_as_youth_section_bottom(path: &Path, title: &str, verse: &str) -> Res
         set_simple_text_block(b, verse, Some(true))
     })?;
 
-    if title.chars().count() > 48 {
-        xml = xml.replacen(r#"sz="3600""#, r#"sz="2800""#, 1);
-    } else if title.chars().count() > 32 {
-        xml = xml.replacen(r#"sz="3600""#, r#"sz="3200""#, 1);
-    }
+    // Long adult TEMA/A-B titles overflow the bottom-left panel and collide
+    // with the verse under the gray line — shrink until they fit.
+    let title_sz = title_font_sz_hundredths(title);
+    xml = replace_first_run_sz(&xml, "CuadroTexto 8", title_sz);
 
     fs::write(path, xml).with_context(|| format!("write {}", path.display()))?;
     // Youth slide8 ships empty `<a:stretch />` + srcRect. That is a schema
@@ -175,11 +178,63 @@ fn rewrite_as_youth_section_bottom(path: &Path, title: &str, verse: &str) -> Res
     force_pics_fullbleed(path)?;
     let tone = crate::build::apply_image_chrome_contrast(path)?;
     eprintln!(
-        "  contrast {}: {:?}",
+        "  contrast {}: {:?} title_sz={}",
         path.file_name().and_then(|s| s.to_str()).unwrap_or("?"),
-        tone
+        tone,
+        title_sz
     );
     Ok(())
+}
+
+/// Hundredths of a point for bottom-left image titles. Longer titles need
+/// smaller type so they stay above the gray line / verse.
+fn title_font_sz_hundredths(title: &str) -> u32 {
+    let n = title.chars().count();
+    if n > 70 {
+        1800 // 18pt
+    } else if n > 55 {
+        2000
+    } else if n > 42 {
+        2400
+    } else if n > 32 {
+        2800
+    } else {
+        3200
+    }
+}
+
+fn replace_first_run_sz(xml: &str, shape_name: &str, sz: u32) -> String {
+    let marker = format!(r#"name="{shape_name}""#);
+    let Some(pos) = xml.find(&marker) else {
+        return xml.to_string();
+    };
+    let after = &xml[pos..];
+    let Some(sz_rel) = after.find(r#"sz=""#) else {
+        return xml.to_string();
+    };
+    let abs = pos + sz_rel;
+    let rest = &xml[abs + 4..]; // after sz="
+    let Some(end_q) = rest.find('"') else {
+        return xml.to_string();
+    };
+    format!("{}{}{}", &xml[..abs + 4], sz, &rest[end_q..])
+}
+
+/// Remove the first `<p:sp>…</p:sp>` whose `cNvPr` name matches.
+fn strip_named_shape(xml: &str, name: &str) -> String {
+    let marker = format!(r#"name="{name}""#);
+    let Some(name_pos) = xml.find(&marker) else {
+        return xml.to_string();
+    };
+    let Some(sp_start) = xml[..name_pos].rfind("<p:sp") else {
+        return xml.to_string();
+    };
+    let after = &xml[sp_start..];
+    let Some(end_rel) = after.find("</p:sp>") else {
+        return xml.to_string();
+    };
+    let sp_end = sp_start + end_rel + "</p:sp>".len();
+    format!("{}{}", &xml[..sp_start], &xml[sp_end..])
 }
 
 /// Remove non-essential `a:extLst` / decorative markers and unused xmlns:ns*

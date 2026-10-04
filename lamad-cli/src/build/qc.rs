@@ -93,6 +93,20 @@ fn qc_image_chrome(slide: u32, xml: &str) -> Vec<QcIssue> {
             message: "image slide missing OrangeBar".into(),
         });
     }
+    if xml.contains(r#"name="!!Rectangle""#) {
+        issues.push(QcIssue {
+            slide,
+            hard: true,
+            message: "black !!Rectangle still covering scenic image".into(),
+        });
+    }
+    if !xml.contains("<p:pic") {
+        issues.push(QcIssue {
+            slide,
+            hard: true,
+            message: "image slide missing <p:pic> (scenic image absent)".into(),
+        });
+    }
     let title = shape_plain_text(xml, "CuadroTexto 8");
     let verse = shape_plain_text(xml, "CuadroTexto 3");
     if title.trim().is_empty() {
@@ -101,6 +115,27 @@ fn qc_image_chrome(slide: u32, xml: &str) -> Vec<QcIssue> {
             hard: true,
             message: "image slide title (CuadroTexto 8) empty".into(),
         });
+    } else if title.chars().count() > 55 {
+        // Soft: long titles must be ≤20pt (sz 2000) or they collide with verse.
+        if let Some(block) = shape_block(xml, "CuadroTexto 8") {
+            if let Some(caps) = Regex::new(r#"sz="(\d+)""#)
+                .unwrap()
+                .captures(&block)
+            {
+                let sz: u32 = caps[1].parse().unwrap_or(0);
+                let max = if title.chars().count() > 70 { 1800 } else { 2000 };
+                if sz > max {
+                    issues.push(QcIssue {
+                        slide,
+                        hard: true,
+                        message: format!(
+                            "title too large for length (sz={sz}, need ≤{max}): {}…",
+                            title.chars().take(40).collect::<String>()
+                        ),
+                    });
+                }
+            }
+        }
     }
     if verse.trim().is_empty() {
         issues.push(QcIssue {

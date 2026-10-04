@@ -218,14 +218,12 @@ pub fn apply_adult_study(build: &Path, study: &AdultStudy) -> Result<Vec<u32>> {
         None,
     )?;
 
-    ooxml::replace_diagram_texts(
+    super::diagrams::set_pensamiento_aureo(
         &diagrams.join("data2.xml"),
-        Some(&diagrams.join("drawing2.xml")),
-        &[
-            study.pensamiento_central.clone(),
-            study.texto_aureo_diagram_text(),
-        ],
-        None,
+        &diagrams.join("drawing2.xml"),
+        study.pensamiento_central.trim(),
+        &study.texto_aureo_quote(),
+        &study.texto_aureo_cita_plain(),
     )?;
 
     set_ensenanza_datos(

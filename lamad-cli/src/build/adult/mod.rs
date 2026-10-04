@@ -5,6 +5,7 @@
 //! `master-template.pptx` is the OOXML prototype; guard rails and
 //! full-bleed image rules follow the layout guide.
 
+mod diagrams;
 mod ooxml;
 pub mod study;
 
