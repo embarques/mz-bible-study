@@ -1,6 +1,6 @@
 # AGENTS.md — Mount Zion Church Bible Study PowerPoint
 
-Agent playbook for building Spanish Bible study decks from scans. Match [`template/youth/master-template.pptx`](template/youth/master-template.pptx) (default `--audience youth`) and recent decks in [`bible-studies/`](bible-studies/). Adult uses a separate builder/template (`--audience adult`) — not implemented yet.
+Agent playbook for building Spanish Bible study decks from scans. Match [`template/youth/master-template.pptx`](template/youth/master-template.pptx) (default `--audience youth`) and recent decks in [`bible-studies/`](bible-studies/). Adult uses the Rust builder (`--audience adult`) and [`lamad-cli/src/build/adult/LAYOUT_GUIDE.md`](../src/build/adult/LAYOUT_GUIDE.md) — follow that guide’s **HARD rules** (no citation parentheses on Texto/image chrome, no title highlight, shrink oversized text, scenic image visible, Texto Áureo citation on its own line).
 
 User-facing summary: [`README.md`](README.md). Template index: [`template/README.md`](template/README.md).
 

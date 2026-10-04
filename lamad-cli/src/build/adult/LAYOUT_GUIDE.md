@@ -7,6 +7,23 @@ Images may use a **new house style** (AI-generated, cinematic, full-bleed). Typo
 
 ---
 
+## HARD rules (every adult deck — never regress)
+
+These are enforced in `lamad-cli` build + QC. Do not “match gold” when gold violates them.
+
+| Rule | Detail |
+|------|--------|
+| **No `()` on citations** | Image chrome (TEMA / A-B verse under gray line) and **Texto Bíblico** citation titles are plain: `MATEO 6:1-4` — never `(MATEO 6:1-4)`. Strip parens from JSON/`rango`/`cita` on fill. Inline body refs like `(Génesis 16:13)` stay bold with parens (body prose only). |
+| **Title = youth style** | No cyan `<a:highlight>` chip behind the study title (or próximo). Black Verlag title on white — strip all `a:highlight` on title/próximo fills. |
+| **Text too big → shrink** | If title/verse/diagram text overflows or collides, **decrease font** (TEMA/A-B titles: 18–32pt by length). Never leave title overlapping the verse under the gray line. |
+| **Scenic image visible** | After cloning youth section chrome, **remove** the full-bleed black `!!Rectangle`. Normalize pic to one `<a:stretch><a:fillRect/></a:stretch>` full-bleed. QC fails if `!!Rectangle` remains or `<p:pic>` is missing. |
+| **Texto Áureo citation line** | Quote on its own paragraph; biblical citation (`1 Corintios 10:33`) on the **next line** (never same line as the end of the quote). No parentheses on that citation. Shrink long Pensamiento/Áureo body text so it fits the SmartArt boxes. |
+| **Texto verse box** | Clamp `TextBox 4` so verses sit below the “Texto Bíblico” header (`y ≥ 856357` EMU). Never overlap header. |
+| **Package / Repair** | Empty `<a:stretch />`, wrong notes rels, or stale `app.xml` `<Slides>` after duplication → PowerPoint Repair. Validate + open clean before delivery. |
+| **Output path** | Generated decks → repo-root `bible-studies/` only (never `lamad-cli/bible-studies/`). |
+
+---
+
 ## Global rules
 
 ### 1. Full-bleed images
@@ -75,6 +92,7 @@ Match the reference deck’s paragraph breaks:
 
 - Study number badge, `ESCUELA BIBLICA`, church logo, centred title, `Base Bíblica:` label + citations in black rounded pill.
 - `Base Bíblica:` **space after colon**; citations separated with `; ` on one line.
+- **No highlight background** on the main title (match youth). Strip `<a:highlight>`.
 
 ### Lectura antifonal
 
@@ -88,6 +106,7 @@ Match the reference deck’s paragraph breaks:
 
 - SmartArt / composite slides — keep template diagram layout; replace text only.
 - Objetivos: three cascading blue boxes on dark blue background.
+- **Pensamiento / Texto Áureo:** fill the three slots correctly (pensamiento, quote, cita) — do **not** use blind “longest N texts” replacement. Citation on its **own line** under the quote; no `()`; shrink body runs if long.
 
 ### Introducción
 
@@ -151,9 +170,9 @@ Study 02 tema II has **three** points (A.2, B.2, C.2); tema I and III have two. 
 - Leave **~20–25%** empty margin at the bottom. If verses exceed the budget, **duplicate** the texto prototype and continue (do not dump overflow onto one slide).
 - `set_verses` forces `noAutofit` on the verse box — `spAutoFit` can collapse text until the slide looks blank.
 - Black full-slide background.
-- Citation in yellow parens on first slide of range: `(JOSUÉ 3:14-16)` when template uses parens.
+- **Citation: NO parentheses** — `JOSUÉ 3:14-16` / `1 CORINTIOS 10:32,33` (never `(…)`). Adult gold may ship parens; strip them on fill.
 - Verse numbers yellow bold; body white.
-- **Must be visibly readable** — if verses are missing on screen, the slide is broken (check `TextBox 4`, colours, `noAutofit`).
+- **Must be visibly readable** — if verses are missing on screen, the slide is broken (check `TextBox 4`, colours, `noAutofit`, Y below header).
 
 ---
 

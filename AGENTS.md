@@ -1,6 +1,6 @@
 # AGENTS.md — Mount Zion Church Bible Study PowerPoint
 
-Agent playbook for building Spanish Bible study decks from scans. Match [`template/youth/master-template.pptx`](template/youth/master-template.pptx) (default `--audience youth`) and recent decks in [`bible-studies/`](bible-studies/). Adult uses a separate builder/template (`--audience adult`) — not implemented yet.
+Agent playbook for building Spanish Bible study decks from scans. Match [`template/youth/master-template.pptx`](template/youth/master-template.pptx) (default `--audience youth`) and recent decks in [`bible-studies/`](bible-studies/). Adult uses the Rust builder (`--audience adult`) and [`lamad-cli/src/build/adult/LAYOUT_GUIDE.md`](lamad-cli/src/build/adult/LAYOUT_GUIDE.md) — follow that guide’s **HARD rules** (no citation parentheses on Texto/image chrome, no title highlight, shrink oversized text, scenic image visible, Texto Áureo citation on its own line).
 
 User-facing summary: [`README.md`](README.md). Template index: [`template/README.md`](template/README.md).
 
@@ -67,7 +67,7 @@ Output:
 | File | Role |
 |------|------|
 | [`template/youth/master-template.pptx`](template/youth/master-template.pptx) | **Youth gold standard** — clone slide XML from here (`--audience youth`, default) |
-| [`template/adult/master-template.pptx`](template/adult/master-template.pptx) | Adult gold standard (when ready; `--audience adult`) |
+| [`template/adult/master-template.pptx`](template/adult/master-template.pptx) / `lamad-cli/template/adult/` | Adult gold — build with `lamad build … --audience adult`. Layout HARD rules: [`lamad-cli/src/build/adult/LAYOUT_GUIDE.md`](lamad-cli/src/build/adult/LAYOUT_GUIDE.md) |
 
 **Never overwrite** `template/`. Scratch: `_agent-reference.pptx` or `/tmp` / `generated/`. Generated decks go in **`bible-studies/`**.
 

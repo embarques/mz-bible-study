@@ -54,7 +54,9 @@ scans/**
 !scans/error/.gitkeep
 
 # IDE & local settings
-.cursor/
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
 .vscode/
 .idea/
 

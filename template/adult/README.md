@@ -1,12 +1,14 @@
-# Adult template (placeholder)
+# Adult template
 
-Drop `master-template.pptx` here when the adult deck is ready.
-
-Until then:
+Place `master-template.pptx` here (or under `lamad-cli/template/adult/`) for adult builds.
 
 ```bash
-mzbs build studies/22.json -o "…" --audience adult
-# → clear error: Adult report builder is not implemented yet
+lamad build studies/adult/24.json \
+  -o "bible-studies/24 - TITLE.pptx" \
+  --audience adult --export-pdf
 ```
 
-Youth continues to work with `--audience youth` (default) and `template/youth/master-template.pptx`.
+**Layout HARD rules** (citations, title chrome, image slides, Texto Áureo):  
+[`lamad-cli/src/build/adult/LAYOUT_GUIDE.md`](../../lamad-cli/src/build/adult/LAYOUT_GUIDE.md)
+
+Youth continues with `--audience youth` (default) and `template/youth/master-template.pptx`.
