@@ -14,8 +14,14 @@ pub fn set_title_slide(path: &Path, numero: &str, titulo: &str, base: &[String])
 }
 
 /// Adult title / próximo slides use `CuadroTexto 1` for the study title.
+/// Adult gold sometimes paints a cyan `<a:highlight>` behind part of the
+/// title (e.g. "LA MODESTIA") — strip that so the title matches youth
+/// (plain black type on white, no background chip).
 pub fn set_adult_title_slide(path: &Path, numero: &str, titulo: &str, base: &[String]) -> Result<()> {
-  fill_title_slide(path, numero, titulo, base, "CuadroTexto 1")
+    fill_title_slide(path, numero, titulo, base, "CuadroTexto 1")?;
+    let xml = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let xml = strip_text_highlights(&xml);
+    fs::write(path, xml).with_context(|| format!("write {}", path.display()))
 }
 
 fn fill_title_slide(
@@ -28,9 +34,21 @@ fn fill_title_slide(
     let xml = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let xml = transform_shape(&xml, "TextBox 4", |b| set_simple_text_block(b, numero, Some(true)))?;
     // Verlag Black title — never force bold=true; leave template weight as-is.
-    let xml = transform_shape(&xml, title_shape, |b| set_simple_text_block(b, titulo, Some(false)))?;
+    // Also drop highlight from the shape before cloning runs so a highlighted
+    // second line in the gold adult title cannot leak into the new run.
+    let xml = transform_shape(&xml, title_shape, |b| {
+        let clean = strip_text_highlights(b);
+        set_simple_text_block(&clean, titulo, Some(false))
+    })?;
     let xml = transform_shape(&xml, "TextBox 7", |b| set_base_biblica_block(b, base))?;
     fs::write(path, xml).with_context(|| format!("write {}", path.display()))
+}
+
+/// Remove PowerPoint text-highlight chips (`<a:highlight>…</a:highlight>`).
+fn strip_text_highlights(xml: &str) -> String {
+    let re = regex::Regex::new(r"<a:highlight\b[^>]*>[\s\S]*?</a:highlight>|<a:highlight\b[^/]*/>")
+        .expect("highlight regex");
+    re.replace_all(xml, "").into_owned()
 }
 
 fn set_base_biblica_block(shape_xml: &str, base: &[String]) -> Result<String> {
