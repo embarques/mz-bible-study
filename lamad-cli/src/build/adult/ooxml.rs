@@ -9,12 +9,14 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use regex::Regex;
 
-use crate::build::ooxml::body::set_content_body_teaching;
+use crate::build::ooxml::body::{set_content_body_teaching, strip_arc_shapes};
 use crate::build::ooxml::shape::{
-    format_ref_citation_from_template, replace_text_preserving_runs, replace_text_single_run,
-    replace_text_with_leading_run, transform_shape,
+    replace_text_preserving_runs, replace_text_single_run, replace_text_with_leading_run,
+    set_simple_text_block, transform_shape,
 };
 use crate::build::ooxml::title::set_adult_title_slide;
+use crate::paths;
+use crate::Audience;
 
 /// Soft cap per body paragraph on adult `Marcador de contenido 2` shapes.
 /// See `LAYOUT_GUIDE.md` — navy footer bar is ~bottom 8–10% of slide;
@@ -80,16 +82,169 @@ pub fn set_ensenanza_datos(
     Ok(())
 }
 
+/// TEMA image header — same chrome as youth section slides (orange bar,
+/// title, gray line, verse), anchored at the **bottom-left** so longer
+/// adult titles have room without covering the scene.
 pub fn set_tema_header_image(path: &Path, tema_label: &str, titulo: &str, rango: &str) -> Result<()> {
-    fill_shape_single(path, "CuadroTexto 3", &format!("{tema_label}  {titulo}"))?;
-    let cite = rango.trim();
-    let cite = if cite.starts_with('(') {
-        cite.to_string()
-    } else {
-        format!("({cite})")
-    };
-    fill_shape_single(path, "CuadroTexto 5", &cite)?;
+    let title = format!("{tema_label}- {titulo}");
+    // Adult image + Texto Bíblico citations never use parentheses.
+    let cite = strip_citation_parens(rango);
+    rewrite_as_youth_section_bottom(path, &title, &cite)
+}
+
+/// A/B title image slide — youth section chrome at bottom-left.
+pub fn set_ab_title_header(
+    path: &Path,
+    point_label: &str,
+    titulo: &str,
+    cita: &str,
+    _reference: AbRefShape,
+) -> Result<()> {
+    let title = format!("{point_label}- {titulo}");
+    let cite = strip_citation_parens(cita);
+    rewrite_as_youth_section_bottom(path, &title, &cite)
+}
+
+/// `MATEO 6:1-4` — never `(MATEO 6:1-4)` on image / Texto Bíblico chrome.
+fn strip_citation_parens(cita: &str) -> String {
+    cita.trim()
+        .trim_start_matches('(')
+        .trim_end_matches(')')
+        .trim()
+        .to_string()
+}
+
+/// Adult image slide = **exact youth section slide** (master slide 8), with
+/// chrome shifted to the bottom for longer titles. Do not invent OOXML —
+/// only: clone youth XML → strip Arc → move Y → swap text → keep image rid.
+/// Scenic media was already written into that rid by `apply_scenic_image`.
+fn rewrite_as_youth_section_bottom(path: &Path, title: &str, verse: &str) -> Result<()> {
+    let current = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let embed = Regex::new(r#"r:embed="(rId\d+)""#)
+        .unwrap()
+        .captures(&current)
+        .map(|c| c[1].to_string())
+        .context("image slide has no r:embed to keep for youth-style rewrite")?;
+
+    let mut xml = load_youth_section_slide_xml()?;
+    xml = strip_arc_shapes(&xml);
+    // Drop Office 2014+ ext chrome (creationId / decorative / designElem).
+    // Leaving ns2/ns3/ns4 in an adult package gets remapped to a16/x3/x4 and
+    // triggers PowerPoint "Repair" for some users — core p/a/r is enough.
+    xml = strip_office_ext_cruft(&xml);
+
+    // Same youth gaps; whole stack anchored above a 0.25" bottom margin.
+    const SLIDE_H: i64 = 6_858_000;
+    const MARGIN_BOTTOM: i64 = 228_600;
+    const ORANGE_Y0: i64 = 402_336;
+    const TITLE_Y0: i64 = 640_080;
+    const GRAY_Y0: i64 = 2_862_072;
+    const VERSE_Y0: i64 = 3_026_664;
+    const VERSE_H: i64 = 1_463_040;
+    let dy = SLIDE_H - MARGIN_BOTTOM - ((VERSE_Y0 - ORANGE_Y0) + VERSE_H) - ORANGE_Y0;
+
+    xml = shift_shape_y(&xml, "OrangeBar", ORANGE_Y0 + dy)?;
+    xml = shift_shape_y(&xml, "CuadroTexto 8", TITLE_Y0 + dy)?;
+    xml = shift_shape_y(&xml, "GrayLine", GRAY_Y0 + dy)?;
+    xml = shift_shape_y(&xml, "CuadroTexto 3", VERSE_Y0 + dy)?;
+
+    // Point at this slide's media rid only — leave pic geometry/stretch alone.
+    let blip_re = Regex::new(r#"r:embed="rId\d+""#).unwrap();
+    xml = blip_re
+        .replace(&xml, format!(r#"r:embed="{embed}""#).as_str())
+        .into_owned();
+
+    xml = transform_shape(&xml, "CuadroTexto 8", |b| {
+        set_simple_text_block(b, title, Some(true))
+    })?;
+    xml = transform_shape(&xml, "CuadroTexto 3", |b| {
+        set_simple_text_block(b, verse, Some(true))
+    })?;
+
+    if title.chars().count() > 48 {
+        xml = xml.replacen(r#"sz="3600""#, r#"sz="2800""#, 1);
+    } else if title.chars().count() > 32 {
+        xml = xml.replacen(r#"sz="3600""#, r#"sz="3200""#, 1);
+    }
+
+    fs::write(path, xml).with_context(|| format!("write {}", path.display()))?;
+    // Youth slide8 ships empty `<a:stretch />` + srcRect. That is a schema
+    // problem for PowerPoint on this adult package: Repair → "couldn't read
+    // some content … removed it". Normalize to one `<a:stretch><a:fillRect/>`
+    // full-bleed pic (same as apply_scenic_image), then colour chrome only.
+    force_pics_fullbleed(path)?;
+    let tone = crate::build::apply_image_chrome_contrast(path)?;
+    eprintln!(
+        "  contrast {}: {:?}",
+        path.file_name().and_then(|s| s.to_str()).unwrap_or("?"),
+        tone
+    );
     Ok(())
+}
+
+/// Remove non-essential `a:extLst` / decorative markers and unused xmlns:ns*
+/// declarations from a cloned youth section slide.
+fn strip_office_ext_cruft(xml: &str) -> String {
+    let mut s = xml.to_string();
+    // Whole extLst blocks (creationId, decorative, designElem live here).
+    let ext_re = Regex::new(r#"<a:extLst>[\s\S]*?</a:extLst>"#).unwrap();
+    s = ext_re.replace_all(&s, "").into_owned();
+    let p_ext_re = Regex::new(r#"<p:extLst>[\s\S]*?</p:extLst>"#).unwrap();
+    s = p_ext_re.replace_all(&s, "").into_owned();
+    // Unused youth-only namespace decls.
+    for decl in [
+        r#" xmlns:ns2="http://schemas.microsoft.com/office/drawing/2014/main""#,
+        r#" xmlns:ns3="http://schemas.microsoft.com/office/drawing/2017/decorative""#,
+        r#" xmlns:ns4="http://schemas.microsoft.com/office/powerpoint/2015/main""#,
+        r#" xmlns:a16="http://schemas.microsoft.com/office/drawing/2014/main""#,
+        r#" xmlns:x3="http://schemas.microsoft.com/office/drawing/2017/decorative""#,
+        r#" xmlns:x4="http://schemas.microsoft.com/office/powerpoint/2015/main""#,
+    ] {
+        s = s.replace(decl, "");
+    }
+    s
+}
+
+fn load_youth_section_slide_xml() -> Result<String> {
+    let pptx = paths::master_template(Audience::Youth)?;
+    let file = fs::File::open(&pptx).with_context(|| format!("open {}", pptx.display()))?;
+    let mut zip = zip::ZipArchive::new(file).with_context(|| format!("zip {}", pptx.display()))?;
+    // Youth section prototypes are slides 8 / 12 / 16 — identical chrome.
+    let mut entry = zip
+        .by_name("ppt/slides/slide8.xml")
+        .context("youth master-template missing ppt/slides/slide8.xml")?;
+    let mut buf = String::new();
+    use std::io::Read;
+    entry
+        .read_to_string(&mut buf)
+        .context("read youth section slide8.xml")?;
+    Ok(buf)
+}
+
+/// Set the first `<a:off … y="…"/>` after a shape's `name="…"`.
+fn shift_shape_y(xml: &str, name: &str, new_y: i64) -> Result<String> {
+    let marker = format!(r#"name="{name}""#);
+    let Some(name_pos) = xml.find(&marker) else {
+        bail!("shape {name} not found while shifting youth chrome");
+    };
+    let after = &xml[name_pos..];
+    let Some(off_rel) = after.find("<a:off ") else {
+        bail!("shape {name} has no <a:off>");
+    };
+    let off_start = name_pos + off_rel;
+    let rest = &xml[off_start..];
+    let Some(end_rel) = rest.find("/>") else {
+        bail!("shape {name} <a:off> not self-closing");
+    };
+    let off_end = off_start + end_rel + 2;
+    let off_tag = &xml[off_start..off_end];
+    let x_re = Regex::new(r#"x="(\d+)""#).unwrap();
+    let x = x_re
+        .captures(off_tag)
+        .map(|c| c[1].to_string())
+        .context("shape off missing x")?;
+    let new_off = format!(r#"<a:off x="{x}" y="{new_y}"/>"#);
+    Ok(format!("{}{}{}", &xml[..off_start], new_off, &xml[off_end..]))
 }
 
 /// Replace a video-poster tema header (template slides 29 / 44) with the
@@ -213,25 +368,6 @@ pub fn remove_orphan_videos(build: &Path) -> Result<()> {
         }
     }
     Ok(())
-}
-
-pub fn set_ab_title_header(
-    path: &Path,
-    point_label: &str,
-    titulo: &str,
-    cita: &str,
-    reference: AbRefShape,
-) -> Result<()> {
-    // One clean string in a single run — no mid-word splits.
-    fill_shape_single(path, "Título 1", &format!("{point_label}  {titulo}"))?;
-
-    let xml = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let ref_shape = reference.name();
-    let xml = transform_shape(&xml, ref_shape, |b| {
-        let cite = format_ref_citation_from_template(b, cita)?;
-        replace_text_single_run(b, &cite)
-    })?;
-    fs::write(path, xml).with_context(|| format!("write {}", path.display()))
 }
 
 pub fn set_ab_body_slide(path: &Path, point_title: &str, body: &str) -> Result<()> {
@@ -470,6 +606,44 @@ pub fn ensure_intro_body_logo(build: &Path, slide_num: u32, logo_png: &Path) -> 
     Ok(())
 }
 
+/// Give a `<p:pic>` exactly one `<a:stretch><a:fillRect/></a:stretch>` fill
+/// mode, returning `None` when nothing had to change.
+///
+/// `CT_BlipFillProperties` is `a:blip? a:srcRect? (a:tile | a:stretch)?`, so a
+/// second `<a:stretch>` sibling is a schema violation. PowerPoint rejects the
+/// whole slide with "found a problem with content … Repair", and after
+/// repairing it reports that content was removed. The template ships the
+/// self-closing `<a:stretch/>` form, which a naive `contains("<a:stretch>")`
+/// guard misses.
+fn ensure_single_stretch(pic: &str) -> Option<String> {
+    const STRETCH: &str = "<a:stretch><a:fillRect/></a:stretch>";
+    let empty_re = Regex::new(r#"<a:stretch\s*/>"#).unwrap();
+    let any_re = Regex::new(r#"<a:stretch[\s/>]"#).unwrap();
+
+    // Collapse any duplicates the old code may have produced, then rewrite the
+    // self-closing form into the explicit fillRect form.
+    if any_re.is_match(pic) {
+        let mut out = pic.to_string();
+        if empty_re.is_match(&out) {
+            // Drop every empty stretch; a full one is re-inserted below when
+            // no explicit `<a:stretch>…</a:stretch>` survives.
+            out = empty_re.replace_all(&out, "").into_owned();
+        }
+        if !out.contains("<a:stretch>") {
+            out = insert_stretch(&out, STRETCH)?;
+        }
+        return if out == pic { None } else { Some(out) };
+    }
+
+    insert_stretch(pic, STRETCH)
+}
+
+/// Insert `stretch` as the last child of the pic's `<p:blipFill>`.
+fn insert_stretch(pic: &str, stretch: &str) -> Option<String> {
+    let close = pic.find("</p:blipFill>")?;
+    Some(format!("{}{}{}", &pic[..close], stretch, &pic[close..]))
+}
+
 /// Force every `<p:pic>` on the slide to true full-bleed (edge-to-edge
 /// 16:9) and strip `srcRect` crops. Matches the adult 2.A layout the user
 /// approved — image fills the whole slide; text chrome sits on top.
@@ -500,9 +674,11 @@ pub fn force_pics_fullbleed(slide_path: &Path) -> Result<()> {
                 changed = true;
             }
         }
-        // Ensure stretch fillRect exists.
-        if !pic.contains("<a:stretch>") {
-            pic = pic.replace("</a:blip>", "</a:blip><a:stretch><a:fillRect/></a:stretch>");
+        // Ensure stretch fillRect exists. `CT_BlipFillProperties` permits at
+        // most one fill-mode child, so an existing `<a:stretch/>` must be
+        // rewritten in place instead of having a second one appended.
+        if let Some(normalized) = ensure_single_stretch(&pic) {
+            pic = normalized;
             changed = true;
         }
         out.push_str(&pic);
@@ -675,5 +851,49 @@ fn warn_if_over_budget(text: &str) {
                 ADULT_BODY_PARA_BUDGET
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_single_stretch;
+
+    const FULL: &str = "<a:stretch><a:fillRect/></a:stretch>";
+
+    #[test]
+    fn rewrites_self_closing_stretch_instead_of_adding_a_second() {
+        let pic = concat!(
+            r#"<p:pic><p:blipFill><a:blip r:embed="rId3"></a:blip>"#,
+            "<a:stretch/></p:blipFill><p:spPr/></p:pic>"
+        );
+        let out = ensure_single_stretch(pic).expect("should rewrite");
+        assert_eq!(out.matches("<a:stretch").count(), 1);
+        assert!(out.contains(FULL));
+    }
+
+    #[test]
+    fn inserts_stretch_when_blip_fill_has_none() {
+        let pic = r#"<p:pic><p:blipFill><a:blip r:embed="rId3"/></p:blipFill></p:pic>"#;
+        let out = ensure_single_stretch(pic).expect("should insert");
+        assert_eq!(out.matches("<a:stretch").count(), 1);
+        assert!(out.contains(FULL));
+    }
+
+    #[test]
+    fn leaves_an_already_correct_stretch_alone() {
+        let pic = format!(
+            r#"<p:pic><p:blipFill><a:blip r:embed="rId3"/>{FULL}</p:blipFill></p:pic>"#
+        );
+        assert!(ensure_single_stretch(&pic).is_none());
+    }
+
+    #[test]
+    fn collapses_a_duplicated_stretch_pair() {
+        let pic = format!(
+            r#"<p:pic><p:blipFill><a:blip r:embed="rId3"/>{FULL}<a:stretch/></p:blipFill></p:pic>"#
+        );
+        let out = ensure_single_stretch(&pic).expect("should collapse");
+        assert_eq!(out.matches("<a:stretch").count(), 1);
+        assert!(out.contains(FULL));
     }
 }

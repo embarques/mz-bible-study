@@ -25,11 +25,11 @@ const LECTURA_PROTOS: [u32; 4] = [2, 3, 4, 5];
 /// First non-lectura slide after the template lectura block.
 const AFTER_LECTURA: u32 = 6;
 const INTRO_HEADER_SLIDE: u32 = 9;
-/// Adult Lectura Antifonal packs denser than youth: template uses ~36pt
-/// Times New Roman in a taller white panel. Youth `VERSE_BUDGET` (280) at
-/// 44pt is too conservative here and orphans short verses. Stay under the
-/// overflow that gold hit when dumping Mateo 6:1–4 on one slide (~547 chars).
-const ADULT_LECTURA_BUDGET: usize = 400;
+/// Lectura Antifonal pack budget — **same as youth** (`VERSE_BUDGET` = 280).
+/// Whole verses only; if the next verse would overflow the panel, start a
+/// new slide. Do not raise this — 400 dumped Mateo 6:1–4 onto one slide and
+/// clipped mid-line at the bottom (HARD: never overflow).
+const ADULT_LECTURA_BUDGET: usize = VERSE_BUDGET;
 
 struct TemaLayout {
     header: u32,
@@ -280,6 +280,15 @@ pub fn apply_adult_study(build: &Path, study: &AdultStudy) -> Result<Vec<u32>> {
         &prox_base,
     )?;
     order.push(ADULT_SLIDE_COUNT);
+
+    // Image-chrome slides (TEMA headers + A/B titles) for QC.
+    let mut image_slides = Vec::new();
+    for layout in &TEMA_LAYOUTS {
+        image_slides.push(layout.header);
+        image_slides.push(layout.a_title);
+        image_slides.push(layout.b_title);
+    }
+    crate::build::qc_deck(build, &order, &image_slides)?;
 
     println!("Filled adult deck with {} slides", order.len());
     Ok(order)
@@ -551,9 +560,10 @@ fn extract_media_from_pptx(pptx: &Path, inner: &str, dest: &Path) -> Result<()> 
 
 /// Swap scenic art onto intro / tema / A-B title slides.
 ///
-/// - Intro + 2.A-style A/B (slides 31/37/46/53): full-bleed behind chrome.
-/// - TEMA headers + inset 1.A/1.B (14/16/22/29/44): **keep template frame**
-///   (white top bar + photo below — do not stretch the photo over the title).
+/// All image slides are **full-bleed**. TEMA / A-B chrome is rewritten later
+/// to the youth section layout (orange bar + title + gray line + verse)
+/// anchored at the bottom-left — see `set_tema_header_image` /
+/// `set_ab_title_header`.
 fn apply_scenic_images(build: &Path, study: &AdultStudy) -> Result<()> {
     let Some(scenic) = study.scenic_images.as_ref() else {
         eprintln!("warning: no scenic_images — image slides keep template art (may be inset)");
@@ -574,7 +584,6 @@ fn apply_scenic_images(build: &Path, study: &AdultStudy) -> Result<()> {
         );
     }
 
-    // Intro header — already nearly full-bleed in the template.
     apply_scenic_image(
         build,
         INTRO_HEADER_SLIDE,
@@ -582,21 +591,18 @@ fn apply_scenic_images(build: &Path, study: &AdultStudy) -> Result<()> {
         true,
     )?;
 
-    // TEMA headers — keep top title bar; photo stays in the lower frame.
     for (idx, path) in scenic.tema.iter().enumerate() {
-        apply_scenic_image(build, TEMA_LAYOUTS[idx].header, &resolve_study_path(path)?, false)?;
+        apply_scenic_image(build, TEMA_LAYOUTS[idx].header, &resolve_study_path(path)?, true)?;
     }
 
-    // A/B titles: 2.A-style slides are already full-bleed; 1.A/1.B keep inset frame.
     let mut ab_i = 0usize;
     for layout in &TEMA_LAYOUTS {
         for &slide in &[layout.a_title, layout.b_title] {
-            let fullbleed = matches!(slide, 31 | 37 | 46 | 53);
             apply_scenic_image(
                 build,
                 slide,
                 &resolve_study_path(&scenic.ab[ab_i])?,
-                fullbleed,
+                true,
             )?;
             ab_i += 1;
         }
@@ -632,11 +638,32 @@ mod tests {
             packs.len(),
             study.lectura_antifonal.len()
         );
-        let mateo = &packs[0];
         assert!(
-            mateo.0.len() <= 3,
-            "Mateo first pack should not dump all long verses (overflow risk), got {}",
-            mateo.0.len()
+            packs[0]
+                .1
+                .as_ref()
+                .map(|c| c.to_lowercase().contains("mateo"))
+                .unwrap_or(false),
+            "first pack should be Mateo with citation"
         );
+        let mateo_count = 1 + packs
+            .iter()
+            .skip(1)
+            .take_while(|(_, cite)| cite.is_none())
+            .count();
+        assert!(
+            mateo_count >= 2,
+            "Mateo 6:1-4 must split across slides (budget {ADULT_LECTURA_BUDGET}), got {mateo_count} pack(s)"
+        );
+        for (verses, _) in &packs {
+            if verses.len() <= 1 {
+                continue;
+            }
+            let len: usize = verses.iter().map(|v| v.chars().count() + 1).sum::<usize>() - 1;
+            assert!(
+                len <= ADULT_LECTURA_BUDGET,
+                "lectura pack over budget: {len} > {ADULT_LECTURA_BUDGET}"
+            );
+        }
     }
 }

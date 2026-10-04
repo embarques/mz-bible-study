@@ -255,6 +255,33 @@ fn validate_pptx_inner(path: &Path) -> Result<Stats, Vec<String>> {
         }
     }
 
+    // `CT_BlipFillProperties` allows at most one fill mode (`a:tile` XOR
+    // `a:stretch`). A duplicate makes PowerPoint reject the whole slide with
+    // "found a problem with content … Repair", which the package-level checks
+    // above cannot see.
+    let blip_fill_re = Regex::new(r"(?s)<(?:a|p):blipFill[ >].*?</(?:a|p):blipFill>").unwrap();
+    let stretch_re = Regex::new(r"<a:stretch[\s/>]").unwrap();
+    let tile_re = Regex::new(r"<a:tile[\s/>]").unwrap();
+    for name in &names {
+        if !name.ends_with(".xml") {
+            continue;
+        }
+        let Ok(txt) = read_zip_str(&mut zip, name) else {
+            continue;
+        };
+        for m in blip_fill_re.find_iter(&txt) {
+            let seg = m.as_str();
+            let stretches = stretch_re.find_iter(seg).count();
+            let tiles = tile_re.find_iter(seg).count();
+            if stretches + tiles > 1 {
+                errors.push(format!(
+                    "{name}: blipFill has {stretches} <a:stretch> + {tiles} <a:tile> \
+                     (schema allows at most one; causes PowerPoint Repair)"
+                ));
+            }
+        }
+    }
+
     if !errors.is_empty() {
         return Err(errors);
     }

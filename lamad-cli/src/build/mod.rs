@@ -1,9 +1,14 @@
 //! PPTX builders — youth (dynamic packing) and adult (fixed 62-slide template).
 
+mod contrast;
 mod ooxml;
 mod proto;
+mod qc;
 mod study;
 pub mod adult;
+
+pub(crate) use contrast::apply_image_chrome_contrast;
+pub(crate) use qc::qc_deck;
 
 pub use proto::PROTO;
 pub use study::{apply_study, apply_study_value};

@@ -54,7 +54,7 @@ Layout: `slideLayout16.xml`
 | `Título 1` | Header `LECTURA ANTIFONAL` | Static |
 | `CuadroTexto 5` | Citation + verse text (packed, multi-verse) | **Yes** |
 
-**Packing (HARD):** `expand_glued_verses` → `pack_verses(ADULT_LECTURA_BUDGET=400)` → `set_verses(VerseKind::Lectura)`. Colours match youth: red citation/numbers, black body (forced). Citation only on the first slide of each passage. Extra packs allocate new slides by duplicating slide 2. JSON `lectura_antifonal` is a list of **passages**, not a fixed slide count.
+**Packing (HARD):** `expand_glued_verses` → `pack_verses(VERSE_BUDGET=280)` → `set_verses(VerseKind::Lectura)`. Same budget as youth — never overflow the panel; split to a new slide instead. Colours match youth: red citation/numbers, black body (forced). Citation only on the first slide of each passage. Extra packs allocate new slides by duplicating slide 2. JSON `lectura_antifonal` is a list of **passages**, not a fixed slide count.
 
 ### Texto bíblico (`texto_biblico`)
 

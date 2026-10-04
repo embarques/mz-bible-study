@@ -16,8 +16,10 @@ These slide types use a **single image covering the entire slide** (edge to edge
 | Slide type | Image role | Text placement |
 |------------|------------|----------------|
 | `intro_header` | Scenic full-bleed (e.g. open Bible, landscape) | Centred semi-transparent white box with section title only |
-| `tema_header` | Cinematic scene for the theme | **Bottom bar only** — never title text over the centre of the image |
-| `ab_title` | Cinematic scene for the A/B point | **Left panel** (~35–40% width) with torn-paper edge; image fills the rest |
+| `tema_header` | Cinematic scene for the theme | **Youth section chrome at bottom-left** — orange bar, title, gray line, verse (same idea as youth; lower because adult titles are longer) |
+| `ab_title` | Cinematic scene for the A/B point | **Same youth chrome at bottom-left** (not torn-paper / top bar) |
+
+**Contrast (CLI, automatic):** sample the left ~40% of the scenic PNG. If that band is dark → white title / light verse; if light → navy title / dark verse. Never leave dark text on a dark photo.
 
 Do **not** place body paragraphs on image slides. Image slides carry titles + references only.
 
@@ -52,8 +54,7 @@ Every text-heavy slide has a **hard floor** where content stops. Nothing may sit
 | Texto Bíblico header | White centred “Texto Bíblico” on black |
 | Texto citation + verse numbers | **Yellow** `#FFFF00`, bold |
 | Texto verse body | **White** `#FFFFFF`, regular |
-| Tema bottom bar | Blue-to-peach gradient; white title; reference in **black pill** |
-| A/B left panel | Off-white/torn edge; black title; reference in **black pill** |
+| Tema / A-B image chrome | Youth-style: orange `#E85D04` bar, navy title (Verlag Black), gray line, dark verse — **bottom-left** |
 
 Preserve template run colours when filling OOXML — do not flatten to a single style.
 
@@ -78,7 +79,7 @@ Match the reference deck’s paragraph breaks:
 ### Lectura antifonal
 
 - Same verse formatting as youth **Lectura Bíblica** (`set_verses` + `VerseKind::Lectura`): red citation/numbers, black body, whole verses only.
-- Pack at adult `ADULT_LECTURA_BUDGET` (400 chars) after expanding glued verses — denser than youth 280 because adult Lectura uses ~36pt in a taller panel; still split before overflow (do not dump Mateo 6:1–4 onto one slide). Citation only on the first slide of each passage.
+- Pack at `VERSE_BUDGET` (**280 chars**, same as youth) after expanding glued verses. If the next whole verse would overflow, **new slide**. Never dump Mateo 6:1–4 onto one slide. Citation only on the first slide of each passage.
 - **Colours (match youth Lectura):** citation + verse numbers **red** `#FF0000` bold; verse body **black** `#000000` regular — forced explicitly (never inherit a wrong sample fill).
 - Template ships 4 prototype slides (2–5). If more packs are needed, **duplicate** the lectura prototype and insert into the active order (same allocate pattern as youth). Unused prototypes stay on disk but drop out of `sldIdLst`.
 - Header `LECTURA ANTIFONAL` + citation with semicolon when the template sample has one.
@@ -133,9 +134,9 @@ JSON fields per term (`Definicion`):
 ### Tema block (per theme)
 
 ```
-tema_header          → full-bleed image + bottom gradient bar (TEMA N, title, ref)
+tema_header          → full-bleed image + youth chrome bottom-left (TEMA N- title, ref)
 definicion           → composed card PNG (header + icon/chevron/def/icon rows)
-ab_title             → full-bleed image + left torn panel (point label, title, ref)
+ab_title             → full-bleed image + youth chrome bottom-left (N.A- title, ref)
 texto_biblico        → black slide, yellow/white verses (1+ slides)
 ab_body              → blue header + white body + navy footer (N slides)
 (repeat ab_title → texto → ab_body for each A/B/C point in the theme)
@@ -199,7 +200,7 @@ Requirements:
 
 - **Full bleed** — subject/scene fills the **entire** slide edge-to-edge (same as adult 2.A reference). Builder forces pic `xfrm` to `0,0` / `12192000×6858000` and strips `srcRect` crops.
 - **Multiple designs per study** — intro, each tema, and each A/B title get **different** cinematic looks (palette/lighting/composition). Do not reuse one motif for every slide.
-- **Text-safe lower third:** soft dark wash in the photo’s lower band so white OOXML title/ref chrome stays readable (bottom-left layout like 2.A — point label, title, orange ref bar).
+- **Text-safe bottom-left (~35–40% width):** soft mist / parchment wash under the youth-style chrome (navy title + gray verse). Same idea as youth section art — calm area under text, scene on the right.
 - **No text, logos, or watermarks** in the image itself (chrome is OOXML).
 - Video tema headers (II/III): strip video; use still full-bleed poster art.
 
@@ -213,7 +214,7 @@ Insert via OOXML media replace (`ppt/media/imageN.png`) — same pattern as yout
 2. **Texto Bíblico** — every slide shows yellow/white verses on black (no “empty” slides).
 3. **Definición** — matches card design (header + icon/chevron/text/icon rows); icons fit the terms, not the sample stock set.
 4. **Body slides** — no text touching or crossing the navy footer bar.
-5. **Tema / A-B image slides** — image is full-bleed; text only in bar/panel.
+5. **Tema / A-B image slides** — full-bleed art; youth chrome (orange bar / title / gray line / verse) at bottom-left only.
 6. **Paragraph breaks** — teaching markers `(1)`/`(2)`/`(3)` start new paragraphs.
 7. `lamad validate` → OK; export PDF.
 

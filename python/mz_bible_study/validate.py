@@ -126,6 +126,26 @@ def validate_pptx(path: Path) -> int:
         except ET.ParseError as e:
             errors.append(f"XML parse error {name}: {e}")
 
+    # CT_BlipFillProperties allows at most one fill mode (a:tile XOR
+    # a:stretch). A duplicate makes PowerPoint reject the whole slide with
+    # "found a problem with content … Repair"; the package checks above are
+    # all well-formed in that case, so this needs its own test.
+    blip_fill = re.compile(r"<(?:a|p):blipFill[ >].*?</(?:a|p):blipFill>", re.S)
+    for name in names:
+        if not name.endswith(".xml"):
+            continue
+        text = z.read(name).decode("utf-8", "replace")
+        for match in blip_fill.finditer(text):
+            seg = match.group(0)
+            modes = len(re.findall(r"<a:stretch[\s/>]", seg)) + len(
+                re.findall(r"<a:tile[\s/>]", seg)
+            )
+            if modes > 1:
+                errors.append(
+                    f"{name}: blipFill has {modes} fill-mode children "
+                    "(a:stretch/a:tile); schema allows one — causes PowerPoint Repair"
+                )
+
     if errors:
         print(f"INVALID: {path}")
         for e in errors:

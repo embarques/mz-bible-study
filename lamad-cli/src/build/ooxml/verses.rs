@@ -91,7 +91,18 @@ fn format_citation_from_template(
     kind: VerseKind,
 ) -> Result<String> {
     match kind {
-        VerseKind::Texto => super::shape::format_ref_citation_from_template(shape_xml, cite),
+        // Texto Bíblico: never parentheses — adult gold prototypes wrap
+        // cites in `()` and format_ref_citation_from_template would copy that.
+        VerseKind::Texto => {
+            let base = cite
+                .trim()
+                .trim_start_matches('(')
+                .trim_end_matches(')')
+                .trim()
+                .trim_end_matches(';')
+                .trim();
+            Ok(base.to_string())
+        }
         VerseKind::Lectura => {
             let nodes = super::xml::all_elements(shape_xml, "a:t");
             let sample = nodes
@@ -99,7 +110,13 @@ fn format_citation_from_template(
                 .map(|e| e.inner(shape_xml, "a:t"))
                 .find(|t| !t.trim().is_empty())
                 .unwrap_or("");
-            let base = cite.trim().trim_end_matches(';').trim();
+            let base = cite
+                .trim()
+                .trim_start_matches('(')
+                .trim_end_matches(')')
+                .trim()
+                .trim_end_matches(';')
+                .trim();
             if sample.contains(';') {
                 Ok(format!("{base}; "))
             } else {
@@ -191,9 +208,43 @@ fn set_verses_expanded(
         let open_tag = tb.open_tag(shape_xml);
         let new_txbody = format!("{open_tag}{new_content}</{tag}>");
         let shape_xml = replace_range(shape_xml, tb.start, tb.end, &new_txbody);
-        Ok(force_verse_no_autofit(&shape_xml))
+        let shape_xml = force_verse_no_autofit(&shape_xml);
+        // Adult gold has broken TextBox 4 frames (y negative / under the
+        // "Texto Bíblico" title). Clamp geometry so verses never overlap
+        // the header.
+        let shape_xml = if kind == VerseKind::Texto {
+            fix_texto_verse_box_xfrm(&shape_xml)
+        } else {
+            shape_xml
+        };
+        Ok(shape_xml)
     })?;
     fs::write(path, xml).with_context(|| format!("write {}", path.display()))
+}
+
+/// Known-good adult Texto verse box (from template slide 17), EMUs.
+const TEXTO_BOX_X: i64 = 294_515;
+const TEXTO_BOX_Y: i64 = 856_357; // ~0.94" — clears "Texto Bíblico" title
+const TEXTO_BOX_CX: i64 = 11_602_969;
+const TEXTO_BOX_CY: i64 = 5_755_422;
+
+fn fix_texto_verse_box_xfrm(shape_xml: &str) -> String {
+    let re = Regex::new(
+        r#"<a:xfrm>\s*<a:off x="(-?\d+)" y="(-?\d+)"\s*/>\s*<a:ext cx="(-?\d+)" cy="(-?\d+)"\s*/>\s*</a:xfrm>"#,
+    )
+    .unwrap();
+    let Some(caps) = re.captures(shape_xml) else {
+        return shape_xml.to_string();
+    };
+    let y: i64 = caps[2].parse().unwrap_or(0);
+    // Only rewrite when the box is too high (overlaps title) or negative.
+    if y >= TEXTO_BOX_Y {
+        return shape_xml.to_string();
+    }
+    let new_xfrm = format!(
+        r#"<a:xfrm><a:off x="{TEXTO_BOX_X}" y="{TEXTO_BOX_Y}"/><a:ext cx="{TEXTO_BOX_CX}" cy="{TEXTO_BOX_CY}"/></a:xfrm>"#
+    );
+    re.replace(shape_xml, new_xfrm.as_str()).into_owned()
 }
 
 fn force_verse_no_autofit(shape_xml: &str) -> String {

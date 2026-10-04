@@ -192,5 +192,22 @@ pub fn set_active_order(build: &Path, slide_nums: &[u32]) -> Result<()> {
     }
     fs::write(&pres_path, new_pres.into_owned())
         .with_context(|| format!("write {}", pres_path.display()))?;
+
+    // Keep docProps/app.xml in sync — stale <Slides>N</Slides> after
+    // duplication is a known PowerPoint repair trigger on some builds.
+    let app_path = build.join("docProps").join("app.xml");
+    if app_path.is_file() {
+        let app = fs::read_to_string(&app_path)
+            .with_context(|| format!("read {}", app_path.display()))?;
+        let app_re = Regex::new(r"<Slides>\d+</Slides>").unwrap();
+        if app_re.is_match(&app) {
+            let fixed = app_re.replace(
+                &app,
+                format!("<Slides>{}</Slides>", slide_nums.len()).as_str(),
+            );
+            fs::write(&app_path, fixed.as_ref())
+                .with_context(|| format!("write {}", app_path.display()))?;
+        }
+    }
     Ok(())
 }
