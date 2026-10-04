@@ -28,8 +28,14 @@ pub fn set_pensamiento_aureo(
     cita: &str,
 ) -> Result<()> {
     fill_file(data_path, pensamiento, quote, cita)?;
+    split_cita_onto_next_line(data_path)?;
+    strip_file_highlights(data_path)?;
     if drawing_path.is_file() {
         fill_file(drawing_path, pensamiento, quote, cita)?;
+        // Gold keeps quote + cita as two runs in one paragraph → same line.
+        // Put the biblical citation on its own line under the quote.
+        split_cita_onto_next_line(drawing_path)?;
+        strip_file_highlights(drawing_path)?;
         // Long pensamiento/quote at template ~44pt overflows the boxes.
         shrink_body_runs(drawing_path, pensamiento, quote)?;
     }
@@ -119,6 +125,78 @@ fn classify_slot(raw: &str) -> Option<Slot> {
     None
 }
 
+/// If a paragraph has quote-run then citation-run, split into two `<a:p>`s
+/// so the biblical reference sits on the next line.
+fn split_cita_onto_next_line(path: &Path) -> Result<()> {
+    let xml = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let para_re = Regex::new(r"(?s)<a:p\b[^>]*>.*?</a:p>").unwrap();
+    let run_re = Regex::new(r"(?s)<a:r\b[^>]*>.*?</a:r>").unwrap();
+    let t_re = Regex::new(r"(?s)<a:t[^>]*>(.*?)</a:t>").unwrap();
+    let ppr_re = Regex::new(r"(?s)<a:pPr\b[^>]*/>|<a:pPr\b[^>]*>.*?</a:pPr>").unwrap();
+    let end_re = Regex::new(r"(?s)<a:endParaRPr\b[^>]*/>|<a:endParaRPr\b[^>]*>.*?</a:endParaRPr>").unwrap();
+
+    let mut out = String::with_capacity(xml.len());
+    let mut last = 0usize;
+    let mut changed = false;
+    for cap in para_re.find_iter(&xml) {
+        out.push_str(&xml[last..cap.start()]);
+        let para = cap.as_str();
+        let runs: Vec<&str> = run_re.find_iter(para).map(|m| m.as_str()).collect();
+        if runs.len() == 2 {
+            let t0 = t_re
+                .captures(runs[0])
+                .map(|c| c[1].to_string())
+                .unwrap_or_default();
+            let t1 = t_re
+                .captures(runs[1])
+                .map(|c| c[1].to_string())
+                .unwrap_or_default();
+            let quote_like = classify_slot(&t0) == Some(Slot::Quote)
+                || t0.contains('“')
+                || t0.starts_with('"');
+            let cita_like = classify_slot(&t1) == Some(Slot::Cita);
+            if quote_like && cita_like {
+                let ppr = ppr_re
+                    .find(para)
+                    .map(|m| m.as_str())
+                    .unwrap_or(r#"<a:pPr/>"#);
+                let end = end_re
+                    .find(para)
+                    .map(|m| m.as_str())
+                    .unwrap_or(r#"<a:endParaRPr lang="es-DO"/>"#);
+                // Keep quote paragraph; citation starts a new paragraph.
+                let split = format!(
+                    "<a:p>{ppr}{run0}{end}</a:p><a:p>{ppr}{run1}{end}</a:p>",
+                    run0 = runs[0],
+                    run1 = runs[1],
+                );
+                out.push_str(&split);
+                changed = true;
+                last = cap.end();
+                continue;
+            }
+        }
+        out.push_str(para);
+        last = cap.end();
+    }
+    out.push_str(&xml[last..]);
+    if changed {
+        fs::write(path, out).with_context(|| format!("write {}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn strip_file_highlights(path: &Path) -> Result<()> {
+    let xml = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let re = Regex::new(r"<a:highlight\b[^>]*>[\s\S]*?</a:highlight>|<a:highlight\b[^/]*/>")
+        .unwrap();
+    let out = re.replace_all(&xml, "");
+    if out.as_ref() != xml {
+        fs::write(path, out.as_ref()).with_context(|| format!("write {}", path.display()))?;
+    }
+    Ok(())
+}
+
 fn shrink_body_runs(drawing_path: &Path, pensamiento: &str, quote: &str) -> Result<()> {
     let xml = fs::read_to_string(drawing_path)
         .with_context(|| format!("read {}", drawing_path.display()))?;
@@ -170,5 +248,20 @@ mod tests {
             Some(Slot::Cita)
         );
         assert_eq!(classify_slot("1 Corintios 10:33"), Some(Slot::Cita));
+    }
+
+    #[test]
+    fn splits_quote_and_cita_into_two_paragraphs() {
+        let path = std::env::temp_dir().join("lamad-aureo-split-test.xml");
+        let xml = r#"<?xml version="1.0"?>
+<root><a:p xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:pPr algn="l"/><a:r><a:rPr sz="2200"/><a:t>“... para que sean salvos”</a:t></a:r><a:r><a:rPr sz="2200" b="1"/><a:t>1 Corintios 10:33</a:t></a:r><a:endParaRPr lang="es-DO"/></a:p></root>"#;
+        std::fs::write(&path, xml).unwrap();
+        split_cita_onto_next_line(&path).unwrap();
+        let out = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(out.matches("<a:p>").count() + out.matches("<a:p ").count(), 2);
+        assert!(out.contains("sean salvos”</a:t></a:r><a:endParaRPr"));
+        assert!(out.contains("<a:t>1 Corintios 10:33</a:t>"));
+        assert!(!out.contains("salvos”</a:t></a:r><a:r>"));
     }
 }
