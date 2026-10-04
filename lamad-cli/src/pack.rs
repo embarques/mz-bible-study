@@ -3,18 +3,22 @@
 use regex::Regex;
 use std::sync::OnceLock;
 
-/// Greedy whole-verse packs by character length (default budget 280).
+/// Greedy whole-verse packs by **Unicode character** length (default 280).
+/// Never splits a verse; if the next whole verse would exceed the budget,
+/// start a new pack (new slide). A single verse longer than the budget
+/// still gets its own slide (cannot mid-verse split).
 pub fn pack_verses(verses: &[String], budget: usize) -> Vec<Vec<String>> {
     let budget = if budget == 0 { 280 } else { budget };
     let mut packs: Vec<Vec<String>> = Vec::new();
     let mut cur: Vec<String> = Vec::new();
     let mut cur_len: usize = 0;
     for v in verses {
-        let add = v.len() + 1;
+        let v_len = v.chars().count();
+        let add = v_len + 1;
         if !cur.is_empty() && cur_len + add > budget {
             packs.push(std::mem::take(&mut cur));
             cur.push(v.clone());
-            cur_len = v.len();
+            cur_len = v_len;
         } else {
             cur.push(v.clone());
             cur_len += add;
@@ -24,6 +28,23 @@ pub fn pack_verses(verses: &[String], budget: usize) -> Vec<Vec<String>> {
         packs.push(cur);
     }
     packs
+}
+
+/// True when every pack's joined char length is ≤ budget (single oversize
+/// verse alone is allowed — same rule as [`pack_verses`]).
+pub fn verse_packs_within_budget(packs: &[Vec<String>], budget: usize) -> bool {
+    let budget = if budget == 0 { 280 } else { budget };
+    packs.iter().all(|pack| {
+        if pack.len() <= 1 {
+            return true;
+        }
+        let len: usize = pack
+            .iter()
+            .map(|v| v.chars().count() + 1)
+            .sum::<usize>()
+            .saturating_sub(1);
+        len <= budget
+    })
 }
 
 /// Split on sentence ends; greedy packs (default budget 380).
@@ -87,12 +108,18 @@ mod tests {
             .collect();
         let packs = pack_verses(&verses, 280);
         assert!(packs.len() >= 2);
-        for p in &packs {
-            let len: usize = p.iter().map(|v| v.len() + 1).sum();
-            // first item in pack can be over budget alone; others combined shouldn't explode
-            assert!(!p.is_empty());
-            let _ = len;
-        }
+        assert!(verse_packs_within_budget(&packs, 280));
+    }
+
+    #[test]
+    fn verse_packs_within_budget_rejects_overstuffed_pack() {
+        let fat = vec![vec![
+            format!("1 {}", "a".repeat(200)),
+            format!("2 {}", "b".repeat(200)),
+        ]];
+        assert!(!verse_packs_within_budget(&fat, 280));
+        let ok = vec![vec![format!("1 {}", "a".repeat(100))]];
+        assert!(verse_packs_within_budget(&ok, 280));
     }
 
     #[test]

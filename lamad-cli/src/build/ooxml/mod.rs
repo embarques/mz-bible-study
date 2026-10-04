@@ -36,8 +36,12 @@ pub mod zip;
 
 pub use body::{set_ab_title, set_content_body, set_section_chrome};
 pub use diagrams::{force_propositos_36pt, replace_diagram_texts, set_diagram_citation};
-pub use images::{replace_section_images, resize_section_png};
-pub use slides::{allocate_slides, set_active_order, slide_path};
+pub use images::{
+    replace_section_images, resize_contain_png, resize_definicion_png, resize_section_png,
+};
+pub use slides::{
+    allocate_slides, duplicate_slide, fix_notes_slide_rels, set_active_order, slide_path,
+};
 pub use title::set_title_slide;
 pub use verses::{set_verses, VerseKind};
 pub use zip::{fix_package_ns0, fix_package_ns_prefixes, unzip_pptx, zip_pptx};
@@ -45,8 +49,8 @@ pub use zip::{fix_package_ns0, fix_package_ns_prefixes, unzip_pptx, zip_pptx};
 #[cfg(test)]
 mod tests {
     use super::body::strip_arc_shapes;
-    use super::shape::{set_simple_text_block, shape_block};
-    use super::verses::split_verse;
+    use super::shape::{set_simple_text_block, shape_block, split_teaching_paragraphs};
+    use super::verses::{expand_glued_verses, split_verse};
     use super::xml;
 
     #[test]
@@ -88,6 +92,23 @@ mod tests {
         assert!(out.contains(r#"xmlns:a16="http://schemas.microsoft.com/office/drawing/2014/main""#));
         assert!(out.contains("<a16:creationId"));
         assert!(!out.contains("ns2:"));
+    }
+
+    #[test]
+    fn split_teaching_paragraphs_at_markers() {
+        let text = "Intro.(1) First point.(2) Second.";
+        let parts = split_teaching_paragraphs(text);
+        assert_eq!(parts.len(), 3);
+        assert!(parts[1].starts_with("(1)"));
+    }
+
+    #[test]
+    fn expand_glued_verses_splits_semicolon() {
+        let verses = vec!["2 foo; 3 bar".to_string()];
+        let out = expand_glued_verses(&verses);
+        assert_eq!(out.len(), 2);
+        assert!(out[0].starts_with('2'));
+        assert!(out[1].starts_with('3'));
     }
 
     #[test]

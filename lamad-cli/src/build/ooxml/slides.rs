@@ -89,6 +89,45 @@ pub fn allocate_slides(build: &Path, proto: u32, count: usize) -> Result<Vec<u32
     Ok(out)
 }
 
+/// Remove `notesSlide` relationships whose target number does not match the
+/// slide number. Some shipped adult templates reference stale notes parts.
+pub fn fix_notes_slide_rels(build: &Path) -> Result<()> {
+    let rels_dir = build.join("ppt").join("slides").join("_rels");
+    if !rels_dir.is_dir() {
+        return Ok(());
+    }
+    let notes_re =
+        Regex::new(r#"<Relationship\b[^>]*Type="[^"]*notesSlide"[^>]*/>"#).unwrap();
+    let target_re = Regex::new(r"notesSlide(\d+)").unwrap();
+
+    for entry in fs::read_dir(&rels_dir).with_context(|| format!("read_dir {}", rels_dir.display()))? {
+        let entry = entry?;
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let Some(sn) = name
+            .strip_prefix("slide")
+            .and_then(|s| s.strip_suffix(".xml.rels"))
+        else {
+            continue;
+        };
+        let mut rels =
+            fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        let mut changed = false;
+        if let Some(caps) = target_re.captures(&rels) {
+            if &caps[1] != sn {
+                rels = notes_re.replace_all(&rels, "").into_owned();
+                changed = true;
+            }
+        }
+        if changed {
+            fs::write(&path, rels).with_context(|| format!("write {}", path.display()))?;
+        }
+    }
+    Ok(())
+}
+
 /// Rebuild presentation slide rels + `sldIdLst` to exactly this order
 /// (string-safe — never `ElementTree.write()` this file).
 pub fn set_active_order(build: &Path, slide_nums: &[u32]) -> Result<()> {
@@ -153,5 +192,22 @@ pub fn set_active_order(build: &Path, slide_nums: &[u32]) -> Result<()> {
     }
     fs::write(&pres_path, new_pres.into_owned())
         .with_context(|| format!("write {}", pres_path.display()))?;
+
+    // Keep docProps/app.xml in sync — stale <Slides>N</Slides> after
+    // duplication is a known PowerPoint repair trigger on some builds.
+    let app_path = build.join("docProps").join("app.xml");
+    if app_path.is_file() {
+        let app = fs::read_to_string(&app_path)
+            .with_context(|| format!("read {}", app_path.display()))?;
+        let app_re = Regex::new(r"<Slides>\d+</Slides>").unwrap();
+        if app_re.is_match(&app) {
+            let fixed = app_re.replace(
+                &app,
+                format!("<Slides>{}</Slides>", slide_nums.len()).as_str(),
+            );
+            fs::write(&app_path, fixed.as_ref())
+                .with_context(|| format!("write {}", app_path.display()))?;
+        }
+    }
     Ok(())
 }

@@ -210,11 +210,16 @@ pub struct Punto {
 
 impl Punto {
     /// One whole-verse group per Texto Bíblico slide: pre-packed
-    /// `texto_slides` if present, else `texto_biblico` packed with
-    /// `pack::pack_verses` (budget 280).
+    /// `texto_slides` if present **and within budget**, else
+    /// `texto_biblico` packed with `pack::pack_verses` (budget 280).
     pub fn punto_texto_packs(&self) -> Vec<Vec<String>> {
         if let Some(slides) = &self.texto_slides {
-            return slides.clone();
+            if pack::verse_packs_within_budget(slides, VERSE_BUDGET) {
+                return slides.clone();
+            }
+            eprintln!(
+                "warning: texto_slides exceed {VERSE_BUDGET}-char budget — re-packing from texto_biblico"
+            );
         }
         pack::pack_verses(&self.texto_biblico, VERSE_BUDGET)
     }
@@ -295,11 +300,17 @@ impl Study {
     }
 
     /// One whole-verse group per Lectura slide: pre-packed `lectura_slides`
-    /// if present, else `lectura.versiculos` packed with
-    /// `pack::pack_verses` (budget 280).
+    /// if present **and within budget**, else `lectura.versiculos` packed
+    /// with `pack::pack_verses` (budget 280). Oversized agent packs are
+    /// ignored so text never overflows the logo floor.
     pub fn lectura_packs(&self) -> Vec<Vec<String>> {
         if let Some(slides) = &self.lectura_slides {
-            return slides.clone();
+            if pack::verse_packs_within_budget(slides, VERSE_BUDGET) {
+                return slides.clone();
+            }
+            eprintln!(
+                "warning: lectura_slides exceed {VERSE_BUDGET}-char budget — re-packing from versiculos"
+            );
         }
         pack::pack_verses(&self.lectura.versiculos, VERSE_BUDGET)
     }
