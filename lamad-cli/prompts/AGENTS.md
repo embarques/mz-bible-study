@@ -1,6 +1,6 @@
 # AGENTS.md — Mount Zion Church Bible Study PowerPoint
 
-Agent playbook for building Spanish Bible study decks from scans. Match [`template/youth/master-template.pptx`](template/youth/master-template.pptx) (default `--audience youth`) and recent decks in [`bible-studies/`](bible-studies/). Adult uses the Rust builder (`--audience adult`) and [`lamad-cli/src/build/adult/LAYOUT_GUIDE.md`](lamad-cli/src/build/adult/LAYOUT_GUIDE.md) — follow that guide’s **HARD rules** (no citation parentheses on Texto/image chrome, no title highlight, shrink oversized text, scenic image visible, Texto Áureo citation on its own line).
+Agent playbook for building Spanish Bible study decks from scans. Match [`template/youth/master-template.pptx`](template/youth/master-template.pptx) (default `--audience youth`) and recent decks in [`bible-studies/`](bible-studies/). Adult uses the Rust builder (`--audience adult`) and [`lamad-cli/src/build/adult/LAYOUT_GUIDE.md`](../src/build/adult/LAYOUT_GUIDE.md) — follow that guide’s **HARD rules** (no citation parentheses on Texto/image chrome, no title highlight, shrink oversized text, scenic image visible, Texto Áureo citation on its own line).
 
 User-facing summary: [`README.md`](README.md). Template index: [`template/README.md`](template/README.md).
 
@@ -67,7 +67,7 @@ Output:
 | File | Role |
 |------|------|
 | [`template/youth/master-template.pptx`](template/youth/master-template.pptx) | **Youth gold standard** — clone slide XML from here (`--audience youth`, default) |
-| [`template/adult/master-template.pptx`](template/adult/master-template.pptx) / `lamad-cli/template/adult/` | Adult gold — build with `lamad build … --audience adult`. Layout HARD rules: [`lamad-cli/src/build/adult/LAYOUT_GUIDE.md`](lamad-cli/src/build/adult/LAYOUT_GUIDE.md) |
+| [`template/adult/master-template.pptx`](template/adult/master-template.pptx) | Adult gold standard (when ready; `--audience adult`) |
 
 **Never overwrite** `template/`. Scratch: `_agent-reference.pptx` or `/tmp` / `generated/`. Generated decks go in **`bible-studies/`**.
 
@@ -132,12 +132,12 @@ Follow slide order and recipes below, then the checklist.
 
 ### 5. Generate section images (1 / 2 / 3)
 
-**Just generate them — do not ask.** You already have permission to create section art. Do **not** ask the user to confirm prompts, styles, or whether to generate. When using **`mzbs prepare`** (single or `--from`/`--to` batch), follow the **CLI-assigned** `section_style` for that estudio (rotating catalog — different id every study). For chat-only builds, pick a design family different from prior studies yourself. Generate all three images, insert them into the deck, and move on. If a generation fails or is blocked, regenerate with a safer framing and continue — still without asking.
+**Just generate them — do not ask.** You already have permission to create section art. Do **not** ask the user to confirm prompts, styles, or whether to generate. When using **`lamad prepare`** (single or `--from`/`--to` batch), follow the **CLI-assigned** `section_style` for that estudio (rotating catalog — different id every study). For chat-only builds, pick a design family different from prior studies yourself. Generate all three images, insert them into the deck, and move on. If a generation fails or is blocked, regenerate with a safer framing and continue — still without asking.
 
 **One design family per study; different family from other studies.**
 
 - Within a study, all three section images share the **same visual design language** (lighting, finish, edge treatment, optional accents).
-- Across studies, **change the design** — `mzbs` assigns a rotating family; chat builds must not reuse the previous study’s look (e.g. if study 16 used yellow dashed accent arcs / a particular white-curve panel, study 17 and 18 must not copy that).
+- Across studies, **change the design** — `lamad` assigns a rotating family; chat builds must not reuse the previous study’s look (e.g. if study 16 used yellow dashed accent arcs / a particular white-curve panel, study 17 and 18 must not copy that).
 - Catalog: `python/mz_bible_study/section_styles.py` (parchment, lavender mist, sage paper, ink wash, dawn gold, …).
 - When cloning a prior deck, **always strip** PowerPoint shapes named `Arc …` (yellow dashed/dotted arcs). That motif is retired — **do not** keep or redraw dotted/dashed arc chrome on section slides for any new study.
 - Generate three **new** illustrations every study (don’t reuse another study’s media files).
@@ -326,8 +326,8 @@ Do **not** call a helper that strips `b="1"` from every run with `bold=False` as
 9. Points 1–3: section art → Texto → A/B.  
 10. Conclusión → Próximo (from scan 2; multi-line base if `;`). **Force Times New Roman 42pt on conclusión body** (never leave Verlag Light from the clone).  
 11. Pass: **no logo overflow**, **no sparse slides**, bold refs, no dimming, Lectura/Texto continuations without titles, whole verses only, **conclusión = Times New Roman 42pt**, **Propósitos boxes @ 36pt with no PDF ghost overflow**, **font/bold table above** (Base Bíblica label only bold; Lectura/Texto citation+numbers bold; A/B titles bold).  
-12. **Run `mzbs validate` (or `python3 scripts/validate_pptx.py`) on the output** — must exit OK. Do not deliver if it fails.  
-13. **Export PDF** — once the `.pptx` validates, run `mzbs export-pdf "bible-studies/{N} - {TITLE}.pptx"` (or `python3 scripts/export_pdf.py …`). Same folder, same basename, `.pdf` extension.  
+12. **Run `lamad validate` (or `python3 scripts/validate_pptx.py`) on the output** — must exit OK. Do not deliver if it fails.  
+13. **Export PDF** — once the `.pptx` validates, run `lamad export-pdf "bible-studies/{N} - {TITLE}.pptx"` (or `python3 scripts/export_pdf.py …`). Same folder, same basename, `.pdf` extension.  
 14. User QA in PowerPoint (and optional PDF check).
 
 ---
@@ -338,7 +338,7 @@ These habits are why batch builds stay fast and clean — follow them; don’t r
 
 1. **Batch PDF workflow** — preview the whole PDF (counts, titles, last study / no Próximo) → wait for OK → build all decks with one reusable builder script (clone known-good → fill text → section images → validate → export PDF). Do not hand-craft each deck from scratch.
 2. **Clone, don’t invent layouts** — copy slide XML from `template/youth/master-template.pptx` or a recent good deck; only swap text/media.
-3. **Hard gates before “done”** — `mzbs validate` OK + `mzbs export-pdf` + spot-check **Propósitos**, **Conclusión font**, **logo floor**, and **one section title/verse** in the PDF.
+3. **Hard gates before “done”** — `lamad validate` OK + `lamad export-pdf` + spot-check **Propósitos**, **Conclusión font**, **logo floor**, and **one section title/verse** in the PDF.
 4. **Lock lessons into this file + `.cursor/rules/bible-study-pptx.mdc`** when a QA bug is fixed (like Propósitos 36pt). Future sessions read those first.
 5. **One design family per study for section art; change it next study** — generate all three images up front; strip retired `Arc` chrome.
 6. **Surgical fixes only** — when the user says “everything else is good,” patch only the broken slide/part (don’t regenerate the whole deck unless asked).
@@ -347,7 +347,7 @@ These habits are why batch builds stay fast and clean — follow them; don’t r
 - Prefer Python + `xml.etree` for batch OOXML edits.  
 - Gold path: duplicate slides from master-template → replace text → swap `image4/5/6` → rebuild rels/order.  
 - Overwrite existing `bible-studies/{N} - {TITLE}.pptx` only when regenerating that study.  
-- After a successful validate, export PDF with `mzbs export-pdf "bible-studies/{N} - {TITLE}.pptx"` (macOS + Microsoft PowerPoint; or `python3 scripts/export_pdf.py …`). Regenerate the PDF whenever the pptx is rebuilt. Prefer the Click CLI package (`pip install -e .` → `mzbs build|validate|export-pdf`).  
+- After a successful validate, export PDF with `lamad export-pdf "bible-studies/{N} - {TITLE}.pptx"` (macOS + Microsoft PowerPoint; or `python3 scripts/export_pdf.py …`). Regenerate the PDF whenever the pptx is rebuilt. Prefer the Click CLI package (`pip install -e .` → `mzbs build|validate|export-pdf`).  
 - Never hardcode one study filename as the permanent deck.
 
 ### Package integrity (MANDATORY — prevents “PowerPoint found a problem with content”)
@@ -388,7 +388,7 @@ PowerPoint repair dialogs mean the **ZIP package is inconsistent**. **Never deli
 After every rezip, run:
 
 ```bash
-mzbs validate "bible-studies/{N} - {TITLE}.pptx"
+lamad validate "bible-studies/{N} - {TITLE}.pptx"
 ```
 
 It must print `OK` and exit 0. Checks include: zip CRC, **`_rels/.rels` present**, no `ns0` in Content_Types/rels, Overrides ↔ files, `sldIdLst` ↔ slide rels, **notesSlide number matches slide number**, XML parse.
@@ -420,5 +420,5 @@ If it fails: **fix and re-run** — do not tell the user the deck is ready.
 - Don’t delete slide XML without also removing its Content_Types Override (and rels) — that corrupts the pptx.  
 - Don’t duplicate a slide and leave `notesSlide{old}` in the new `.rels`.  
 - Don’t `ElementTree.write()` `[Content_Types].xml` or `presentation.xml.rels`.  
-- Don’t deliver a deck that fails `mzbs validate` / `scripts/validate_pptx.py`.  
+- Don’t deliver a deck that fails `lamad validate` / `scripts/validate_pptx.py`.  
 - Don’t leave `ns0:` prefixes in `[Content_Types].xml` or `presentation.xml.rels`.

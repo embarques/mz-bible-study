@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mz-bible-study"
+version = "0.1.0"
+description = "CLI to build Mount Zion Church Bible-study PowerPoint decks from structured JSON."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "click>=8.1",
+]
+
+[project.optional-dependencies]
+prepare = [
+  "cursor-sdk>=1.0.0",
+  "python-dotenv>=1.0",
+]
+
+[project.scripts]
+mzbs = "mz_bible_study.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["python"]
+include = ["mz_bible_study*"]

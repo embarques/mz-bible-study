@@ -1,10 +1,13 @@
 # Template assets
 
-Stable PowerPoint file used to build new studies.  
+Stable PowerPoint files used to build new studies.  
 User guide: [`../README.md`](../README.md) · Agent playbook: [`../AGENTS.md`](../AGENTS.md)
 
-| File | Use as |
-|------|--------|
-| [`master-template.pptx`](master-template.pptx) | Gold-standard finished study to clone |
+| Path | Audience | Use as |
+|------|----------|--------|
+| [`youth/master-template.pptx`](youth/master-template.pptx) | `youth` (default) | Juveniles / intermedio / jóvenes |
+| [`adult/master-template.pptx`](adult/master-template.pptx) | `adult` | Adultos (Estudio 24 gold) |
 
-Do not overwrite this file. Generated decks go in [`../bible-studies/`](../bible-studies/).
+Select with CLI: `mzbs … --audience youth|adult` or override with `--template PATH`.
+
+Do not overwrite these files casually. Generated decks go in [`../bible-studies/`](../bible-studies/).

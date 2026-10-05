@@ -1,6 +1,76 @@
-# Monte de Sion Bible Study
+# Mount Zion Church Bible Study
 
-Spanish Bible study PowerPoints for Monte de Sion.
+Spanish Bible study PowerPoints for Mount Zion Church.
+
+## CLI (`lamad` / `mzbs`)
+
+### Rust — **lamad** (preferred for volunteers — [`lamad-cli/`](lamad-cli/))
+
+**lamad** (Hebrew **לָמַד**) means “to learn” or “to study”.
+
+```bash
+cd lamad-cli
+cp config.example.toml config.toml   # paste Cursor API key; pdftoppm_path = tools/pdftoppm
+cargo run --release -- prepare --from 20 --to 22
+# or: cargo build --release && ./target/release/lamad prepare …
+```
+
+**Volunteer deploy (mac / Windows / Linux):** run `./scripts/package-release.sh` on each OS → zip under `lamad-cli/dist/` includes the `lamad` binary + bundled `tools/pdftoppm` + template. See [`lamad-cli/README.md`](lamad-cli/README.md) and [`lamad-cli/LEEME.md`](lamad-cli/LEEME.md). No Python at runtime.
+
+### Python (legacy — [`python/mz_bible_study/`](python/mz_bible_study/))
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[prepare]"   # includes cursor-sdk for `mzbs prepare`
+```
+
+Set `CURSOR_API_KEY` in a project `.env` (see [`.env.example`](.env.example)):
+
+1. Open [cursor.com/dashboard/api](https://cursor.com/dashboard/api)
+2. Create an **API Key** (format `crsr_…`)
+3. Copy `.env.example` → `.env` and paste the key:
+
+```bash
+cp .env.example .env
+# edit .env → CURSOR_API_KEY=crsr_…
+```
+
+`mzbs` (Python) loads `.env` automatically (existing shell exports still win).
+
+```bash
+# 1) Agent prepares JSON + section images
+mzbs prepare --pdf "Bible Study 20-22.pdf" -n 22 --pages 7-9 --last
+
+# Or prepare + build + PDF in one go:
+mzbs prepare --pdf "Bible Study 20-22.pdf" -n 22 --pages 7-9 --last --build
+
+# Or the whole PDF (prepare + build every study + agent review):
+mzbs prepare --pdf "Bible Study 20-22.pdf" --from 20 --to 22
+# Default audience is youth. Use --audience adult when that builder is ready.
+# Each estudio gets a rotating section-image style (different every study).
+
+# Override the master PPTX explicitly:
+# mzbs build studies/youth/22.json -o "…" --template /path/to/custom.pptx
+
+# Prepare-only batch (still reviews JSON/images unless --no-review):
+mzbs prepare --pdf "Bible Study 20-22.pdf" --from 20 --to 22 --prepare-only
+
+# Re-run QA later:
+mzbs review --from 20 --to 22 --pdf "Bible Study 20-22.pdf"
+
+# 2) Or build later yourself
+mzbs build studies/youth/22.json -o "bible-studies/22 - TITLE.pptx" --export-pdf
+
+mzbs validate "bible-studies/22 - TITLE.pptx"
+mzbs export-pdf "bible-studies/22 - TITLE.pptx"
+```
+
+- **`mzbs prepare --from … --to …`:** batch — every study → prepare, build + PDF, then **agent review** (`studies/{audience}/REVIEW.md`)  
+- **`mzbs prepare -n …`:** one study → JSON + section images under `studies/{audience}/`  
+- **`--audience youth|adult`:** uses `template/{audience}/master-template.pptx` by default (youth if omitted). Pass `--template PATH` to override.  
+- **`mzbs build`:** clone audience (or `--template`) master, pack slides, fill OOXML, validate, export PDF  
+- **`mzbs review`:** Cursor agent double-checks outputs (files, validate, OOXML/PDF spot-checks)  
 
 ## What you provide
 
@@ -59,6 +129,9 @@ Open the PowerPoint and check that text doesn’t run into the logo.
 | Folder | What’s in it |
 |--------|----------------|
 | [`bible-studies/`](bible-studies/) | Generated presentations |
-| [`template/`](template/) | Master template and format examples (don’t edit these unless you mean to change the system) |
-# mz-bible-study
-# mz-bible-study
+| [`studies/`](studies/) | Prepare JSON + section images by audience (`youth/`, `adult/`; gitignored) |
+| [`generated/`](generated/) | Scratch: page rasters, PDF previews, build work (gitignored) |
+| [`template/`](template/) | Master templates by audience (`youth/`, `adult/`) |
+| [`python/mz_bible_study/`](python/mz_bible_study/) | Legacy Python Click CLI |
+| [`lamad-cli/`](lamad-cli/) | **Rust CLI** (`lamad` binary; Hebrew לָמַד, “to learn / to study”) |
+| [`scripts/`](scripts/) | Thin wrappers (prefer `mzbs`) |

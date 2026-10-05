@@ -1,0 +1,61 @@
+---
+description: Bible study PowerPoint build rules for Mount Zion Church presentations
+alwaysApply: true
+---
+
+# Bible study PPTX
+
+Follow **`AGENTS.md`** for the full build playbook (especially **Font & bold rules**). User-facing guide: `README.md`. Output: `bible-studies/{N} - {TITLE}.pptx` **and** matching `.pdf`.
+
+## Required inputs every study
+
+**Single study (unchanged):**
+1. **3 scans** of the current study, **or** a small PDF with those pages (+ next title page when needed)
+2. **Next study title page** — not required for the **last** study (**omit** Próximo)
+
+**Batch PDF (new):** one PDF with **all studies in order**, **3 pages per study**, next study starts right after the previous. **First report what you see and wait for OK** — then build **every** deck. Middle studies: Próximo from the next study’s title page. **Last** study: 3 pages only → **omit** Próximo.
+
+If **2** is missing on a single non-final study, **ask** for próximo: number, title, base bíblica. Do not invent them.
+
+## Must follow
+
+- Edit OOXML (unzip → XML → rezip). Prefer cloning a **known-good** deck (`bible-studies/16 - …` or `template/master-template.pptx`). Never overwrite `template/`.
+- **Package integrity (mandatory before delivery):** run `python3 scripts/validate_pptx.py` on the finished file — must print `OK`. Never omit `_rels/.rels` when zipping (do **not** filter with `startswith(".")`). Never `ElementTree.write()` `[Content_Types].xml` / `presentation.xml.rels` (`ns0:` corrupts). When duplicating slides, fix or remove notes rels (`notesSlide{new}` only — never `notesSlide{old}`). Keep Content_Types Overrides in sync with real slide files. `sldIdLst` must match slide relationships. **Do not deliver** if validation fails.
+- **PDF (mandatory after a valid pptx):** run `python3 scripts/export_pdf.py "bible-studies/{N} - {TITLE}.pptx"` — writes the sibling `.pdf`. Do this automatically; do not ask. Regenerate the PDF whenever the pptx is rebuilt.
+- **Logo-top boundary (every logo slide):** no text on/below the top of the Mount Zion Church logo. Do **not** draw any guide line. If the next full sentence/verse would cross that edge, move the **entire** unit to the next slide. Never mid-sentence. Pack dense above the logo; body/comentario ~360–400 chars. Forbidden: text under the logo; half-empty slides when more text fits; mid-verse Texto splits.
+- **Section images:** generate all 3 **without asking**. One shared design per study; **different** from prior studies. Full-bleed OK. **Always remove** leftover `Arc` dashed/dotted chrome. Title + verse readable; title must never overlap verse.
+- **Inline scripture refs** in body → **bold**.
+- Do **not** restyle template headers (Introducción stays white on the blue bar).
+- **Conclusión body** = Times New Roman 42pt — always force it.
+- **Propósitos SmartArt:** after filling `data2.xml` + `drawing2.xml`, force **`drawing2.xml` body `sz="3600"` (36pt)** — never leave template `5600` (56pt). Long purposes at 56pt overflow and PDF-double-render as distorted ghost text. Spot-check Propósitos in the PDF every deck.
+- Próximo estudio = title-slide layout; multi-citation base = one line per `;`.
+
+## Adult (`--audience adult`) — HARD
+
+Full guide: `lamad-cli/src/build/adult/LAYOUT_GUIDE.md`. Builder: `lamad-cli` adult path.
+
+- **No `()`** on Texto Bíblico citations or TEMA/A-B image verse lines (`MATEO 6:1-4`, not `(MATEO 6:1-4)`). Body inline refs may keep `(Libro …)`.
+- **Title/próximo:** strip `<a:highlight>` — no cyan chip behind the title (match youth).
+- **Text overflow:** if text is too big, **decrease the font** (long TEMA/A-B image titles → 18–20pt; A/B body headers → next smaller size, top-anchored). Title must never overlap the verse under the gray line or climb off the top of the slide.
+- **Image slides:** clone youth chrome at bottom-left; **remove** black `!!Rectangle`; force full-bleed `<a:stretch><a:fillRect/></a:stretch>`; scenic pic must be visible.
+- **Pensamiento / Texto Áureo:** correct SmartArt slots; citation on the **next line** under the quote; no `()`; shrink long diagram text.
+- **Texto box:** clamp verse box below “Texto Bíblico” header; no overlap.
+- Output only to repo-root `bible-studies/`. Run QC + validate; no PowerPoint Repair.
+
+## Font & bold (HARD — every deck)
+
+**Preserve template bold by default.** Never strip `b="1"` globally. Force regular weight **only** where listed.
+
+| What | Weight |
+|------|--------|
+| `Base Bíblica:` label (title + próximo) | **Bold** |
+| Citation lines under Base Bíblica | Regular |
+| Lectura/Texto citation title | **Bold** |
+| Lectura/Texto verse numbers | **Bold** |
+| Lectura/Texto verse body | Regular |
+| Section titles + verse under gray line | **Bold** |
+| A/B titles (`1.A- …`) | **Bold** (Times New Roman ~40pt) |
+| Comentario / Intro / A-B body | Regular (Verlag Light); refs **bold** |
+| Conclusión body | Times New Roman 42pt; refs **bold** |
+
+OOXML pitfall: helpers that default to `bold=False` and delete `b="1"` will break Lectura, Texto, and A/B titles. Default = preserve; force unbold only for Base Bíblica citation lines and non-ref body spans when bolding inline refs.

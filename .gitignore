@@ -1,19 +1,62 @@
-# Generated Bible study decks
-bible-studies/
+# Generated Bible study decks (PPTX/PDF) — NEVER commit these
+# Output dir is repo-root bible-studies/ only (not lamad-cli/bible-studies).
+bible-studies/**
+!bible-studies/.gitkeep
+# Also catch decks dropped at repo root / wrong CLI paths by mistake
+*-working-progress.pptx
+*-working-progress.pdf
+*.pptx
+!template/**/*.pptx
+!lamad-cli/template/**/*.pptx
+!lamad-cli/tests/fixtures/**/*.pptx
 
-# Build / OCR scratch
-_build*.py
+# Prepare JSON + section images (local agent artifacts)
+studies/**
+!studies/**/
+!studies/README.md
+!studies/*/README.md
+
+# CLI / agent scratch (page rasters, previews, unzipped builds)
+# Always under repo-root generated/ — never commit; safe to delete locally.
+generated/
+lamad-cli/generated/
+
+# Legacy scratch paths (kept ignored if anything still lands here)
+tmp/
 _pdf-preview/
+_page*.png
+_study*_page*.png
+_build*.py
 _agent-reference.pptx
+
 __pycache__/
 *.py[cod]
 *$py.class
+*.egg-info/
 
 # Source scan / batch PDFs (large inputs)
 *.pdf
 
+# lamad-cli scan tray — PDFs, error logs, archives (keep folder placeholders only)
+lamad-cli/scans/**
+!lamad-cli/scans/.gitkeep
+!lamad-cli/scans/complete/
+!lamad-cli/scans/complete/.gitkeep
+!lamad-cli/scans/error/
+!lamad-cli/scans/error/.gitkeep
+
+# Alternate repo-root scans tray (if used)
+scans/**
+!scans/.gitkeep
+!scans/complete/
+!scans/complete/.gitkeep
+!scans/error/
+!scans/error/.gitkeep
+
 # IDE & local settings
-.cursor/
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
 .vscode/
 .idea/
 
@@ -22,3 +65,32 @@ __pycache__/
 ._*
 ~$*
 Thumbs.db
+
+.venv/
+
+# Rust (lamad-cli/)
+lamad-cli/target/
+lamad-cli/config.toml
+lamad-cli/dist/
+
+# Bundled poppler (filled by package-release.sh — do not commit)
+lamad-cli/tools/pdftoppm
+lamad-cli/tools/pdftoppm.exe
+lamad-cli/tools/*.dll
+lamad-cli/tools/*.dylib
+lamad-cli/tools/lib/
+!lamad-cli/tools/README.md
+
+# Adult template scratch / local gold decks — keep master-template.pptx tracked
+lamad-cli/template/adult/**
+!lamad-cli/template/adult/.gitkeep
+!lamad-cli/template/adult/master-template.pptx
+!lamad-cli/template/adult/assets/
+!lamad-cli/template/adult/assets/**
+template/adult/**
+!template/adult/README.md
+!template/adult/master-template.pptx
+
+# Secrets
+.env
+.env.local
