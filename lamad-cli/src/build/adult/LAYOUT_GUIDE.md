@@ -1,7 +1,7 @@
 # Adult study layout guide
 
-**Reference deck:** Estudio 4 — *DIOS BUSCA DISCÍPULOS CONFORME A SU CORAZÓN* (finished `.pptx` in `bible-studies/` after manual QA).  
-Use that deck + this guide as the **visual authority** for adult builds. `template/adult/master-template.pptx` is the 62-slide OOXML prototype remapped from Estudio 4 (`scripts/prepare_adult_master_template.py`). When an old prototype disagrees with Estudio 4 or this guide, **follow Estudio 4 + this guide**.
+**Reference:** Estudio 4 — *DIOS BUSCA DISCÍPULOS CONFORME A SU CORAZÓN* (manual QA) + this guide.  
+`template/adult/master-template.pptx` is the **OOXML prototype package** only. Layout corrections (title fit, datos centering, intro body band, TEMA/A-B chrome width/contrast) live in **Rust** (`ooxml.rs`, `title.rs`, `contrast.rs`). Never remap a finished built deck into the master — that broke PowerPoint with Repair.
 
 Images may use a **new house style** (AI-generated, cinematic, full-bleed). Typography, colours, and chrome come from the template; only the photo/illustration art changes per study.
 
@@ -255,6 +255,6 @@ Insert via OOXML media replace (`ppt/media/imageN.png`) — same pattern as yout
 | File | Role |
 |------|------|
 | `reference/definicion-etimologia-design.png` | Visual authority for definición cards |
-| `SLIDE_MAP.md` | OOXML shape names for study 4 prototype |
-| `scripts/prepare_adult_master_template.py` | Build `master-template.pptx` from gold PPTX |
+| `SLIDE_MAP.md` | OOXML shape names for adult prototype |
+| `scripts/prepare_adult_master_template.py` | Copy intact prototype + fix notes (not for finished decks) |
 | `scripts/extract_adult_study_json.py` | Extract JSON from a finished deck |

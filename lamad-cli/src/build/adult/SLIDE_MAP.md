@@ -1,7 +1,7 @@
-# Adult template slide map — study 4 (`4 - DIOS BUSCA DISCÍPULOS CONFORME A SU CORAZÓN.pptx`)
+# Adult template slide map — prototype (`master-template.pptx`)
 
-Visual gold: `bible-studies/4 - DIOS BUSCA DISCÍPULOS CONFORME A SU CORAZÓN.pptx` (finished deck after manual QA)  
-Build template: `template/adult/master-template.pptx` (62-slide prototype — run `lamad-cli/scripts/prepare_adult_master_template.py` to remap gold layouts onto proto slide numbers)
+Visual QA reference: Estudio 4 (layout rules in `LAYOUT_GUIDE.md` + Rust builder).  
+Build template: `template/adult/master-template.pptx` (62-slide prototype package). Do **not** remap finished decks into this file.
 
 Total slides in `sldIdLst`: **62** (`slide1.xml` … `slide62.xml`)
 
