@@ -122,6 +122,7 @@ pub fn scans_dir() -> Result<PathBuf> {
     } else {
         std::fs::create_dir_all(a.join("complete"))?;
         std::fs::create_dir_all(a.join("error"))?;
+        std::fs::create_dir_all(a.join("pending"))?;
         Ok(a)
     }
 }

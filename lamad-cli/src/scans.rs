@@ -1,4 +1,4 @@
-//! Scan tray: list PDFs in scans/, archive successes to complete/, log failures.
+//! Scan tray: inbox in `scans/`, archive successes to `pending/` or `complete/`, log failures.
 
 use anyhow::{Context, Result};
 use std::fs;
@@ -6,19 +6,33 @@ use std::path::{Path, PathBuf};
 
 use crate::paths;
 
-/// List `*.pdf` directly in scans/ (not complete/ or error/, no recursion).
+/// Subfolders under `scans/` — not treated as inbox PDFs.
+const TRAY_DIRS: &[&str] = &["complete", "error", "pending"];
+
+/// List `*.pdf` directly in `scans/` (inbox only — not `pending/`, `complete/`, or `error/`).
+pub fn list_inbox_pdfs() -> Result<Vec<PathBuf>> {
+    list_pdfs_in_dir(&paths::scans_dir()?, TRAY_DIRS)
+}
+
+/// Back-compat alias — lists the **inbox**, not `scans/pending/`.
 pub fn list_pending_pdfs() -> Result<Vec<PathBuf>> {
-    let dir = paths::scans_dir()?;
-    ensure_tray(&dir)?;
+    list_inbox_pdfs()
+}
+
+fn list_pdfs_in_dir(dir: &Path, skip_subdirs: &[&str]) -> Result<Vec<PathBuf>> {
+    ensure_tray(dir)?;
     let mut out = Vec::new();
-    for entry in fs::read_dir(&dir).with_context(|| format!("read {}", dir.display()))? {
+    for entry in fs::read_dir(dir).with_context(|| format!("read {}", dir.display()))? {
         let entry = entry?;
         let path = entry.path();
         if !path.is_file() {
             continue;
         }
         let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-        if name.eq_ignore_ascii_case("complete") || name.eq_ignore_ascii_case("error") {
+        if skip_subdirs
+            .iter()
+            .any(|d| name.eq_ignore_ascii_case(d))
+        {
             continue;
         }
         if path
@@ -37,13 +51,23 @@ pub fn list_pending_pdfs() -> Result<Vec<PathBuf>> {
 pub fn ensure_tray(dir: &Path) -> Result<()> {
     fs::create_dir_all(dir.join("complete"))?;
     fs::create_dir_all(dir.join("error"))?;
+    fs::create_dir_all(dir.join("pending"))?;
     Ok(())
 }
 
+/// After a **successful** prepare when more estudios remain in the PDF.
+pub fn move_to_pending(pdf: &Path) -> Result<PathBuf> {
+    move_pdf_to_tray(pdf, "pending")
+}
+
 pub fn move_to_complete(pdf: &Path) -> Result<PathBuf> {
+    move_pdf_to_tray(pdf, "complete")
+}
+
+fn move_pdf_to_tray(pdf: &Path, tray: &str) -> Result<PathBuf> {
     let dir = paths::scans_dir()?;
     ensure_tray(&dir)?;
-    let dest = unique_dest(dir.join("complete"), pdf)?;
+    let dest = unique_dest(dir.join(tray), pdf)?;
     fs::rename(pdf, &dest)
         .or_else(|_| {
             fs::copy(pdf, &dest)?;
@@ -62,18 +86,7 @@ pub fn move_to_complete(pdf: &Path) -> Result<PathBuf> {
 /// archive (corrupt scan, abandoned job) — never mid-prepare.
 #[allow(dead_code)]
 pub fn move_to_error_tray(pdf: &Path) -> Result<PathBuf> {
-    let dir = paths::scans_dir()?;
-    ensure_tray(&dir)?;
-    let dest = unique_dest(dir.join("error"), pdf)?;
-    fs::rename(pdf, &dest)
-        .or_else(|_| {
-            fs::copy(pdf, &dest)?;
-            fs::remove_file(pdf)?;
-            Ok::<(), anyhow::Error>(())
-        })
-        .with_context(|| format!("move {} → error", pdf.display()))?;
-    println!("Moved to {}", dest.display());
-    Ok(dest)
+    move_pdf_to_tray(pdf, "error")
 }
 
 /// On prepare failure: write a `.log` under `scans/error/`. The PDF stays in
@@ -86,6 +99,66 @@ pub fn write_error_log(pdf: &Path, log: &str) -> Result<PathBuf> {
     fs::write(&log_path, log)?;
     eprintln!("Error log: {}", log_path.display());
     Ok(log_path)
+}
+
+/// Locate a PDF archived under `scans/pending/` (same basename / `-N` variants).
+pub fn find_in_pending_tray(file_name: &str) -> Option<PathBuf> {
+    find_in_tray("pending", file_name)
+}
+
+/// Locate a PDF archived under `scans/complete/`.
+pub fn find_in_complete_tray(file_name: &str) -> Option<PathBuf> {
+    find_in_tray("complete", file_name)
+}
+
+fn find_in_tray(tray: &str, file_name: &str) -> Option<PathBuf> {
+    let dir = paths::scans_dir().ok()?;
+    let tray_dir = dir.join(tray);
+    if !tray_dir.is_dir() {
+        return None;
+    }
+    let stem = Path::new(file_name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(file_name);
+    let mut matches: Vec<PathBuf> = Vec::new();
+    let rd = fs::read_dir(&tray_dir).ok()?;
+    for entry in rd.flatten() {
+        let p = entry.path();
+        if !p.is_file() {
+            continue;
+        }
+        let is_pdf = p
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("pdf"))
+            .unwrap_or(false);
+        if !is_pdf {
+            continue;
+        }
+        let n = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        let is_variant = n
+            .strip_prefix(stem)
+            .map(|rest| {
+                rest.eq_ignore_ascii_case(".pdf")
+                    || (rest.starts_with('-') && rest.to_ascii_lowercase().ends_with(".pdf"))
+            })
+            .unwrap_or(false);
+        if n.eq_ignore_ascii_case(file_name) || is_variant {
+            matches.push(p);
+        }
+    }
+    matches.sort();
+    matches
+        .iter()
+        .find(|p| {
+            p.file_name()
+                .and_then(|s| s.to_str())
+                .map(|n| n.eq_ignore_ascii_case(file_name))
+                .unwrap_or(false)
+        })
+        .cloned()
+        .or_else(|| matches.pop())
 }
 
 fn unique_log_dest(error_dir: &Path, pdf: &Path) -> Result<PathBuf> {

@@ -116,9 +116,10 @@ OCR discover (`-n N` alone): rasterizes pages, finds title pages (`Base bíblica
 ### Scans tray
 
 ```
-scans/           ← drop PDFs here
-scans/complete/  ← moved here on success
-scans/error/     ← `.log` on failure; PDF moved here only when more estudios remain in the file
+scans/           ← inbox: drop new PDFs here
+scans/pending/   ← moved here after a successful prepare when more estudios remain in the PDF
+scans/complete/  ← moved here when the entire PDF was prepared successfully
+scans/error/     ← `.log` on failure only; PDF stays in scans/ for retry
 ```
 
 ## Configuration

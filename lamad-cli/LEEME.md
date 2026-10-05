@@ -12,7 +12,7 @@ Herramienta para voluntarios: un solo binario. **No necesita Python.** `lamad --
      - Cursor → `cursor_api_key` ([API Keys](https://cursor.com/dashboard/api))
      - ChatGPT → `openai_api_key` (OpenAI platform)
    - `pdftoppm_path` ya apunta a `tools/pdftoppm` (o `.exe` en Windows).
-2. Ponga el PDF de escaneo en `scans/` (no en `complete/` ni `error/`).
+2. Ponga el PDF de escaneo en `scans/` (no en `pending/`, `complete/` ni `error/`).
 3. Ejecute:
    ```bash
    ./lamad prepare --from 23 --to 26
@@ -28,6 +28,6 @@ El zip **incluye** `tools/pdftoppm` — no hace falta instalar poppler aparte. S
 - **macOS** + **Microsoft PowerPoint** solo si quiere exportar PDF (el `.pptx` se genera igual en Windows/Linux).
 - El binario empaquetado trae poppler; en desarrollo local puede usar `brew install poppler` / `PATH`.
 
-Tras éxito, el PDF pasa a `scans/complete/` cuando se procesó todo el archivo. Si falla: se escribe un `.log` en `scans/error/`; el PDF **permanece en `scans/`** para reintentar, salvo que queden más estudios en el PDF — entonces se mueve a `scans/error/`.
+Tras éxito: el PDF pasa a `scans/pending/` si quedan más estudios en el archivo (use `--pdf scans/pending/…` para el siguiente), o a `scans/complete/` si se preparó todo el PDF. Si falla: se escribe un `.log` en `scans/error/` y el PDF **permanece en `scans/`** para reintentar.
 
 Más detalle: [README.md](README.md).

@@ -62,7 +62,7 @@ pub enum Commands {
     /// **Optional:** `--prepare-only` (JSON/images only), `--review` (cloud QA).
     /// QA later without re-preparing: `lamad review -n N`.
     ///
-    /// Looks for `*.pdf` directly under `scans/` (not `scans/complete/` or `scans/error/`).
+    /// Looks for `*.pdf` directly under `scans/` (inbox — not `pending/`, `complete/`, or `error/`).
     /// Batch: `--from N --to M`. Single: `-n N` (OCR discover) or `--from F -n N` (page math).
     /// Without `--from`/`--to`/`-n` on a TTY, opens the interactive form.
     Prepare(PrepareArgs),

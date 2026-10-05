@@ -62,9 +62,10 @@ impl PrepareJob {
         match list.len() {
             0 => bail!(
                 "No hay PDF de scan en scans/.\n\
-                 Pon el documento en scans/ (no en scans/complete/ ni scans/error/), \
-                 o pasa --pdf \"Nombre del documento.pdf\".\n\
-                 Ejemplo: --pdf \"scans/Bible Study 4 - Adult.pdf\""
+                 Pon el documento en scans/ (no en pending/, complete/ ni error/), \
+                 o pasa --pdf con la ruta al PDF.\n\
+                 Ejemplo: --pdf \"scans/Bible Study 4 - Adult.pdf\"\n\
+                 Si ya preparaste un estudio, el PDF puede estar en scans/pending/."
             ),
             1 => Ok(list[0].clone()),
             _ => bail!(
@@ -215,7 +216,24 @@ fn missing_scan_pdf_message(path: &Path, from: u32, to: u32) -> String {
         path.display()
     );
 
-    if let Some(in_error) = find_in_error_tray(name) {
+    if let Some(in_pending) = scans::find_in_pending_tray(name) {
+        msg.push_str(&format!(
+            "\n\
+             Hallado en scans/pending/ (prepare exitoso anterior — más estudios pendientes):\n\
+               {}\n\
+             Usa:\n\
+               --pdf \"{}\"",
+            in_pending.display(),
+            in_pending.display()
+        ));
+    } else if let Some(in_complete) = scans::find_in_complete_tray(name) {
+        msg.push_str(&format!(
+            "\n\
+             Hallado en scans/complete/ (todo el PDF ya se preparó):\n\
+               {}",
+            in_complete.display()
+        ));
+    } else if let Some(in_error) = find_in_error_tray(name) {
         msg.push_str(&format!(
             "\n\
              Hallado en scans/error/ (falló un prepare anterior):\n\
@@ -228,7 +246,7 @@ fn missing_scan_pdf_message(path: &Path, from: u32, to: u32) -> String {
     } else {
         msg.push_str(
             "\n\
-             Pon el PDF en scans/ (no en scans/complete/ ni scans/error/) \
+             Pon el PDF en scans/ (no en pending/, complete/ ni error/) \
              y vuelve a correr prepare.",
         );
     }

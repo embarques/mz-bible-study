@@ -186,19 +186,23 @@ pub async fn run(job: PrepareJob, cfg: &Config) -> Result<()> {
         run_review(&studies, &pdf, !job.prepare_only, &job, cfg, &root).await?;
     }
 
-    // Archive only when this job prepared the full contiguous span from
-    // PDF page 1 through EOF (no leftover studies for a later run).
+    // Archive the scan PDF only after a fully successful prepare.
     let covered_through = slices
         .last()
         .map(|s| s.pages.1 as usize)
         .unwrap_or(0);
     let started_at_page_one = slices.first().map(|s| s.pages.0 == 1).unwrap_or(false);
-    if started_at_page_one && covered_through >= page_count {
+    let pdf_fully_prepared = started_at_page_one && covered_through >= page_count;
+    if pdf_fully_prepared {
         scans::move_to_complete(&pdf)?;
-        progress::info(format!("done — {} prepared", studies.len()));
-    } else {
         progress::info(format!(
-            "done — {} prepared; PDF left in scans/ (more pages remain)",
+            "done — {} prepared; PDF archived to scans/complete/",
+            studies.len()
+        ));
+    } else {
+        scans::move_to_pending(&pdf)?;
+        progress::info(format!(
+            "done — {} prepared; PDF archived to scans/pending/ (more estudios remain — use --pdf for the next run)",
             studies.len()
         ));
     }

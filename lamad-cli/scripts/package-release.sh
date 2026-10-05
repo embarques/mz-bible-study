@@ -93,7 +93,7 @@ fi
 
 # --- stage tree ---
 rm -rf "$STAGE"
-mkdir -p "$STAGE/tools" "$STAGE/scans/complete" "$STAGE/scans/error" \
+mkdir -p "$STAGE/tools" "$STAGE/scans/complete" "$STAGE/scans/pending" "$STAGE/scans/error" \
   "$STAGE/studies/youth/media" "$STAGE/bible-studies" \
   "$STAGE/template/youth"
 
@@ -114,7 +114,7 @@ cp "$ROOT/config.example.toml" "$STAGE/config.example.toml"
 cp "$ROOT/LEEME.md" "$STAGE/LEEME.md"
 cp "$ROOT/README.md" "$STAGE/README.md"
 cp "$ROOT/tools/README.md" "$STAGE/tools/README.md"
-touch "$STAGE/scans/complete/.gitkeep" "$STAGE/scans/error/.gitkeep"
+touch "$STAGE/scans/complete/.gitkeep" "$STAGE/scans/pending/.gitkeep" "$STAGE/scans/error/.gitkeep"
 
 # --- config.toml for volunteers ---
 cat > "$STAGE/config.toml" <<EOF

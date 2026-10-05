@@ -42,6 +42,8 @@ lamad-cli/scans/**
 !lamad-cli/scans/.gitkeep
 !lamad-cli/scans/complete/
 !lamad-cli/scans/complete/.gitkeep
+!lamad-cli/scans/pending/
+!lamad-cli/scans/pending/.gitkeep
 !lamad-cli/scans/error/
 !lamad-cli/scans/error/.gitkeep
 
@@ -50,6 +52,8 @@ scans/**
 !scans/.gitkeep
 !scans/complete/
 !scans/complete/.gitkeep
+!scans/pending/
+!scans/pending/.gitkeep
 !scans/error/
 !scans/error/.gitkeep
 

@@ -12,7 +12,7 @@ Welcome. This guide is for **junior and first-time contributors**. You do **not*
 | Config file fields | [`src/config.rs`](src/config.rs) |
 | Volunteer zip (binary + poppler) | [`scripts/package-release.sh`](scripts/package-release.sh) |
 | Study numbers / page math / `PrepareJob` | [`src/job.rs`](src/job.rs) |
-| `scans/` tray (list / move complete/error) | [`src/scans.rs`](src/scans.rs) |
+| `scans/` tray (inbox / pending / complete / error) | [`src/scans.rs`](src/scans.rs) |
 | Finding `template/`, `studies/`, `bible-studies/` | [`src/paths.rs`](src/paths.rs) |
 | Resolving bundled / config `pdftoppm` | [`src/pdftoppm.rs`](src/pdftoppm.rs) |
 | `-n` OCR discover (find estudio in PDF) | [`src/discover.rs`](src/discover.rs) |
