@@ -180,19 +180,39 @@ impl CursorClient {
     ///
     /// Always shows a spinner with status + elapsed. Optional `--stream` dumps
     /// raw agent narration (often duplicated SSE chunks — opt-in only).
+    ///
+    /// When `progress` is set, polls artifacts and shows which prepare step
+    /// is in flight (JSON / images / closing).
     pub async fn wait_run(
         &self,
         agent_id: &str,
         run_id: &str,
         stream: bool,
     ) -> Result<RunStatus> {
+        self.wait_run_with_progress(agent_id, run_id, stream, None)
+            .await
+    }
+
+    pub async fn wait_run_with_progress(
+        &self,
+        agent_id: &str,
+        run_id: &str,
+        stream: bool,
+        mut progress_tracker: Option<&mut crate::agent::wait_progress::CloudAgentProgress>,
+    ) -> Result<RunStatus> {
         use crate::progress;
         use std::time::Instant;
 
         let started = Instant::now();
-        let spinner = progress::Spinner::start(format!(
-            "Waiting for Cursor agent (run {run_id})…"
-        ));
+        if let Some(p) = progress_tracker.as_mut() {
+            p.print_plan();
+        }
+        let spinner = progress::Spinner::start(
+            progress_tracker
+                .as_ref()
+                .map(|p| p.spinner_label("RUNNING"))
+                .unwrap_or_else(|| format!("Waiting for Cursor agent (run {run_id})…")),
+        );
 
         // Stream in the background so the spinner keeps ticking; raw text is
         // noisy so we only enable it when the user asked for `--stream`.
@@ -208,26 +228,52 @@ impl CursorClient {
             None
         };
 
-        let mut last_status = String::new();
+        let mut poll_n: u32 = 0;
+        if progress_tracker.is_some() {
+            spinner.note("Step 3/4 · reading uploaded PDF pages…");
+        }
         loop {
             let st = self.get_run(agent_id, run_id).await?;
             let s = st.status.to_uppercase();
-            if s != last_status {
-                last_status = s.clone();
-                spinner.set_message(format!(
-                    "Waiting for Cursor agent… {s} ({})",
-                    progress::fmt_elapsed(started.elapsed())
-                ));
+
+            // Poll artifacts every other tick (~6s) so we don't hammer the API.
+            let label = if let Some(tracker) = progress_tracker.as_mut() {
+                poll_n = poll_n.wrapping_add(1);
+                if poll_n % 2 == 1 {
+                    match self.list_artifacts(agent_id).await {
+                        Ok(arts) => {
+                            let (label, notes) = tracker.on_artifacts(&s, &arts);
+                            for n in notes {
+                                spinner.note(n);
+                            }
+                            label
+                        }
+                        Err(_) => tracker.spinner_label(&s),
+                    }
+                } else {
+                    tracker.spinner_label(&s)
+                }
             } else {
-                // Refresh elapsed even when status is unchanged.
-                spinner.set_message(format!(
-                    "Waiting for Cursor agent… {s} ({})",
-                    progress::fmt_elapsed(started.elapsed())
-                ));
-            }
+                format!("Waiting for Cursor agent… {s}")
+            };
+            spinner.set_message(format!(
+                "{label} ({})",
+                progress::fmt_elapsed(started.elapsed())
+            ));
+
             if s == "FINISHED" || s == "COMPLETED" || s == "DONE" {
                 if let Some(h) = stream_handle {
                     h.abort();
+                }
+                // Final artifact sweep so late files still get ✓ lines.
+                if let Some(tracker) = progress_tracker.as_mut() {
+                    if let Ok(arts) = self.list_artifacts(agent_id).await {
+                        let (_, notes) = tracker.on_artifacts(&s, &arts);
+                        for n in notes {
+                            spinner.note(n);
+                        }
+                    }
+                    spinner.note("Step 3/4 · agent run finished");
                 }
                 spinner.succeed(format!(
                     "agent finished ({})",
@@ -327,9 +373,30 @@ impl CursorClient {
     }
 
     pub async fn download_artifact(&self, agent_id: &str, path: &str, dest: &Path) -> Result<()> {
+        self.download_artifact_inner(agent_id, path, dest, true).await
+    }
+
+    /// Download without a per-file spinner (use with a shared progress bar).
+    pub async fn download_artifact_quiet(
+        &self,
+        agent_id: &str,
+        path: &str,
+        dest: &Path,
+    ) -> Result<()> {
+        self.download_artifact_inner(agent_id, path, dest, false)
+            .await
+    }
+
+    async fn download_artifact_inner(
+        &self,
+        agent_id: &str,
+        path: &str,
+        dest: &Path,
+        show_spinner: bool,
+    ) -> Result<()> {
         use crate::progress;
 
-        let spin = progress::Spinner::start(format!("Downloading {path}…"));
+        let spin = show_spinner.then(|| progress::Spinner::start(format!("Downloading {path}…")));
         let resp = self
             .http
             .get(format!("{API_BASE}/v1/agents/{agent_id}/artifacts/download"))
@@ -341,7 +408,9 @@ impl CursorClient {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
         if !status.is_success() {
-            spin.fail(format!("download failed HTTP {status}"));
+            if let Some(spin) = spin {
+                spin.fail(format!("download failed HTTP {status}"));
+            }
             bail!("artifact download HTTP {status}: {text}");
         }
         let url: DownloadUrl = serde_json::from_str(&text)
@@ -353,7 +422,9 @@ impl CursorClient {
             })
             .context("parse download url")?;
 
-        spin.set_message(format!("Fetching bytes for {path}…"));
+        if let Some(spin) = &spin {
+            spin.set_message(format!("Fetching bytes for {path}…"));
+        }
         let bytes = self
             .http
             .get(&url.url)
@@ -368,13 +439,15 @@ impl CursorClient {
         std::fs::write(dest, &bytes)
             .with_context(|| format!("write artifact {}", dest.display()))?;
         let kb = bytes.len() / 1024;
-        spin.succeed(format!(
-            "{} → {} ({kb} KB)",
-            path,
-            dest.file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("file")
-        ));
+        if let Some(spin) = spin {
+            spin.succeed(format!(
+                "{} → {} ({kb} KB)",
+                path,
+                dest.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("file")
+            ));
+        }
         Ok(())
     }
 }

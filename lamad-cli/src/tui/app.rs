@@ -89,6 +89,8 @@ impl Model {
             discover: false,
             audience: self.audience,
             prepare_only: false,
+            force_prepare: false,
+            gen_images: false,
             export_pdf: true,
             review: false,
             template: None,

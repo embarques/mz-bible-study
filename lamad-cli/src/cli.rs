@@ -109,6 +109,17 @@ pub struct PrepareArgs {
     #[arg(long)]
     pub prepare_only: bool,
 
+    /// Re-run the cloud agent even when JSON + images already exist locally
+    /// (default: auto-resume — skip the agent and rebuild from disk)
+    #[arg(long = "force-prepare")]
+    pub force_prepare: bool,
+
+    /// (Re)generate section/scenic images from existing study JSON via OpenAI.
+    /// Overwrites images if they already exist. Requires openai_api_key / OPENAI_API_KEY
+    /// and a ready `{N}.json`. Skips the cloud agent.
+    #[arg(long = "gen-images")]
+    pub gen_images: bool,
+
     /// PDF export is on by default; pass --no-export-pdf to skip it
     #[arg(long = "export-pdf", default_value_t = true)]
     #[arg(long = "no-export-pdf", action = ArgAction::SetFalse)]

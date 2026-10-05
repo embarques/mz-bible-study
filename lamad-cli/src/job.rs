@@ -37,6 +37,10 @@ pub struct PrepareJob {
     pub discover: bool,
     pub audience: Audience,
     pub prepare_only: bool,
+    /// When true, ignore local JSON/images and re-run the cloud agent.
+    pub force_prepare: bool,
+    /// When true, (re)generate images from existing JSON via OpenAI (overwrite).
+    pub gen_images: bool,
     pub export_pdf: bool,
     pub review: bool,
     pub template: Option<PathBuf>,
@@ -70,7 +74,7 @@ impl PrepareJob {
         }
     }
 
-    pub fn echo_plan(&self) {
+    pub fn echo_plan(&self, host_images: bool) {
         let pdf_disp = self
             .pdf
             .as_ref()
@@ -90,6 +94,26 @@ impl PrepareJob {
             );
         }
         println!("  Audience: {}", self.audience.as_str());
+        if self.force_prepare {
+            println!("  Resume:   off (--force-prepare — agent will re-create JSON + images)");
+        } else if self.gen_images {
+            println!(
+                "  Resume:   --gen-images — keep JSON, (re)generate images via OpenAI, then build"
+            );
+        } else {
+            println!(
+                "  Resume:   on — if studies/{}/{{N}} already has complete JSON + images, \
+                 skip the agent and rebuild",
+                self.audience.as_str()
+            );
+        }
+        if host_images {
+            println!("  Images:   host parallel (OpenAI) — fast path ON");
+        } else {
+            println!(
+                "  Images:   cloud agent (slow) — set openai_api_key / OPENAI_API_KEY for fast path"
+            );
+        }
         if self.prepare_only {
             println!("  Deliver:  JSON + images only (--prepare-only — no PowerPoint)");
         } else {
@@ -107,6 +131,8 @@ impl PrepareJob {
                 "no — run `lamad review` later if you want a checklist"
             }
         );
+        let n = self.to.saturating_sub(self.from).saturating_add(1);
+        crate::progress::print_prepare_eta(self.audience, n, self.prepare_only, host_images);
     }
 }
 

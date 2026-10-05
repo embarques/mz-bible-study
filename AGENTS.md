@@ -6,6 +6,10 @@ User-facing summary: [`README.md`](README.md). Template index: [`template/README
 
 **Deliverables every study:** after the `.pptx` is complete and validates, also export a **PDF** beside it (same name, `.pdf`). Do this automatically — do not ask.
 
+### Git / PR (HARD — protect `main`)
+
+Do **not** commit or land day-to-day work on `main`. Before editing: create `feat/<topic>` (or `fix/…` / `chore/…`), commit there, push, open a **PR into `main`**. Merge only when the user asks. Rule file: [`.cursor/rules/git-branch-pr.mdc`](.cursor/rules/git-branch-pr.mdc).
+
 ---
 
 ## Required inputs (every study)

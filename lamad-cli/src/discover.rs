@@ -11,6 +11,7 @@
 //! 3 pages; adult title→title gaps may be longer (use next title page − 1).
 
 use anyhow::{bail, Context, Result};
+use indicatif::ProgressBar;
 use regex::Regex;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -37,9 +38,38 @@ pub fn discover_study_pages(
     if page_count == 0 {
         bail!("PDF has no pages: {}", pdf.display());
     }
-
     let texts = page_texts(pdf, page_count, pdftoppm_path)?;
-    let mut title_pages = find_title_pages(&texts);
+    study_pages_from_texts(pdf, study, &texts, page_count)
+}
+
+/// OCR/text-extract once, then resolve many estudios (batch `--from`/`--to` with discover).
+pub fn discover_study_pages_batch(
+    pdf: &Path,
+    studies: &[u32],
+    pdftoppm_path: Option<&Path>,
+) -> Result<Vec<StudyPages>> {
+    let page_count = pdf_page_count(pdf)?;
+    if page_count == 0 {
+        bail!("PDF has no pages: {}", pdf.display());
+    }
+    if studies.is_empty() {
+        return Ok(Vec::new());
+    }
+    let texts = page_texts(pdf, page_count, pdftoppm_path)?;
+    let mut out = Vec::with_capacity(studies.len());
+    for &study in studies {
+        out.push(study_pages_from_texts(pdf, study, &texts, page_count)?);
+    }
+    Ok(out)
+}
+
+fn study_pages_from_texts(
+    pdf: &Path,
+    study: u32,
+    texts: &[String],
+    page_count: usize,
+) -> Result<StudyPages> {
+    let mut title_pages = find_title_pages(texts);
     // Also accept pages that clearly show "N LECTURA B…" as title anchors
     // even when Base/Idea OCR is weak.
     for (i, t) in texts.iter().enumerate() {
@@ -200,43 +230,104 @@ fn page_texts(
     std::fs::create_dir_all(&root)?;
 
     let bin = crate::pdftoppm::resolve(pdftoppm_path)?;
+    // One pdftoppm for the whole PDF (much faster than per-page) + parallel OCR.
+    // 150dpi is enough to read ESTUDIO / Base bíblica badges.
     crate::progress::phase(format!(
-        "Discover: rasterizing {page_count} pages @200dpi + tesseract ({})",
+        "Discover: rasterizing {page_count} pages @150dpi (one shot) + parallel tesseract ({})",
         tesseract.display()
     ));
 
-    let pb = crate::progress::bar(page_count as u64, "OCR pages");
-    let mut texts = Vec::with_capacity(page_count);
-    for p in 1..=page_count as u32 {
-        let prefix = root.join(format!("page-{p}"));
-        let mut cmd = Command::new(&bin);
-        crate::pdftoppm::configure_command(&mut cmd, &bin);
-        let status = cmd
-            .args([
-                "-png",
-                "-r",
-                "200",
-                "-f",
-                &p.to_string(),
-                "-l",
-                &p.to_string(),
-                "-singlefile",
-                pdf.to_str().unwrap_or(""),
-                prefix.to_str().unwrap_or(""),
-            ])
-            .status()
-            .with_context(|| format!("pdftoppm page {p}"))?;
-        if !status.success() {
-            pb.abandon_with_message("OCR failed");
-            bail!("pdftoppm failed for page {p}");
-        }
-        let png = root.join(format!("page-{p}.png"));
-        let text = tesseract_ocr(&tesseract, &png)?;
-        texts.push(text);
-        pb.inc(1);
+    let prefix = root.join("page");
+    let mut cmd = Command::new(&bin);
+    crate::pdftoppm::configure_command(&mut cmd, &bin);
+    let status = cmd
+        .args([
+            "-png",
+            "-r",
+            "150",
+            pdf.to_str().unwrap_or(""),
+            prefix.to_str().unwrap_or(""),
+        ])
+        .status()
+        .context("pdftoppm (all pages)")?;
+    if !status.success() {
+        bail!("pdftoppm failed while rasterizing {}", pdf.display());
     }
+
+    // pdftoppm writes page-1.png … page-N.png (1-based, zero-padded sometimes).
+    let mut pngs: Vec<PathBuf> = Vec::with_capacity(page_count);
+    for p in 1..=page_count {
+        let candidates = [
+            root.join(format!("page-{p}.png")),
+            root.join(format!("page-{p:02}.png")),
+            root.join(format!("page-{p:03}.png")),
+        ];
+        let png = candidates
+            .into_iter()
+            .find(|c| c.is_file())
+            .with_context(|| format!("missing raster for page {p} under {}", root.display()))?;
+        pngs.push(png);
+    }
+
+    let pb = crate::progress::bar(page_count as u64, "OCR pages");
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .clamp(2, 8);
+    let texts = ocr_pages_parallel(&tesseract, &pngs, workers, &pb)?;
     pb.finish_with_message("OCR complete");
     Ok(texts)
+}
+
+/// Run tesseract on many page PNGs with a small thread pool.
+fn ocr_pages_parallel(
+    tesseract: &Path,
+    pngs: &[PathBuf],
+    workers: usize,
+    pb: &ProgressBar,
+) -> Result<Vec<String>> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    let page_count = pngs.len();
+    let next = AtomicUsize::new(0);
+    let slot: Mutex<Vec<Option<Result<String>>>> = Mutex::new((0..page_count).map(|_| None).collect());
+    let err_flag = AtomicUsize::new(0);
+
+    std::thread::scope(|scope| {
+        for _ in 0..workers.min(page_count.max(1)) {
+            scope.spawn(|| {
+                loop {
+                    if err_flag.load(Ordering::Relaxed) != 0 {
+                        break;
+                    }
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    if i >= page_count {
+                        break;
+                    }
+                    let result = tesseract_ocr(tesseract, &pngs[i]);
+                    if result.is_err() {
+                        err_flag.store(1, Ordering::Relaxed);
+                    }
+                    if let Ok(mut guard) = slot.lock() {
+                        guard[i] = Some(result);
+                    }
+                    pb.inc(1);
+                }
+            });
+        }
+    });
+
+    let guard = slot.into_inner().unwrap_or_else(|e| e.into_inner());
+    let mut out = Vec::with_capacity(page_count);
+    for (i, cell) in guard.into_iter().enumerate() {
+        match cell {
+            Some(Ok(t)) => out.push(t),
+            Some(Err(e)) => return Err(e).with_context(|| format!("tesseract page {}", i + 1)),
+            None => bail!("OCR worker skipped page {}", i + 1),
+        }
+    }
+    Ok(out)
 }
 
 fn pdftotext_pages(pdf: &Path, page_count: usize) -> Result<Vec<String>> {
@@ -267,40 +358,34 @@ fn pdftotext_pages(pdf: &Path, page_count: usize) -> Result<Vec<String>> {
 }
 
 fn tesseract_ocr(bin: &Path, png: &Path) -> Result<String> {
-    // Merge a couple of PSM modes — badge/header layout varies.
-    let mut merged = String::new();
-    for lang in ["spa+eng", "eng"] {
-        let mut lang_ok = false;
-        for psm in ["6", "4"] {
-            let output = Command::new(bin)
-                .args([
-                    png.to_str().unwrap_or(""),
-                    "stdout",
-                    "-l",
-                    lang,
-                    "--psm",
-                    psm,
-                ])
-                .output();
-            let Ok(output) = output else { continue };
-            if !output.status.success() {
-                continue;
-            }
-            let t = String::from_utf8_lossy(&output.stdout);
-            if t.trim().is_empty() {
-                continue;
-            }
-            lang_ok = true;
-            if !merged.is_empty() {
-                merged.push('\n');
-            }
-            merged.push_str(&t);
+    // Fast path: one good pass. Fallbacks only when that pass is empty.
+    // (Old code ran up to 4 OCR passes/page — that alone ate most of discover.)
+    let attempts = [
+        ("spa+eng", "6"),
+        ("spa+eng", "4"),
+        ("eng", "6"),
+    ];
+    for (lang, psm) in attempts {
+        let output = Command::new(bin)
+            .args([
+                png.to_str().unwrap_or(""),
+                "stdout",
+                "-l",
+                lang,
+                "--psm",
+                psm,
+            ])
+            .output();
+        let Ok(output) = output else { continue };
+        if !output.status.success() {
+            continue;
         }
-        if lang_ok {
-            break; // spa+eng or eng — don't double every page
+        let t = String::from_utf8_lossy(&output.stdout);
+        if t.trim().len() >= 20 {
+            return Ok(t.into_owned());
         }
     }
-    Ok(merged)
+    Ok(String::new())
 }
 
 fn find_title_pages(texts: &[String]) -> Vec<u32> {

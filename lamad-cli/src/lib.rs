@@ -31,7 +31,12 @@ use crate::job::{Audience, PrepareJob};
 
 /// Run a full prepare job (agent → optional build → optional review).
 pub async fn run(job: PrepareJob, cfg: &Config) -> Result<()> {
-    job.echo_plan();
+    let host_images = cfg
+        .openai_api_key
+        .as_ref()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    job.echo_plan(host_images);
 
     let pdf = job.resolve_pdf()?;
     let page_count = pdf_page_count(&pdf)?;
@@ -41,8 +46,61 @@ pub async fn run(job: PrepareJob, cfg: &Config) -> Result<()> {
     let mut errors: Vec<String> = Vec::new();
     let mut outputs: Vec<StudyOutput> = Vec::new();
 
-    // Pre-resolve page slices (discover once for -n, or page-math for --from/--to).
-    let slices = resolve_study_slices(&job, &pdf, page_count, cfg.pdftoppm_path.as_deref())?;
+    // If every estudio in range already has complete JSON + images, skip OCR
+    // and the cloud agent — only rebuild PPTX/PDF.
+    let all_resumable = !job.force_prepare
+        && !job.gen_images
+        && studies.iter().all(|n| {
+            agent::prepare::try_resume_deliverables(*n, job.audience, &root).is_some()
+        });
+
+    let slices = if all_resumable {
+        progress::now_step(
+            1,
+            4,
+            "Find pages",
+            "Skipped — complete JSON + images already on disk (resume)",
+        );
+        progress::ok(format!(
+            "RESUME — {} estudio{} already prepared locally; skipping OCR + agent",
+            studies.len(),
+            if studies.len() == 1 { "" } else { "s" }
+        ));
+        // Placeholder page ranges (unused when agent is skipped).
+        studies
+            .iter()
+            .map(|&study| StudySlice {
+                study,
+                pages: job::default_pages(study, job.pdf_from),
+                proximo_title_page: None,
+            })
+            .collect::<Vec<_>>()
+    } else {
+        // Pre-resolve page slices (discover once for -n, or page-math for --from/--to).
+        if job.discover {
+            progress::now_step(
+                1,
+                4,
+                "Find pages (OCR)",
+                "Looking for this estudio inside the PDF (parallel OCR, usually under ~40s)…",
+            );
+        } else {
+            progress::now_step(
+                1,
+                4,
+                "Find pages",
+                "Using page math from --from (no OCR)…",
+            );
+        }
+        let slices = resolve_study_slices(&job, &pdf, page_count, cfg.pdftoppm_path.as_deref())?;
+        progress::ok(format!(
+            "Step 1/4 done — {} estudio{} mapped",
+            slices.len(),
+            if slices.len() == 1 { "" } else { "s" }
+        ));
+        slices
+    };
+
     let total = slices.len();
     progress::info(format!(
         "preparing {} estudio{} ({}–{}) from {}",
@@ -60,12 +118,21 @@ pub async fn run(job: PrepareJob, cfg: &Config) -> Result<()> {
         let pages = slice.pages;
         let omit_proximo = slice.proximo_title_page.is_none();
         let next_pages = slice.proximo_title_page.map(|p| (p, p + 2));
+        let can_resume = !job.force_prepare
+            && !job.gen_images
+            && agent::prepare::try_resume_deliverables(n, job.audience, &root).is_some();
 
+        let eta = progress::prepare_eta(job.audience, job.prepare_only, host_images);
+        let eta_label = if can_resume {
+            "ETA ~1–2 min (resume — rebuild only)".to_string()
+        } else {
+            format!("ETA ~{}–{} min", eta.per_study_min.0, eta.per_study_min.1)
+        };
         progress::step(
             i + 1,
             total,
             format!(
-                "Estudio {n} · pages {}–{}{}",
+                "Estudio {n} · pages {}–{}{} · {eta_label}",
                 pages.0,
                 pages.1,
                 if omit_proximo {
@@ -180,16 +247,17 @@ fn resolve_study_slices(
     pdftoppm_path: Option<&Path>,
 ) -> Result<Vec<StudySlice>> {
     if job.discover {
-        let mut out = Vec::new();
-        for n in job.from..=job.to {
-            let found = discover::discover_study_pages(pdf, n, pdftoppm_path)?;
-            out.push(StudySlice {
-                study: found.study,
-                pages: found.pages,
-                proximo_title_page: found.proximo_title_page,
-            });
-        }
-        return Ok(out);
+        let studies: Vec<u32> = (job.from..=job.to).collect();
+        // One OCR/raster pass for the whole PDF — never re-OCR per estudio.
+        let found = discover::discover_study_pages_batch(pdf, &studies, pdftoppm_path)?;
+        return Ok(found
+            .into_iter()
+            .map(|s| StudySlice {
+                study: s.study,
+                pages: s.pages,
+                proximo_title_page: s.proximo_title_page,
+            })
+            .collect());
     }
 
     let min_pages = job::min_pages_for_range(job.pdf_from, job.to) as usize;
@@ -265,33 +333,134 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
         root,
     } = one;
 
-    let creds = cfg.provider_creds()?;
+    // Resume: if a prior run already left valid JSON + images, skip the cloud
+    // agent (the ~5–15 min step). Rebuild PPTX from those files instead.
     progress::phase(format!(
-        "backend: {} (model={})",
-        creds.provider.display_name(),
-        creds.model
+        "Checking for previous work… {}",
+        agent::prepare::existing_inventory_summary(study, job.audience, root)
     ));
 
-    let deliverables = agent::prepare::run_prepare_agent(
-        agent::prepare::PrepareRequest {
-            study,
-            pdf: pdf.to_path_buf(),
-            pages,
-            omit_proximo,
-            next_pages,
-            audience: job.audience,
-            provider: creds.provider,
-            model: creds.model,
-            image_model: creds.image_model,
-            api_key: creds.api_key,
-            stream: job.stream,
-            root: root.to_path_buf(),
-            pdftoppm_path: cfg.pdftoppm_path.clone(),
-        },
-    )
-    .await?;
+    let host_image_key = cfg
+        .openai_api_key
+        .as_ref()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
 
-    agent::prepare::verify_deliverables(study, job.audience, root)?;
+    if job.gen_images && job.force_prepare {
+        bail!("use either --gen-images or --force-prepare, not both");
+    }
+
+    let make_req = |creds: crate::config::ProviderCreds| agent::prepare::PrepareRequest {
+        study,
+        pdf: pdf.to_path_buf(),
+        pages,
+        omit_proximo,
+        next_pages,
+        audience: job.audience,
+        provider: creds.provider,
+        model: creds.model,
+        image_model: creds.image_model,
+        api_key: creds.api_key,
+        image_api_key: creds.image_api_key,
+        stream: job.stream,
+        root: root.to_path_buf(),
+        pdftoppm_path: cfg.pdftoppm_path.clone(),
+    };
+
+    let resumed = if job.force_prepare || job.gen_images {
+        None
+    } else {
+        agent::prepare::try_resume_deliverables(study, job.audience, root)
+    };
+
+    let deliverables = if job.gen_images {
+        // Keep JSON; always (re)generate images via OpenAI (overwrite if present).
+        if !host_image_key {
+            bail!(
+                "--gen-images needs openai_api_key / OPENAI_API_KEY \
+                 (host generates images; see lamad-cli/config.example.toml)"
+            );
+        }
+        let json = agent::prepare::try_resume_json_only(study, job.audience, root)
+            .with_context(|| {
+                format!(
+                    "--gen-images needs studies/{}/{}.json first. \
+                     Run prepare without --gen-images to create the JSON, then retry.",
+                    job.audience.as_str(),
+                    study
+                )
+            })?;
+        let had_images = agent::prepare::required_images_present(study, job.audience, root);
+        progress::ok(format!(
+            "--gen-images — using {} ({})",
+            json.display(),
+            if had_images {
+                "overwriting existing images"
+            } else {
+                "no images yet — generating"
+            }
+        ));
+        let creds = cfg.provider_creds()?;
+        agent::prepare_openai::generate_host_images(&make_req(creds)).await?;
+        agent::prepare::verify_deliverables(study, job.audience, root)?
+    } else if let Some(existing) = resumed {
+        if job.audience == Audience::Adult {
+            let _ = agent::prepare::stamp_audience(&existing.json, job.audience);
+            let _ = agent::prepare::stamp_adult_image_paths(&existing.json, study, root);
+        }
+        progress::ok(format!(
+            "RESUME — complete JSON + images already on disk; \
+             skipping Cursor agent (saves the long step). \
+             Inventory: {}",
+            agent::prepare::existing_inventory_summary(study, job.audience, root)
+        ));
+        progress::now_step(
+            4,
+            4,
+            "Finish",
+            "Reusing previous prepare output — building PowerPoint (+ PDF)…",
+        );
+        existing
+    } else if !job.force_prepare
+        && host_image_key
+        && agent::prepare::try_resume_json_only(study, job.audience, root).is_some()
+        && !agent::prepare::required_images_present(study, job.audience, root)
+    {
+        // Partial resume: JSON exists, images missing → only generate images.
+        progress::ok(format!(
+            "RESUME (partial) — JSON on disk, images missing; \
+             generating host images only ({})",
+            agent::prepare::existing_inventory_summary(study, job.audience, root)
+        ));
+        let creds = cfg.provider_creds()?;
+        agent::prepare_openai::generate_host_images(&make_req(creds)).await?;
+        agent::prepare::verify_deliverables(study, job.audience, root)?
+    } else {
+        if job.force_prepare {
+            progress::phase("--force-prepare: ignoring local files and re-running agent…");
+        }
+        progress::phase(format!(
+            "Nothing complete to resume ({}) — running prepare agent…",
+            agent::prepare::existing_inventory_summary(study, job.audience, root)
+        ));
+
+        let creds = cfg.provider_creds()?;
+        progress::phase(format!(
+            "backend: {} (model={}){}",
+            creds.provider.display_name(),
+            creds.model,
+            if creds.host_images() {
+                " · host images ON"
+            } else {
+                ""
+            }
+        ));
+
+        let deliverables = agent::prepare::run_prepare_agent(make_req(creds)).await?;
+
+        agent::prepare::verify_deliverables(study, job.audience, root)?;
+        deliverables
+    };
 
     if job.prepare_only {
         progress::ok(
@@ -318,7 +487,7 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
         .join(format!("{study} - {title}.pptx"));
 
     let build_spin = progress::Spinner::start(format!(
-        "Building PPTX{}…",
+        "Step 4/4 — Building PPTX{}… usually ~1–2 min",
         if job.export_pdf {
             " + exporting PDF"
         } else {

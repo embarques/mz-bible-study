@@ -171,6 +171,8 @@ async fn real_main() -> Result<()> {
                         discover: range.discover,
                         audience: args.audience.into(),
                         prepare_only: args.prepare_only,
+                        force_prepare: args.force_prepare,
+                        gen_images: args.gen_images,
                         export_pdf: args.export_pdf,
                         review: args.review,
                         template: args.template_effective(),

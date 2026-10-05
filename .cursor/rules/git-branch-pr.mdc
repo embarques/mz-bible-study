@@ -1,0 +1,47 @@
+---
+description: Never commit on main — all work on feat/fix/chore branches + PR
+alwaysApply: true
+---
+
+# Git workflow — branches + PR (HARD)
+
+Protect `main` (and long-lived release branches). Agents must **not** land day-to-day work directly on `main`.
+
+## Before any code change
+
+1. `git branch --show-current` (and `git status -sb`).
+2. If on `main` (or `master` / `dev` used as protected integration):
+   - **Stop editing on that branch.**
+   - Create and switch: `git checkout -b feat/<short-topic>` (or `fix/…` / `chore/…`).
+3. Only then edit files / commit.
+
+## Naming
+
+| Prefix | Use |
+|--------|-----|
+| `feat/…` | New capability (default for most work) |
+| `fix/…` | Bugfix |
+| `chore/…` | Tooling, ignore rules, docs-only cleanup |
+
+Examples: `feat/adult-prepare-progress`, `fix/adult-discover-ocr`, `chore/gitignore-scans`.
+
+## Commits
+
+- Commit **on the feature branch only** (when the user asks to commit).
+- Never commit straight to `main` unless the user **explicitly** orders an emergency hotfix on `main` (still prefer a branch + PR).
+
+## Pull requests
+
+- After commits: push the branch and open a PR into `main` (or the repo’s stated base, e.g. `dev` if that is the integration branch).
+- Do not merge the PR unless the user asks.
+- Do not push to `main` directly.
+
+## If you already started on `main` by mistake
+
+1. Create `feat/…` from the current dirty tree: `git checkout -b feat/<topic>`.
+2. Continue / commit there.
+3. Leave `main` clean (or reset local `main` to `origin/main` only if safe and user agrees — never force-push `main`).
+
+## Reminder
+
+Working on `main` risks breaking hard-won adult/youth templates and CLI. **Branch first, PR second.**

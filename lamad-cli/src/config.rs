@@ -74,7 +74,21 @@ pub struct ProviderCreds {
     pub provider: AgentProvider,
     pub api_key: String,
     pub model: String,
+    /// OpenAI Images model (used for host-side parallel image gen).
     pub image_model: String,
+    /// When set (even with Cursor provider), the host generates images in
+    /// parallel after the agent writes JSON — much faster than cloud image gen.
+    pub image_api_key: Option<String>,
+}
+
+impl ProviderCreds {
+    /// Fast path: agent writes JSON only; host generates images via OpenAI.
+    pub fn host_images(&self) -> bool {
+        self.image_api_key
+            .as_ref()
+            .map(|k| !k.is_empty())
+            .unwrap_or(false)
+    }
 }
 
 impl Config {
@@ -99,11 +113,17 @@ impl Config {
                          (see lamad-cli/config.example.toml).",
                     )?
                     .to_string();
+                let image_api_key = self
+                    .openai_api_key
+                    .as_ref()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
                 Ok(ProviderCreds {
                     provider: AgentProvider::Cursor,
                     api_key,
                     model: self.cursor_model.clone(),
-                    image_model: String::new(),
+                    image_model: self.openai_image_model.clone(),
+                    image_api_key,
                 })
             }
             AgentProvider::ChatGpt => {
@@ -118,9 +138,10 @@ impl Config {
                     .to_string();
                 Ok(ProviderCreds {
                     provider: AgentProvider::ChatGpt,
-                    api_key,
+                    api_key: api_key.clone(),
                     model: self.openai_model.clone(),
                     image_model: self.openai_image_model.clone(),
+                    image_api_key: Some(api_key),
                 })
             }
         }

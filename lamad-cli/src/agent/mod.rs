@@ -7,6 +7,7 @@ pub mod prepare_openai;
 pub mod provider;
 pub mod review;
 pub mod review_openai;
+pub mod wait_progress;
 
 pub use provider::AgentProvider;
 

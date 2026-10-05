@@ -3,7 +3,7 @@
 
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::agent::openai::{self, OpenAiClient};
 use crate::agent::prepare::{
@@ -83,21 +83,108 @@ pub async fn run_prepare_openai(req: &PrepareRequest) -> Result<Deliverables> {
     verify_deliverables(req.study, req.audience, &req.root)
 }
 
+/// Host-side parallel images from an existing study JSON (Cursor fast path).
+pub async fn generate_host_images(req: &PrepareRequest) -> Result<()> {
+    let key = req
+        .image_api_key
+        .as_deref()
+        .filter(|k| !k.is_empty())
+        .context(
+            "host image generation needs openai_api_key / OPENAI_API_KEY \
+             (set in config.toml even when agent_provider=cursor)",
+        )?;
+    let client = OpenAiClient::new(key)?;
+    let dest = expected_paths(req.study, req.audience, &req.root);
+    let study_json: Value = serde_json::from_str(&std::fs::read_to_string(&dest.json)?)
+        .with_context(|| format!("parse {}", dest.json.display()))?;
+
+    crate::progress::now_step(
+        3,
+        4,
+        "Host images (parallel)",
+        match req.audience {
+            Audience::Youth => "Generating 3 section images via OpenAI (×3 parallel)…",
+            Audience::Adult => {
+                "Generating ~13 scenic/definición images via OpenAI (×4 parallel)…"
+            }
+        },
+    );
+
+    match req.audience {
+        Audience::Youth => {
+            generate_youth_section_images(req, &client, &dest, &study_json).await?;
+        }
+        Audience::Adult => {
+            generate_adult_images(req, &client, &study_json).await?;
+        }
+    }
+
+    stamp_audience(&dest.json, req.audience)?;
+    if req.audience == Audience::Adult {
+        stamp_adult_image_paths(&dest.json, req.study, &req.root)?;
+    } else {
+        stamp_youth_section_images(&dest)?;
+    }
+    crate::progress::ok("Step 3/4 done — host images ready");
+    Ok(())
+}
+
+fn stamp_youth_section_images(dest: &Deliverables) -> Result<()> {
+    let text = std::fs::read_to_string(&dest.json)?;
+    let mut v: Value = serde_json::from_str(&text)?;
+    let obj = v
+        .as_object_mut()
+        .context("youth JSON root must be an object")?;
+    // Prefer paths relative to project if possible; absolute is OK for builder.
+    obj.insert(
+        "section_images".into(),
+        Value::Array(vec![
+            Value::String(dest.img1.display().to_string()),
+            Value::String(dest.img2.display().to_string()),
+            Value::String(dest.img3.display().to_string()),
+        ]),
+    );
+    std::fs::write(&dest.json, serde_json::to_string_pretty(&v)?)?;
+    Ok(())
+}
+
 async fn generate_youth_section_images(
     req: &PrepareRequest,
     client: &OpenAiClient,
     dest: &Deliverables,
     study_json: &Value,
 ) -> Result<()> {
+    use futures_util::stream::{self, StreamExt};
+
     let prompts = section_image_prompts(req.study, study_json)?;
-    let slots = [&dest.img1, &dest.img2, &dest.img3];
-    let img_bar = crate::progress::bar(3, "Generating section images");
-    for (i, (prompt, path)) in prompts.iter().zip(slots.iter()).enumerate() {
-        let n = i + 1;
-        img_bar.set_message(format!("Generating section image {n}/3"));
-        let png = generate_png_with_retry(client, &req.image_model, prompt, n).await?;
-        std::fs::write(path, &png).with_context(|| format!("write {}", path.display()))?;
-        img_bar.inc(1);
+    let slots = [dest.img1.clone(), dest.img2.clone(), dest.img3.clone()];
+    let img_bar = crate::progress::bar(3, "Generating section images (parallel)");
+    let model = req.image_model.clone();
+    let jobs: Vec<(usize, String, PathBuf)> = prompts
+        .into_iter()
+        .zip(slots)
+        .enumerate()
+        .map(|(i, (prompt, path))| (i + 1, prompt, path))
+        .collect();
+
+    let results: Vec<Result<()>> = stream::iter(jobs)
+        .map(|(n, prompt, path)| {
+            let client = client;
+            let model = model.clone();
+            let bar = img_bar.clone();
+            async move {
+                let png = generate_png_with_retry(client, &model, &prompt, n).await?;
+                std::fs::write(&path, &png)
+                    .with_context(|| format!("write {}", path.display()))?;
+                bar.inc(1);
+                Ok(())
+            }
+        })
+        .buffer_unordered(3)
+        .collect()
+        .await;
+    for r in results {
+        r?;
     }
     img_bar.finish_with_message("Section images ready");
     Ok(())
@@ -108,18 +195,40 @@ async fn generate_adult_images(
     client: &OpenAiClient,
     study_json: &Value,
 ) -> Result<()> {
+    use futures_util::stream::{self, StreamExt};
+
     let media = adult_media_dir(req.study, &req.root);
     std::fs::create_dir_all(&media)?;
     let prompts = adult_image_prompts(req.study, study_json)?;
     let names = adult_image_basenames();
-    let img_bar = crate::progress::bar(names.len() as u64, "Generating adult scenic/definición images");
-    for (i, (name, prompt)) in names.iter().zip(prompts.iter()).enumerate() {
-        let n = i + 1;
-        img_bar.set_message(format!("Generating {name} ({n}/{})", names.len()));
-        let path = media.join(name);
-        let png = generate_png_with_retry(client, &req.image_model, prompt, n).await?;
-        std::fs::write(&path, &png).with_context(|| format!("write {}", path.display()))?;
-        img_bar.inc(1);
+    let img_bar =
+        crate::progress::bar(names.len() as u64, "Generating adult images (×4 parallel)");
+    let model = req.image_model.clone();
+    let jobs: Vec<(usize, String, PathBuf)> = names
+        .iter()
+        .zip(prompts.into_iter())
+        .enumerate()
+        .map(|(i, (name, prompt))| (i + 1, prompt, media.join(name)))
+        .collect();
+
+    let results: Vec<Result<()>> = stream::iter(jobs)
+        .map(|(n, prompt, path)| {
+            let client = client;
+            let model = model.clone();
+            let bar = img_bar.clone();
+            async move {
+                let png = generate_png_with_retry(client, &model, &prompt, n).await?;
+                std::fs::write(&path, &png)
+                    .with_context(|| format!("write {}", path.display()))?;
+                bar.inc(1);
+                Ok(())
+            }
+        })
+        .buffer_unordered(4)
+        .collect()
+        .await;
+    for r in results {
+        r?;
     }
     img_bar.finish_with_message("Adult images ready");
     Ok(())

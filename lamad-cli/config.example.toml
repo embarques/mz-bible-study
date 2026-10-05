@@ -9,7 +9,10 @@ agent_provider = "cursor"
 cursor_api_key = ""
 cursor_model = "composer-2.5"
 
-# --- ChatGPT / OpenAI (when agent_provider = "chatgpt") ---
+# --- ChatGPT / OpenAI ---
+# Even with agent_provider = "cursor", set openai_api_key (or OPENAI_API_KEY)
+# to enable the FAST path: Cursor writes JSON only; this machine generates
+# scenic/definición images in parallel via the Images API (~2–3× faster).
 openai_api_key = ""
 openai_model = "gpt-4o"
 openai_image_model = "gpt-image-1"
