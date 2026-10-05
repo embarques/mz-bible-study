@@ -206,6 +206,7 @@ pub async fn run(job: PrepareJob, cfg: &Config) -> Result<()> {
 }
 
 /// True when this job did not consume the PDF through the last page (more estudios may remain).
+#[allow(dead_code)] // kept for future batch archive heuristics
 fn more_studies_pending_in_pdf(slices: &[StudySlice], page_count: usize) -> bool {
     let covered_through = slices
         .last()
@@ -214,19 +215,26 @@ fn more_studies_pending_in_pdf(slices: &[StudySlice], page_count: usize) -> bool
     covered_through < page_count
 }
 
-/// Log failure; keep PDF in `scans/` for retry unless more estudios remain in the PDF.
+/// Log failure; keep the PDF in `scans/` so the user can retry.
+///
+/// **Never** move the PDF to `error/` here. The study is unfinished — the scan
+/// is still the source for the next prepare. Moving it caused:
+/// 1) retry → “document missing”
+/// 2) second fail → `move → error: No such file` and the *real* build error
+///    (Marcador, etc.) got buried under the tray error.
 fn finish_with_prepare_errors(
     pdf: &Path,
     errors: &[String],
-    slices: &[StudySlice],
-    page_count: usize,
+    _slices: &[StudySlice],
+    _page_count: usize,
 ) -> Result<()> {
-    scans::write_error_log(pdf, &errors.join("\n"))?;
-    if more_studies_pending_in_pdf(slices, page_count) {
-        scans::move_to_error_tray(pdf)?;
-    } else {
-        eprintln!("PDF left in {} for retry.", pdf.display());
+    if let Err(e) = scans::write_error_log(pdf, &errors.join("\n")) {
+        eprintln!("warning: could not write error log: {e:#}");
     }
+    eprintln!(
+        "PDF left in {} for retry (estudio incomplete — not moved to error/).",
+        pdf.display()
+    );
     if errors.len() == 1 {
         bail!("{}", errors[0]);
     }

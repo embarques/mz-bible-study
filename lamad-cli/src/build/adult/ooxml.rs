@@ -658,6 +658,9 @@ fn force_all_run_sz(shape_xml: &str, sz: u32) -> String {
     .into_owned()
 }
 
+/// Legacy text fill — adult definición slides are image-cards now.
+/// Build path must use [`set_definicion_image`].
+#[allow(dead_code)]
 pub fn set_definicion(path: &Path, text: &str) -> Result<()> {
     warn_if_over_budget(text);
     set_content_body_teaching(path, text, None)

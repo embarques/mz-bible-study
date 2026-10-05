@@ -55,7 +55,12 @@ pub fn move_to_complete(pdf: &Path) -> Result<PathBuf> {
     Ok(dest)
 }
 
-/// Move a failed PDF into `scans/error/` (call after [`write_error_log`] when appropriate).
+/// Move a PDF into `scans/error/`.
+///
+/// **Do not call from prepare on build/agent failure.** An unfinished estudio
+/// must leave the PDF in `scans/` for retry. Use only for explicit operator
+/// archive (corrupt scan, abandoned job) — never mid-prepare.
+#[allow(dead_code)]
 pub fn move_to_error_tray(pdf: &Path) -> Result<PathBuf> {
     let dir = paths::scans_dir()?;
     ensure_tray(&dir)?;
@@ -67,15 +72,13 @@ pub fn move_to_error_tray(pdf: &Path) -> Result<PathBuf> {
             Ok::<(), anyhow::Error>(())
         })
         .with_context(|| format!("move {} → error", pdf.display()))?;
-    println!(
-        "Moved to {} (more estudios remain in this PDF)",
-        dest.display()
-    );
+    println!("Moved to {}", dest.display());
     Ok(dest)
 }
 
-/// On failure: write a `.log` under `scans/error/`. The PDF stays in `scans/` unless
-/// the caller also invokes [`move_to_error_tray`].
+/// On prepare failure: write a `.log` under `scans/error/`. The PDF stays in
+/// `scans/` — prepare must not call [`move_to_error_tray`] while the estudio
+/// is incomplete.
 pub fn write_error_log(pdf: &Path, log: &str) -> Result<PathBuf> {
     let dir = paths::scans_dir()?;
     ensure_tray(&dir)?;

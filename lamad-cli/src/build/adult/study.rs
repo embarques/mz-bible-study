@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::build::adult::ooxml::{
     apply_scenic_image, convert_video_tema_to_image_layout, ensure_intro_body_logo,
-    remove_orphan_videos, set_ab_body_slide, set_ab_title_header, set_definicion,
+    remove_orphan_videos, set_ab_body_slide, set_ab_title_header,
     set_definicion_image, set_ensenanza_datos, set_intro_body, set_tema_header_image,
     set_title_or_proximo, AbRefShape,
 };
@@ -381,7 +381,6 @@ fn fill_tema(
     set_tema_header_image(&header_path, tema_label, &tema.titulo, &tema.rango)?;
     order.push(layout.header);
 
-    let defs = study.definiciones_text(&tema.definiciones);
     // Only emit a Definición slide when the printed study has a
     // "Definiciones y etimología" box for this tema. Never invent terms.
     if !tema.definiciones.is_empty() {
@@ -397,17 +396,24 @@ fn fill_tema(
             if img_path.is_file() {
                 set_definicion_image(build, layout.definicion, &img_path)?;
             } else {
-                eprintln!(
-                    "warning: missing {} — plain-text definición fallback",
-                    img_path.display()
+                // Adult definición slides are image-cards — there is no
+                // `Marcador de contenido 2` text shape. Fail clearly.
+                bail!(
+                    "missing definición card for tema {} ({}). \
+                     Generate studies/adult/.../definicion-{}.png from the printed \
+                     «Definiciones y etimología» box — do not use text fallback.",
+                    idx + 1,
+                    img_path.display(),
+                    idx + 1
                 );
-                set_definicion(&ooxml::slide_path(build, layout.definicion), &defs)?;
             }
         } else {
-            eprintln!(
-                "warning: no definicion_images[{idx}] — falling back to plain text (card design missing)"
+            bail!(
+                "tema {} has definiciones but JSON has no definicion_images[{}]. \
+                 Re-run prepare --gen-images or stamp definicion_images paths.",
+                idx + 1,
+                idx
             );
-            set_definicion(&ooxml::slide_path(build, layout.definicion), &defs)?;
         }
         order.push(layout.definicion);
     }
