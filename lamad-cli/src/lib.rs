@@ -36,12 +36,6 @@ pub async fn run(job: PrepareJob, cfg: &Config) -> Result<()> {
     let pdf = job.resolve_pdf()?;
     let page_count = pdf_page_count(&pdf)?;
 
-    if job.audience == Audience::Adult {
-        bail!(
-            "audience=adult is not implemented yet. Use --audience youth (default)."
-        );
-    }
-
     let root = paths::project_root()?;
     let studies = (job.from..=job.to).collect::<Vec<_>>();
     let mut errors: Vec<String> = Vec::new();

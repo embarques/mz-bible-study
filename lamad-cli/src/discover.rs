@@ -7,7 +7,8 @@
 //! 4. Read study numbers (`ESTUDIO N`, `N LECTURA BÍBLICA`, …).
 //! 5. Fill gaps along the ordered title-page sequence from any anchors.
 //!
-//! Returns absolute 1-based PDF page ranges (3 pages per estudio).
+//! Returns absolute 1-based PDF page ranges. Youth Senda de Vida is usually
+//! 3 pages; adult title→title gaps may be longer (use next title page − 1).
 
 use anyhow::{bail, Context, Result};
 use regex::Regex;
@@ -88,42 +89,77 @@ pub fn discover_study_pages(
         }
     }
 
-    let filled = fill_sequence(&title_pages, &numbered)?;
-    let start = filled
-        .iter()
-        .find(|(_, n)| **n == study)
-        .map(|(p, _)| *p)
-        .ok_or_else(|| {
+    let mut filled = fill_sequence(&title_pages, &numbered)?;
+    let start = match filled.iter().find(|(_, n)| **n == study).map(|(p, _)| *p) {
+        Some(p) => p,
+        None => {
+            // Adult badges are often stylized — OCR may read "4" as "1".
+            // When the user asked for study N and page 1 is a title page,
+            // treat the title-page sequence as N, N+1, … (single-study scans).
             let known: Vec<String> = filled
                 .iter()
                 .map(|(p, n)| format!("estudio {n} @ page {p}"))
                 .collect();
-            anyhow::anyhow!(
-                "Estudio {study} not found in {}. Detected: {}. \
-                 Pass --from F -n {study} if page math is known.",
-                pdf.display(),
-                if known.is_empty() {
-                    "(none)".into()
-                } else {
-                    known.join(", ")
+            if title_pages.first() == Some(&1) {
+                eprintln!(
+                    "  warn: OCR did not see estudio {study} (saw: {}). \
+                     Using title-page sequence starting at PDF page 1 as \
+                     estudio {study}, {}…",
+                    if known.is_empty() {
+                        "none".into()
+                    } else {
+                        known.join(", ")
+                    },
+                    study + 1
+                );
+                filled.clear();
+                for (i, &p) in title_pages.iter().enumerate() {
+                    filled.insert(p, study + i as u32);
                 }
-            )
-        })?;
+                1
+            } else {
+                bail!(
+                    "Estudio {study} not found in {}. Detected: {}. \
+                     Pass --from F -n {study} if page math is known.",
+                    pdf.display(),
+                    if known.is_empty() {
+                        "(none)".into()
+                    } else {
+                        known.join(", ")
+                    }
+                );
+            }
+        }
+    };
 
-    let end = start + 2;
+    // Prefer real next title page (adult studies are often >3 pages). Fall
+    // back to the youth 3-page block when titles are unknown/missing.
+    let next_title = filled
+        .keys()
+        .copied()
+        .find(|p| *p > start)
+        .or_else(|| {
+            let guess = start + 3;
+            if (guess as usize) <= page_count {
+                Some(guess)
+            } else {
+                None
+            }
+        });
+    let end = match next_title {
+        Some(n) if n > start => n - 1,
+        _ => (start + 2).min(page_count as u32),
+    };
+    if end < start {
+        bail!("Estudio {study}: invalid page range {start}–{end}");
+    }
     if end as usize > page_count {
         bail!(
-            "Estudio {study} starts at page {start}, but PDF only has {page_count} pages \
-             (need 3 content pages)."
+            "Estudio {study} starts at page {start}, but PDF only has {page_count} pages."
         );
     }
 
-    let next_title = start + 3;
-    let proximo_title_page = if (next_title as usize) <= page_count {
-        Some(next_title)
-    } else {
-        None
-    };
+    let proximo_title_page = next_title.filter(|p| (*p as usize) <= page_count);
 
     println!(
         "  Discovered estudio {study} at PDF pages {start}–{end}{}",
@@ -291,7 +327,12 @@ fn is_title_page(t: &str) -> bool {
     let has_maestro = Regex::new(r"ideas\s+para\s+el\s+maestro")
         .unwrap()
         .is_match(&low);
-    (has_base && has_idea) || (has_base && has_lectura && !has_maestro)
+    // Adult title: Base bíblica + Pensamiento / Texto áureo (+ often Lectura Antifonal).
+    let has_aureo = Regex::new(r"texto\s+[aá]ureo").unwrap().is_match(&low);
+    let has_pensamiento = low.contains("pensamiento");
+    (has_base && has_idea)
+        || (has_base && has_lectura && !has_maestro)
+        || (has_base && has_aureo && has_pensamiento)
 }
 
 fn extract_study_number(t: &str) -> Option<u32> {
@@ -299,17 +340,25 @@ fn extract_study_number(t: &str) -> Option<u32> {
     let cleaned = Regex::new(r"(?is)desarrollo\s+del\s+estudio")
         .unwrap()
         .replace_all(t, " ");
+    let cleaned = Regex::new(r"(?is)bosquejo\s+del\s+estudio")
+        .unwrap()
+        .replace_all(&cleaned, " ");
     let cleaned = Regex::new(r"(?is)ideas\s+para\s+el\s+maestro")
         .unwrap()
         .replace_all(&cleaned, " ");
 
     // Prefer matches in the first portion (badge / header).
-    let head: String = cleaned.chars().take(800).collect();
+    let head: String = cleaned.chars().take(1200).collect();
 
     let patterns = [
+        // Adult OCR often emits the stylized badge digit as "4 Texto áureo"
+        // (must win before "1 Samuel" false positives).
+        r"(?is)\b(\d{1,3})\s+Texto\s+[aá]ureo\b",
+        // Adult badge: "ESTUDIO BÍBLICO 4" with number right after the label.
+        r"(?is)\bestudio\s+b[ií]blico\s*[:\-]?\s*(\d{1,3})\b",
         r"(?is)\bestudio\b\s*[:\-]?\s*(\d{1,3})\b",
         r"(?is)\bestudio\b[\s\|]*\r?\n\s*(\d{1,3})\b",
-        // Senda de Vida: "24 LECTURA BÍBLICA" when badge OCR drops ESTUDIO
+        // Senda de Vida youth: "24 LECTURA BÍBLICA" when badge OCR drops ESTUDIO
         r"(?is)(?:^|[^\d])(\d{1,3})\s+LECTURA\s+B",
         r"(?is)\bestudio\b[^\d]{0,12}(\d{1,3})\b",
     ];
@@ -323,7 +372,7 @@ fn extract_study_number(t: &str) -> Option<u32> {
         }
     }
     // Whole page fallback for ESTUDIO N only (avoid mid-page verse traps on LECTURA).
-    let re = Regex::new(r"(?is)\bestudio\b\s*[:\-]?\s*(\d{1,3})\b").ok()?;
+    let re = Regex::new(r"(?is)\bestudio\s*(?:b[ií]blico\s*)?[:\-]?\s*(\d{1,3})\b").ok()?;
     if let Some(c) = re.captures(&cleaned) {
         let n: u32 = c.get(1)?.as_str().parse().ok()?;
         if (1..=200).contains(&n) {
@@ -440,6 +489,23 @@ DESARROLLO DEL ESTUDIO
     }
 
     #[test]
+    fn detects_adult_estudio_biblico_badge_ocr() {
+        // Real tesseract layout: badge words split; digit lands before Texto áureo.
+        let title = r#"
+TEMA TRIMESTRAL LA SOBERANÍA DIVINA EN EL REINO UNIDO:
+DIOS BUSCA DISCÍPULOS ESTUDIO
+CONFORME A SU CORAZÓN BÍBLICO
+Pensamiento central
+Base bíblica
+1 Samuel 15-16:1-13
+4 Texto áureo
+LECTURA ANTIFONAL
+"#;
+        assert!(is_title_page(title));
+        assert_eq!(extract_study_number(title), Some(4));
+    }
+
+    #[test]
     fn fills_sequence_from_one_anchor() {
         let titles = vec![1, 4, 7, 10];
         let mut numbered = BTreeMap::new();
@@ -449,6 +515,23 @@ DESARROLLO DEL ESTUDIO
         assert_eq!(filled.get(&4), Some(&24));
         assert_eq!(filled.get(&7), Some(&25));
         assert_eq!(filled.get(&10), Some(&26));
+    }
+
+    #[test]
+    #[ignore = "needs adult scan PDF + tesseract; run with --ignored"]
+    fn discovers_adult_estudio_4_in_scan_pdf() {
+        let pdf = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("scans/Bible Study 4 - Adult.pdf");
+        if !pdf.exists() {
+            eprintln!("skip: {}", pdf.display());
+            return;
+        }
+        let found = discover_study_pages(&pdf, 4, Some(Path::new("/usr/local/bin/pdftoppm")))
+            .expect("discover estudio 4");
+        assert_eq!(found.study, 4);
+        assert_eq!(found.pages.0, 1);
+        assert!(found.pages.1 >= 3, "adult study should span past 3 pages: {:?}", found.pages);
+        assert_eq!(found.proximo_title_page, Some(found.pages.1 + 1));
     }
 
     #[test]

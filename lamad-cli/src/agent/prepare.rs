@@ -40,18 +40,63 @@ pub struct Deliverables {
     pub img3: PathBuf,
 }
 
+/// Adult scenic / definición PNGs live under `studies/adult/{N}/`.
+pub fn adult_media_dir(study: u32, root: &Path) -> PathBuf {
+    root.join("studies")
+        .join(Audience::Adult.as_str())
+        .join(study.to_string())
+}
+
+/// Basenames the adult builder expects (scenic + definición cards).
+pub fn adult_image_basenames() -> &'static [&'static str] {
+    &[
+        "intro-header.png",
+        "tema-1.png",
+        "tema-2.png",
+        "tema-3.png",
+        "ab-1A.png",
+        "ab-1B.png",
+        "ab-2A.png",
+        "ab-2B.png",
+        "ab-3A.png",
+        "ab-3B.png",
+        "definicion-1.png",
+        "definicion-2.png",
+        "definicion-3.png",
+    ]
+}
+
 pub fn expected_paths(study: u32, audience: Audience, root: &Path) -> Deliverables {
     let base = root.join("studies").join(audience.as_str());
-    Deliverables {
-        json: base.join(format!("{study}.json")),
-        img1: base.join("media").join(format!("{study}-section1.png")),
-        img2: base.join("media").join(format!("{study}-section2.png")),
-        img3: base.join("media").join(format!("{study}-section3.png")),
+    match audience {
+        Audience::Youth => Deliverables {
+            json: base.join(format!("{study}.json")),
+            img1: base.join("media").join(format!("{study}-section1.png")),
+            img2: base.join("media").join(format!("{study}-section2.png")),
+            img3: base.join("media").join(format!("{study}-section3.png")),
+        },
+        // Review / summary still want three “preview” paths — use intro + first temas.
+        Audience::Adult => {
+            let media = adult_media_dir(study, root);
+            Deliverables {
+                json: base.join(format!("{study}.json")),
+                img1: media.join("intro-header.png"),
+                img2: media.join("tema-1.png"),
+                img3: media.join("tema-2.png"),
+            }
+        }
     }
 }
 
 pub fn verify_deliverables(study: u32, audience: Audience, root: &Path) -> Result<Deliverables> {
-    let paths = expected_paths(study, audience, root);
+    match audience {
+        Audience::Youth => verify_youth_deliverables(study, root),
+        Audience::Adult => verify_adult_deliverables(study, root),
+    }
+}
+
+fn verify_youth_deliverables(study: u32, root: &Path) -> Result<Deliverables> {
+    let paths = expected_paths(study, Audience::Youth, root);
     for p in [&paths.json, &paths.img1, &paths.img2, &paths.img3] {
         if !p.exists() {
             bail!("deliverable missing: {}", p.display());
@@ -62,7 +107,6 @@ pub fn verify_deliverables(study: u32, audience: Audience, root: &Path) -> Resul
     if data.get("numero").and_then(|v| v.as_u64()) != Some(study as u64)
         && data.get("numero").and_then(|v| v.as_i64()) != Some(study as i64)
     {
-        // also accept string numero
         let ok = data
             .get("numero")
             .map(|v| v.to_string().contains(&study.to_string()))
@@ -100,6 +144,99 @@ pub fn verify_deliverables(study: u32, audience: Audience, root: &Path) -> Resul
         );
     }
     Ok(paths)
+}
+
+fn verify_adult_deliverables(study: u32, root: &Path) -> Result<Deliverables> {
+    let paths = expected_paths(study, Audience::Adult, root);
+    if !paths.json.exists() {
+        bail!("deliverable missing: {}", paths.json.display());
+    }
+    let text = std::fs::read_to_string(&paths.json)?;
+    let study_model: crate::model::adult_study::AdultStudy = serde_json::from_str(&text)
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "{} is not valid adult study JSON ({e}). \
+                 Need lectura_antifonal, objetivos, pensamiento_central, texto_aureo, \
+                 ensenanza, datos_generales, introduccion_slides, temas[3] with A/B, proximo.",
+                paths.json.display()
+            )
+        })?;
+    if study_model.numero.to_string() != study.to_string()
+        && !study_model.numero.to_string().contains(&study.to_string())
+    {
+        bail!(
+            "{} numero is {:?}, expected {study}",
+            paths.json.display(),
+            study_model.numero
+        );
+    }
+    if study_model.temas.len() != 3 {
+        bail!(
+            "{} must have exactly 3 temas, got {}",
+            paths.json.display(),
+            study_model.temas.len()
+        );
+    }
+    if study_model.objetivos.len() != 3 {
+        bail!(
+            "{} must have exactly 3 objetivos, got {}",
+            paths.json.display(),
+            study_model.objetivos.len()
+        );
+    }
+
+    let media = adult_media_dir(study, root);
+    let mut missing = Vec::new();
+    for name in adult_image_basenames() {
+        let p = media.join(name);
+        if !p.exists() {
+            missing.push(p.display().to_string());
+        }
+    }
+    if !missing.is_empty() {
+        bail!(
+            "adult estudio {study} missing image files ({}):\n  {}",
+            missing.len(),
+            missing.join("\n  ")
+        );
+    }
+    Ok(paths)
+}
+
+/// Write `scenic_images` + `definicion_images` paths into adult JSON after PNGs land.
+pub fn stamp_adult_image_paths(json_path: &Path, study: u32, root: &Path) -> Result<()> {
+    let text = std::fs::read_to_string(json_path)?;
+    let mut v: serde_json::Value = serde_json::from_str(&text)?;
+    let obj = v
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("adult JSON root must be an object"))?;
+
+    let rel = |name: &str| -> String {
+        format!("studies/adult/{study}/{name}")
+    };
+    obj.insert(
+        "scenic_images".into(),
+        serde_json::json!({
+            "intro_header": rel("intro-header.png"),
+            "tema": [rel("tema-1.png"), rel("tema-2.png"), rel("tema-3.png")],
+            "ab": [
+                rel("ab-1A.png"), rel("ab-1B.png"),
+                rel("ab-2A.png"), rel("ab-2B.png"),
+                rel("ab-3A.png"), rel("ab-3B.png")
+            ]
+        }),
+    );
+    obj.insert(
+        "definicion_images".into(),
+        serde_json::json!([
+            rel("definicion-1.png"),
+            rel("definicion-2.png"),
+            rel("definicion-3.png")
+        ]),
+    );
+    let _ = root; // paths are repo-relative
+    std::fs::write(json_path, serde_json::to_string_pretty(&v)?)?;
+    Ok(())
 }
 
 /// Map one artifact path to a local destination. Prefers exact names:
@@ -321,23 +458,32 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
         // Agents sometimes narrate a plan and finish without writing files.
         // One follow-up in agent mode usually recovers.
         crate::progress::warn(
-            "no artifacts yet — sending follow-up to write JSON + 3 PNGs…",
+            "no artifacts yet — sending follow-up to write JSON + images…",
         );
-        let nudge = format!(
-            "STOP. You finished without writing any files under `artifacts/`.\n\n\
-             The host CLI lists artifacts via the Cloud Agents API and found **zero**. \
-             Narrating the JSON or describing images does **not** count.\n\n\
-             Right now, using Write / Shell / image tools, create these exact paths \
-             (mkdir -p artifacts first if needed):\n\
-             1. artifacts/{study}.json   ← must be a real .json file at this path\n\
-             2. artifacts/{study}-section1.png\n\
-             3. artifacts/{study}-section2.png\n\
-             4. artifacts/{study}-section3.png\n\n\
-             Do not put the JSON only under artifacts/assets/. \
-             Do not end the turn until `ls artifacts/` shows the .json and three PNGs. \
-             Confirm the four paths when done.",
-            study = req.study
-        );
+        let nudge = match req.audience {
+            Audience::Youth => format!(
+                "STOP. You finished without writing any files under `artifacts/`.\n\n\
+                 The host CLI lists artifacts via the Cloud Agents API and found **zero**. \
+                 Narrating the JSON or describing images does **not** count.\n\n\
+                 Right now, using Write / Shell / image tools, create these exact paths \
+                 (mkdir -p artifacts first if needed):\n\
+                 1. artifacts/{study}.json   ← must be a real .json file at this path\n\
+                 2. artifacts/{study}-section1.png\n\
+                 3. artifacts/{study}-section2.png\n\
+                 4. artifacts/{study}-section3.png\n\n\
+                 Do not put the JSON only under artifacts/assets/. \
+                 Do not end the turn until `ls artifacts/` shows the .json and three PNGs. \
+                 Confirm the four paths when done.",
+                study = req.study
+            ),
+            Audience::Adult => format!(
+                "STOP. Zero artifacts listed. Write `artifacts/{study}.json` (adult schema) \
+                 plus these exact PNG basenames under `artifacts/`: {names}. \
+                 Use Write/Shell/image tools — chat text does not count.",
+                study = req.study,
+                names = adult_image_basenames().join(", ")
+            ),
+        };
         let follow = client
             .create_followup(&created.agent.id, &nudge)
             .await?;
@@ -372,13 +518,19 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
     std::fs::create_dir_all(dest.json.parent().unwrap())?;
     std::fs::create_dir_all(dest.img1.parent().unwrap())?;
 
-    let resolved = resolve_artifacts(req.study, &artifacts, &dest)?;
+    let resolved = match req.audience {
+        Audience::Youth => resolve_artifacts(req.study, &artifacts, &dest)?,
+        Audience::Adult => resolve_adult_artifacts(req.study, &artifacts, &req.root)?,
+    };
     crate::progress::phase(format!(
         "downloading {} artifact{}…",
         resolved.len(),
         if resolved.len() == 1 { "" } else { "s" }
     ));
     for (art_path, dest_path) in &resolved {
+        if let Some(parent) = dest_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         client
             .download_artifact(&created.agent.id, art_path, dest_path)
             .await?;
@@ -390,9 +542,81 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
 
     // Stamp audience
     stamp_audience(&dest.json, req.audience)?;
+    if req.audience == Audience::Adult {
+        stamp_adult_image_paths(&dest.json, req.study, &req.root)?;
+    }
 
     let _ = pdf_page_count; // silence if unused in some builds
     verify_deliverables(req.study, req.audience, &req.root)
+}
+
+/// Map adult cloud artifacts: `{N}.json` + named scenic/definición PNGs.
+fn resolve_adult_artifacts(
+    study: u32,
+    artifacts: &[Artifact],
+    root: &Path,
+) -> Result<Vec<(String, PathBuf)>> {
+    let dest_json = expected_paths(study, Audience::Adult, root).json;
+    let media = adult_media_dir(study, root);
+    let mut out: Vec<(String, PathBuf)> = Vec::new();
+    let mut used = vec![false; artifacts.len()];
+
+    let json_name = format!("{study}.json");
+    for (idx, art) in artifacts.iter().enumerate() {
+        let basename = art.path.rsplit('/').next().unwrap_or(&art.path);
+        if basename.eq_ignore_ascii_case(&json_name) || art.path.ends_with(&format!("/{json_name}"))
+        {
+            out.push((art.path.clone(), dest_json.clone()));
+            used[idx] = true;
+            break;
+        }
+    }
+    if out.is_empty() {
+        bail!(
+            "adult prepare missing artifacts/{study}.json (found {} artifacts)",
+            artifacts.len()
+        );
+    }
+
+    for name in adult_image_basenames() {
+        let stem = name.trim_end_matches(".png");
+        let mut found = None;
+        for (idx, art) in artifacts.iter().enumerate() {
+            if used[idx] {
+                continue;
+            }
+            let basename = art.path.rsplit('/').next().unwrap_or(&art.path);
+            let lower = basename.to_lowercase();
+            if lower == name.to_lowercase()
+                || lower == format!("{stem}.jpg")
+                || lower == format!("{stem}.jpeg")
+                || lower == format!("{stem}.webp")
+                || lower == format!("{study}-{name}").to_lowercase()
+                || lower == format!("{study}-{stem}.jpg")
+            {
+                found = Some((idx, art.path.clone()));
+                break;
+            }
+        }
+        if let Some((idx, path)) = found {
+            used[idx] = true;
+            out.push((path, media.join(name)));
+        }
+    }
+
+    let have_imgs = out.len().saturating_sub(1);
+    if have_imgs < adult_image_basenames().len() {
+        let found: Vec<&str> = artifacts.iter().map(|a| a.path.as_str()).collect();
+        bail!(
+            "adult prepare mapped {have_imgs}/{} images for estudio {study}. \
+             Artifacts found ({}): {:?}. Expected named PNGs: {}",
+            adult_image_basenames().len(),
+            found.len(),
+            found,
+            adult_image_basenames().join(", ")
+        );
+    }
+    Ok(out)
 }
 
 pub(crate) fn stamp_audience(json_path: &Path, audience: Audience) -> Result<()> {
@@ -527,21 +751,31 @@ async fn ensure_study_json_artifact(
 }
 
 fn build_cloud_prepare_prompt(req: &PrepareRequest) -> Result<String> {
-    let aud = req.audience.as_str();
-    let study = req.study;
-    let proximo_block = if req.omit_proximo {
-        "Próximo: **omit** (last study — no próximo object, or null).".to_string()
+    match req.audience {
+        Audience::Youth => build_youth_cloud_prepare_prompt(req),
+        Audience::Adult => build_adult_cloud_prepare_prompt(req),
+    }
+}
+
+fn proximo_prompt_block(req: &PrepareRequest) -> Result<String> {
+    if req.omit_proximo {
+        Ok("Próximo: **omit** (last study — no próximo object, or null).".to_string())
     } else if let Some(np) = req.next_pages {
-        format!(
+        Ok(format!(
             "Próximo: read from the **next** study’s title page \
              (attached image of the first page of pages {}–{}). \
              Put número, título, base bíblica in JSON `proximo`.",
             np.0, np.1
-        )
+        ))
     } else {
-        bail!("próximo metadata missing and no next_pages");
-    };
+        bail!("próximo metadata missing and no next_pages")
+    }
+}
 
+fn build_youth_cloud_prepare_prompt(req: &PrepareRequest) -> Result<String> {
+    let aud = req.audience.as_str();
+    let study = req.study;
+    let proximo_block = proximo_prompt_block(req)?;
     let style_block = style_prompt_block(study);
     let base = format!("studies/{aud}");
 
@@ -595,6 +829,84 @@ When finished, confirm the four artifact paths and `section_style.id`.
         p0 = req.pages.0,
         p1 = req.pages.1,
         prepare = PREPARE_STUDY_MD,
+        agents = AGENTS_MD,
+    ))
+}
+
+fn build_adult_cloud_prepare_prompt(req: &PrepareRequest) -> Result<String> {
+    let study = req.study;
+    let proximo_block = proximo_prompt_block(req)?;
+    let img_list = adult_image_basenames()
+        .iter()
+        .enumerate()
+        .map(|(i, n)| format!("{}. `artifacts/{n}`", i + 2))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    Ok(format!(
+        r#"You are a no-repo Cursor Cloud Agent preparing a Mount Zion Church **adult** Bible study.
+
+Follow AGENTS.md adult HARD rules and LAYOUT_GUIDE ideas below. Do **NOT** build a .pptx.
+Adult JSON is **not** the youth schema (no `puntos` / `section_images` / `section_style`).
+
+## Inputs
+- Estudio **{study}** (audience=adult)
+- Content pages **{p0}–{p1}** are attached as images (in order).
+- {proximo_block}
+
+## Deliverables — write under `artifacts/` (mandatory)
+Use Write / Shell / image tools. Host CLI downloads via List Artifacts.
+
+1. `artifacts/{study}.json`  ← required adult schema (see below)
+{img_list}
+
+## Adult JSON schema (required keys)
+```json
+{{
+  "audience": "adult",
+  "numero": {study},
+  "titulo": "…",
+  "base_biblica": ["Cita 1;", "Cita 2;", "Cita 3"],
+  "lectura_antifonal": [{{"cita":"…","versiculos":["1 …","2 …"]}}],
+  "objetivos": ["…","…","…"],
+  "pensamiento_central": "…",
+  "texto_aureo": {{"texto":"…","cita":"Libro N:N"}},
+  "ensenanza": "…",
+  "datos_generales": {{"autor":"…","personajes":"…","fecha":"…","lugar":"…"}},
+  "introduccion_slides": ["para 1","para 2",…],
+  "temas": [
+    {{
+      "titulo": "…",
+      "rango": "Libro N:N-N",
+      "definiciones": [{{"termino":"…","texto":"…","referencia":"(Libro N:N)"}}],
+      "A": {{"titulo":"…","texto_slides":["…"],"texto_biblico":{{"cita":"…","versiculos":["…"]}}}},
+      "B": {{"titulo":"…","texto_slides":["…"],"texto_biblico":{{"cita":"…","versiculos":["…"]}}}}
+    }}
+  ],
+  "proximo": {{"numero":…,"titulo":"…","base_biblica":[…]}} 
+}}
+```
+Exactly **3** `temas`, each with A and B. Host will stamp `scenic_images` / `definicion_images` paths.
+
+## Images — HARD (13 PNGs, exact basenames)
+16:9 ≈1408×768. No text/letters/logos/watermarks/yellow dashed arcs.
+- `intro-header.png` — cinematic intro full-bleed
+- `tema-1.png` … `tema-3.png` — one scenic per tema (different scenes)
+- `ab-1A.png` … `ab-3B.png` — six scenic A/B title slides
+- `definicion-1.png` … `definicion-3.png` — DEFINICIÓN Y ETIMOLOGÍA card graphics (header + term rows; readable Spanish text **is** allowed on these three definición cards only)
+
+## Rules
+- Faithful Spanish from the scans; merge cross-page cuts; skip Ideas para el maestro / Preguntas.
+- Lectura/Texto = whole verses; body slides ~360–400 chars when packing.
+- End only after `{study}.json` + all 13 PNGs exist under `artifacts/`.
+
+---
+# AGENTS.md (rules)
+
+{agents}
+"#,
+        p0 = req.pages.0,
+        p1 = req.pages.1,
         agents = AGENTS_MD,
     ))
 }

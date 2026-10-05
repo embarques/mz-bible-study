@@ -6,8 +6,12 @@ use serde_json::Value;
 use std::path::Path;
 
 use crate::agent::openai::{self, OpenAiClient};
-use crate::agent::prepare::{expected_paths, stamp_audience, verify_deliverables, Deliverables, PrepareRequest};
+use crate::agent::prepare::{
+    adult_image_basenames, adult_media_dir, expected_paths, stamp_adult_image_paths, stamp_audience,
+    verify_deliverables, Deliverables, PrepareRequest,
+};
 use crate::agent::{AGENTS_MD, PREPARE_STUDY_MD};
+use crate::job::Audience;
 use crate::section_styles::{section_style_for_study, style_prompt_block};
 use crate::{paths, rasterize_pages};
 
@@ -58,72 +62,127 @@ pub async fn run_prepare_openai(req: &PrepareRequest) -> Result<Deliverables> {
         }
     };
 
-    normalize_study_json(&mut study_json, req, &dest)?;
+    match req.audience {
+        Audience::Youth => normalize_study_json(&mut study_json, req, &dest)?,
+        Audience::Adult => normalize_adult_study_json(&mut study_json, req)?,
+    }
     let pretty = serde_json::to_string_pretty(&study_json)?;
     std::fs::write(&dest.json, &pretty)
         .with_context(|| format!("write {}", dest.json.display()))?;
     crate::progress::ok(format!("wrote {}", dest.json.display()));
 
-    let prompts = section_image_prompts(req.study, &study_json)?;
+    match req.audience {
+        Audience::Youth => generate_youth_section_images(req, &client, &dest, &study_json).await?,
+        Audience::Adult => generate_adult_images(req, &client, &study_json).await?,
+    }
+
+    stamp_audience(&dest.json, req.audience)?;
+    if req.audience == Audience::Adult {
+        stamp_adult_image_paths(&dest.json, req.study, &req.root)?;
+    }
+    verify_deliverables(req.study, req.audience, &req.root)
+}
+
+async fn generate_youth_section_images(
+    req: &PrepareRequest,
+    client: &OpenAiClient,
+    dest: &Deliverables,
+    study_json: &Value,
+) -> Result<()> {
+    let prompts = section_image_prompts(req.study, study_json)?;
     let slots = [&dest.img1, &dest.img2, &dest.img3];
     let img_bar = crate::progress::bar(3, "Generating section images");
     for (i, (prompt, path)) in prompts.iter().zip(slots.iter()).enumerate() {
         let n = i + 1;
         img_bar.set_message(format!("Generating section image {n}/3"));
-        let png = match client
-            .generate_section_png(&req.image_model, prompt)
-            .await
-        {
-            Ok(b) => b,
-            Err(e) => {
-                crate::progress::warn(format!(
-                    "section {n} blocked/failed ({e:#}); retrying safer prompt…"
-                ));
-                let safer = format!(
-                    "{prompt}\n\nSafer framing: no graphic violence, no addiction paraphernalia \
-                     close-ups, respectful biblical illustration suitable for youth ministry."
-                );
-                client
-                    .generate_section_png(&req.image_model, &safer)
-                    .await
-                    .with_context(|| format!("OpenAI image section {n}"))?
-            }
-        };
-        std::fs::write(path, &png)
-            .with_context(|| format!("write {}", path.display()))?;
+        let png = generate_png_with_retry(client, &req.image_model, prompt, n).await?;
+        std::fs::write(path, &png).with_context(|| format!("write {}", path.display()))?;
         img_bar.inc(1);
     }
     img_bar.finish_with_message("Section images ready");
+    Ok(())
+}
 
-    stamp_audience(&dest.json, req.audience)?;
-    verify_deliverables(req.study, req.audience, &req.root)
+async fn generate_adult_images(
+    req: &PrepareRequest,
+    client: &OpenAiClient,
+    study_json: &Value,
+) -> Result<()> {
+    let media = adult_media_dir(req.study, &req.root);
+    std::fs::create_dir_all(&media)?;
+    let prompts = adult_image_prompts(req.study, study_json)?;
+    let names = adult_image_basenames();
+    let img_bar = crate::progress::bar(names.len() as u64, "Generating adult scenic/definición images");
+    for (i, (name, prompt)) in names.iter().zip(prompts.iter()).enumerate() {
+        let n = i + 1;
+        img_bar.set_message(format!("Generating {name} ({n}/{})", names.len()));
+        let path = media.join(name);
+        let png = generate_png_with_retry(client, &req.image_model, prompt, n).await?;
+        std::fs::write(&path, &png).with_context(|| format!("write {}", path.display()))?;
+        img_bar.inc(1);
+    }
+    img_bar.finish_with_message("Adult images ready");
+    Ok(())
+}
+
+async fn generate_png_with_retry(
+    client: &OpenAiClient,
+    model: &str,
+    prompt: &str,
+    n: usize,
+) -> Result<Vec<u8>> {
+    match client.generate_section_png(model, prompt).await {
+        Ok(b) => Ok(b),
+        Err(e) => {
+            crate::progress::warn(format!(
+                "image {n} blocked/failed ({e:#}); retrying safer prompt…"
+            ));
+            let safer = format!(
+                "{prompt}\n\nSafer framing: no graphic violence, respectful biblical \
+                 illustration suitable for church adult Bible study."
+            );
+            client
+                .generate_section_png(model, &safer)
+                .await
+                .with_context(|| format!("OpenAI image {n}"))
+        }
+    }
 }
 
 fn build_openai_prepare_prompts(req: &PrepareRequest) -> Result<(String, String)> {
-    let aud = req.audience.as_str();
-    let study = req.study;
-    let proximo_block = if req.omit_proximo {
-        "Próximo: **omit** (last study — no `proximo` object, or null).".to_string()
+    match req.audience {
+        Audience::Youth => build_openai_youth_prompts(req),
+        Audience::Adult => build_openai_adult_prompts(req),
+    }
+}
+
+fn proximo_block(req: &PrepareRequest) -> Result<String> {
+    if req.omit_proximo {
+        Ok("Próximo: **omit** (last study — no `proximo` object, or null).".to_string())
     } else if let Some(np) = req.next_pages {
-        format!(
+        Ok(format!(
             "Próximo: read from the **next** study’s title page \
              (attached image of the first page of pages {}–{}). \
              Put número, título, base bíblica in JSON `proximo`.",
             np.0, np.1
-        )
+        ))
     } else {
-        bail!("próximo metadata missing and no next_pages");
-    };
+        bail!("próximo metadata missing and no next_pages")
+    }
+}
 
+fn build_openai_youth_prompts(req: &PrepareRequest) -> Result<(String, String)> {
+    let aud = req.audience.as_str();
+    let study = req.study;
+    let proximo_block = proximo_block(req)?;
     let style_block = style_prompt_block(study);
     let base = format!("studies/{aud}");
 
-    let system = format!(
-        r#"You extract Mount Zion Church Spanish Bible-study content from scan images into JSON.
+    let system = r#"You extract Mount Zion Church Spanish Bible-study content from scan images into JSON.
 Follow PREPARE_STUDY.md and AGENTS.md. Reply with a single JSON object only (no markdown).
 Do NOT generate images — the host will create section PNGs separately.
 Do NOT build a .pptx."#
-    );
+        .to_string();
 
     let user = format!(
         r#"## Inputs
@@ -170,6 +229,136 @@ Use these exact section_images paths:
     );
 
     Ok((system, user))
+}
+
+fn build_openai_adult_prompts(req: &PrepareRequest) -> Result<(String, String)> {
+    let study = req.study;
+    let proximo_block = proximo_block(req)?;
+    let system = r#"You extract Mount Zion Church Spanish **adult** Bible-study content from scan images into JSON.
+Adult schema (not youth): lectura_antifonal, objetivos, pensamiento_central, texto_aureo,
+ensenanza, datos_generales, introduccion_slides, temas[3] with A/B blocks.
+Reply with a single JSON object only (no markdown). Do NOT generate images. Do NOT build a .pptx."#
+        .to_string();
+
+    let user = format!(
+        r#"## Inputs
+- Estudio **{study}** (audience=adult)
+- Content pages **{p0}–{p1}** are attached as images (in order).
+- {proximo_block}
+
+## Required adult JSON keys
+numero, titulo, base_biblica (array of citation lines; trailing `;` OK except last),
+lectura_antifonal (array of {{cita, versiculos}}),
+objetivos (exactly 3),
+pensamiento_central (string),
+texto_aureo {{texto, cita}} — cita without parentheses,
+ensenanza, datos_generales {{autor, personajes, fecha, lugar}},
+introduccion_slides (array of paragraphs),
+temas (exactly 3): each {{titulo, rango, definiciones[], A {{titulo, texto_slides[], texto_biblico}}, B {{…}}}},
+proximo (or null if last).
+Host stamps scenic_images / definicion_images — omit or leave empty.
+
+## Rules
+- Faithful Spanish from the scans; merge cross-page cuts; skip Ideas para el maestro / Preguntas.
+- Whole verses only in lectura/texto_biblico.
+
+---
+# AGENTS.md (rules)
+
+{agents}
+"#,
+        p0 = req.pages.0,
+        p1 = req.pages.1,
+        agents = AGENTS_MD,
+    );
+
+    Ok((system, user))
+}
+
+fn normalize_adult_study_json(v: &mut Value, req: &PrepareRequest) -> Result<()> {
+    let obj = v
+        .as_object_mut()
+        .context("study JSON root must be an object")?;
+    obj.insert("numero".into(), Value::Number(req.study.into()));
+    obj.insert(
+        "audience".into(),
+        Value::String(Audience::Adult.as_str().into()),
+    );
+    if req.omit_proximo {
+        obj.insert("proximo".into(), Value::Null);
+    }
+    Ok(())
+}
+
+fn adult_image_prompts(study: u32, json: &Value) -> Result<Vec<String>> {
+    let titulo = json
+        .get("titulo")
+        .and_then(|t| t.as_str())
+        .unwrap_or("estudio bíblico");
+    let temas = json
+        .get("temas")
+        .and_then(|t| t.as_array())
+        .context("adult JSON missing temas array")?;
+    let tema_title = |i: usize| -> String {
+        temas
+            .get(i)
+            .and_then(|t| t.get("titulo"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("tema bíblico")
+            .to_string()
+    };
+    let ab_title = |ti: usize, side: &str| -> String {
+        let key = if side == "A" { "A" } else { "B" };
+        temas
+            .get(ti)
+            .and_then(|t| t.get(key))
+            .and_then(|b| b.get("titulo"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("punto bíblico")
+            .to_string()
+    };
+
+    let scenic = |theme: &str| {
+        format!(
+            "Widescreen 16:9 cinematic biblical illustration for adult church Bible study \
+             \"{titulo}\" (estudio {study}). Theme: {theme}. Full-bleed scenic photo/paint; \
+             calm left mist for overlay text; subject right/center-right. \
+             No text, letters, logos, watermarks, captions, or yellow dashed arcs."
+        )
+    };
+    let def_card = |i: usize| {
+        let term = temas
+            .get(i)
+            .and_then(|t| t.get("definiciones"))
+            .and_then(|d| d.as_array())
+            .and_then(|a| a.first())
+            .and_then(|d| d.get("termino"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("definición");
+        format!(
+            "Widescreen 16:9 DEFINICIÓN Y ETIMOLOGÍA educational card graphic for adult \
+             Bible study. Clean modern layout with header bar 'DEFINICIÓN Y ETIMOLOGÍA', \
+             rows for theological terms (primary term: {term}). Spanish UI text allowed. \
+             No watermarks. Theme context: {}.",
+            tema_title(i)
+        )
+    };
+
+    Ok(vec![
+        scenic(&format!("introducción — {titulo}")),
+        scenic(&tema_title(0)),
+        scenic(&tema_title(1)),
+        scenic(&tema_title(2)),
+        scenic(&ab_title(0, "A")),
+        scenic(&ab_title(0, "B")),
+        scenic(&ab_title(1, "A")),
+        scenic(&ab_title(1, "B")),
+        scenic(&ab_title(2, "A")),
+        scenic(&ab_title(2, "B")),
+        def_card(0),
+        def_card(1),
+        def_card(2),
+    ])
 }
 
 /// Force CLI-owned fields the model must not invent wrong.

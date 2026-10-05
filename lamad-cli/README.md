@@ -256,7 +256,9 @@ There is **no** silent fallback to the Python CLI.
 
 ### F. Adult audience
 
-`--audience adult` errors with a clear message. Youth is the default and only implemented builder.
+`--audience adult` uses `template/adult/master-template.pptx` and the adult JSON schema
+(`lectura_antifonal`, `temas` A/B, scenic + definición images under `studies/adult/{N}/`).
+Youth remains the default.
 
 ## Status of this crate
 
