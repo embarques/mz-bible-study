@@ -69,10 +69,65 @@ pub fn set_ensenanza_datos(
 ) -> Result<()> {
     fill_shape_preserving(path, "CuadroTexto 13", ensenanza)?;
     fill_shape_preserving(path, "CuadroTexto 9", &datos.personajes)?;
-    fill_shape_preserving(path, "CuadroTexto 21", &datos.fecha)?;
-    fill_shape_preserving(path, "CuadroTexto 32", &datos.lugar)?;
-    fill_shape_preserving(path, "CuadroTexto 38", &datos.autor)?;
+    // FECHA / LUGAR / AUTOR gold boxes are tall (multi-line placeholders). Short
+    // values like "930 a. C." sit at the top of the box and float above their
+    // banner — center vertically, and for FECHA also tighten the box onto the
+    // FECHA row (gold cy≈1.51" starts above the banner).
+    fill_datos_value(path, "CuadroTexto 21", &datos.fecha, Some(FECHA_SHORT_BOX))?;
+    fill_datos_value(path, "CuadroTexto 32", &datos.lugar, None)?;
+    fill_datos_value(path, "CuadroTexto 38", &datos.autor, None)?;
     Ok(())
+}
+
+/// Short FECHA box on the banner midline (EMU). Gold placeholder is taller and
+/// higher so multi-line dates fit; single-line dates must not float between
+/// PERSONAJES and FECHA.
+const FECHA_SHORT_BOX: (i64, i64) = (4_369_872, 502_920); // y≈4.78", cy≈0.55"
+
+fn fill_datos_value(
+    path: &Path,
+    shape: &str,
+    text: &str,
+    short_box: Option<(i64, i64)>,
+) -> Result<()> {
+    let xml = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let xml = transform_shape(&xml, shape, |b| {
+        let mut filled = replace_text_preserving_runs(b, text)?;
+        filled = set_body_pr_anchor(&filled, "ctr");
+        if let Some((y, cy)) = short_box {
+            if text.chars().count() <= 48 {
+                filled = set_shape_y_cy(&filled, y, cy);
+            }
+        }
+        Ok(filled)
+    })?;
+    fs::write(path, xml).with_context(|| format!("write {}", path.display()))
+}
+
+/// Ensure `<a:bodyPr>` has `anchor="…"` (vertical alignment inside the shape).
+fn set_body_pr_anchor(shape_xml: &str, anchor: &str) -> String {
+    let re = Regex::new(r#"<a:bodyPr([^>]*)>"#).expect("bodyPr regex");
+    re.replace(shape_xml, |caps: &regex::Captures| {
+        let attrs = Regex::new(r#"\sanchor="[^"]*""#)
+            .expect("anchor attr")
+            .replace(&caps[1], "");
+        format!(r#"<a:bodyPr{attrs} anchor="{anchor}">"#)
+    })
+    .into_owned()
+}
+
+/// Rewrite shape `a:off y` / `a:ext cy`, keeping x/cx.
+fn set_shape_y_cy(shape_xml: &str, y: i64, cy: i64) -> String {
+    let re = Regex::new(
+        r#"<a:off x="(-?\d+)" y="(-?\d+)"\s*/>\s*<a:ext cx="(-?\d+)" cy="(-?\d+)"\s*/>"#,
+    )
+    .expect("xfrm regex");
+    re.replace(shape_xml, |caps: &regex::Captures| {
+        let x = &caps[1];
+        let cx = &caps[3];
+        format!(r#"<a:off x="{x}" y="{y}"/><a:ext cx="{cx}" cy="{cy}"/>"#)
+    })
+    .into_owned()
 }
 
 /// TEMA image header — same chrome as youth section slides (orange bar,
@@ -172,12 +227,12 @@ fn rewrite_as_youth_section_bottom(path: &Path, title: &str, verse: &str) -> Res
     // full-bleed pic (same as apply_scenic_image), then colour chrome only.
     force_pics_fullbleed(path)?;
     let tone = crate::build::apply_image_chrome_contrast(path)?;
-    eprintln!(
-        "  contrast {}: {:?} title_sz={}",
+    crate::progress::debug(format!(
+        "contrast {}: {:?} title_sz={}",
         path.file_name().and_then(|s| s.to_str()).unwrap_or("?"),
         tone,
         title_sz
-    );
+    ));
     Ok(())
 }
 
@@ -450,12 +505,12 @@ fn set_ab_body_title(path: &Path, title: &str) -> Result<()> {
     })?;
     let xml = normalize_ab_body_panels(&xml)?;
     fs::write(path, xml).with_context(|| format!("write {}", path.display()))?;
-    eprintln!(
-        "  ab-title {}: sz={} ({})",
+    crate::progress::debug(format!(
+        "ab-title {}: sz={} ({})",
         path.file_name().and_then(|s| s.to_str()).unwrap_or("?"),
         sz,
         title.chars().count()
-    );
+    ));
     Ok(())
 }
 

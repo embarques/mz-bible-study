@@ -48,6 +48,10 @@ pub struct Cli {
     /// Path to config.toml
     #[arg(long, global = true)]
     pub config: Option<PathBuf>,
+
+    /// Increase output (-v plan/ok, -vv steps/ETA, -vvv agent detail, -vvvv build debug)
+    #[arg(short = 'v', long = "verbose", action = ArgAction::Count, global = true)]
+    pub verbose: u8,
 }
 
 #[derive(Debug, Subcommand)]

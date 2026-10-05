@@ -75,6 +75,21 @@ impl PrepareJob {
     }
 
     pub fn echo_plan(&self, host_images: bool) {
+        // Default: one info line. Full plan at -v+.
+        if !crate::progress::at_least(1) {
+            crate::progress::info(format!(
+                "prepare estudios {}–{} ({}){}",
+                self.from,
+                self.to,
+                self.audience.as_str(),
+                if host_images {
+                    " · host images"
+                } else {
+                    ""
+                }
+            ));
+            return;
+        }
         let pdf_disp = self
             .pdf
             .as_ref()

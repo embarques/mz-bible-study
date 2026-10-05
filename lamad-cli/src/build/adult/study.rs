@@ -1,4 +1,6 @@
-//! Adult study builder — fixed 62-slide template (no slide allocation).
+//! Adult study builder — master template with dynamic slide allocation
+//! for Lectura, Texto Bíblico, and A/B body packs (duplicate prototypes
+//! when JSON has more slides than the gold layout).
 
 use std::path::{Path, PathBuf};
 
@@ -25,6 +27,8 @@ const LECTURA_PROTOS: [u32; 4] = [2, 3, 4, 5];
 /// First non-lectura slide after the template lectura block.
 const AFTER_LECTURA: u32 = 6;
 const INTRO_HEADER_SLIDE: u32 = 9;
+/// Intro body prototypes (template slides 10–13). Extra packs duplicate slide 10.
+const INTRO_BODY_PROTOS: [u32; 4] = [10, 11, 12, 13];
 /// Lectura Antifonal pack budget — **same as youth** (`VERSE_BUDGET` = 280).
 /// Whole verses only; if the next verse would overflow the panel, start a
 /// new slide. Do not raise this — 400 dumped Mateo 6:1–4 onto one slide and
@@ -201,12 +205,11 @@ pub fn apply_adult_study(build: &Path, study: &AdultStudy) -> Result<Vec<u32>> {
         )?;
     }
 
-    // Title → lectura → fixed mid block (objetivos…intro) → temas (with
-    // dynamic Texto Bíblico packs) → próximo. Extra texto slides are
-    // duplicated from each block's prototype and inserted in place.
+    // Title → lectura → fixed mid block through intro header → dynamic
+    // intro bodies → temas (dynamic Texto + A/B bodies) → próximo.
     let mut order = vec![1u32];
     order.extend(&lectura_nums);
-    order.extend(AFTER_LECTURA..=13);
+    order.extend(AFTER_LECTURA..=INTRO_HEADER_SLIDE);
 
     if study.objetivos.len() != 3 {
         bail!("objetivos must have 3 entries, got {}", study.objetivos.len());
@@ -232,19 +235,18 @@ pub fn apply_adult_study(build: &Path, study: &AdultStudy) -> Result<Vec<u32>> {
         &study.datos_generales,
     )?;
 
-    if study.introduccion_slides.len() != 4 {
-        bail!(
-            "introduccion_slides must have 4 entries, got {}",
-            study.introduccion_slides.len()
-        );
+    if study.introduccion_slides.is_empty() {
+        bail!("introduccion_slides must have at least one paragraph");
     }
-    for (i, text) in study.introduccion_slides.iter().enumerate() {
-        let slide_num = 10 + i as u32;
+    let intro_nums =
+        allocate_body_slides(build, &INTRO_BODY_PROTOS, study.introduccion_slides.len())?;
+    for (&slide_num, text) in intro_nums.iter().zip(study.introduccion_slides.iter()) {
         set_intro_body(&ooxml::slide_path(build, slide_num), text)?;
         // Adult intro body prototypes lack the Mount Zion logo; youth has it.
         // Copy youth bottom-right logo onto intro body slides only.
         ensure_intro_body_logo(build, slide_num, &youth_intro_logo_path()?)?;
     }
+    order.extend(&intro_nums);
 
     // Tema II/III templates are video posters — convert to the still-image
     // tema layout (slide 14) BEFORE scenic swaps / text fill. Stripping
@@ -288,7 +290,7 @@ pub fn apply_adult_study(build: &Path, study: &AdultStudy) -> Result<Vec<u32>> {
     }
     crate::build::qc_deck(build, &order, &image_slides)?;
 
-    println!("Filled adult deck with {} slides", order.len());
+    crate::progress::ok(format!("Filled adult deck with {} slides", order.len()));
     Ok(order)
 }
 
@@ -299,21 +301,18 @@ fn validate_counts(study: &AdultStudy) -> Result<()> {
     if study.temas.len() != TEMA_LAYOUTS.len() {
         bail!("expected {} temas", TEMA_LAYOUTS.len());
     }
-    for (idx, (tema, layout)) in study.temas.iter().zip(TEMA_LAYOUTS.iter()).enumerate() {
-        if tema.a.texto_slides.len() != layout.a_bodies.len() {
+    for (idx, tema) in study.temas.iter().enumerate() {
+        let n = idx + 1;
+        if tema.a.texto_slides.is_empty() {
             bail!(
-                "tema {} A needs {} body slides, got {}",
-                idx + 1,
-                layout.a_bodies.len(),
-                tema.a.texto_slides.len()
+                "tema {n} A has empty texto_slides — agent must pack body paragraphs \
+                 (builder will allocate as many A/B body slides as needed)"
             );
         }
-        if tema.b.texto_slides.len() != layout.b_bodies.len() {
+        if tema.b.texto_slides.is_empty() {
             bail!(
-                "tema {} B needs {} body slides, got {}",
-                idx + 1,
-                layout.b_bodies.len(),
-                tema.b.texto_slides.len()
+                "tema {n} B has empty texto_slides — agent must pack body paragraphs \
+                 (builder will allocate as many A/B body slides as needed)"
             );
         }
     }
@@ -383,23 +382,35 @@ fn fill_tema(
     order.push(layout.header);
 
     let defs = study.definiciones_text(&tema.definiciones);
-    if let Some(imgs) = study.definicion_images.as_ref() {
-        if imgs.len() != study.temas.len() {
-            bail!(
-                "definicion_images must have {} paths (one per tema), got {}",
-                study.temas.len(),
-                imgs.len()
+    // Only emit a Definición slide when the printed study has a
+    // "Definiciones y etimología" box for this tema. Never invent terms.
+    if !tema.definiciones.is_empty() {
+        if let Some(imgs) = study.definicion_images.as_ref() {
+            if imgs.len() != study.temas.len() {
+                bail!(
+                    "definicion_images must have {} paths (one per tema), got {}",
+                    study.temas.len(),
+                    imgs.len()
+                );
+            }
+            let img_path = resolve_study_path(&imgs[idx])?;
+            if img_path.is_file() {
+                set_definicion_image(build, layout.definicion, &img_path)?;
+            } else {
+                eprintln!(
+                    "warning: missing {} — plain-text definición fallback",
+                    img_path.display()
+                );
+                set_definicion(&ooxml::slide_path(build, layout.definicion), &defs)?;
+            }
+        } else {
+            eprintln!(
+                "warning: no definicion_images[{idx}] — falling back to plain text (card design missing)"
             );
+            set_definicion(&ooxml::slide_path(build, layout.definicion), &defs)?;
         }
-        let img_path = resolve_study_path(&imgs[idx])?;
-        set_definicion_image(build, layout.definicion, &img_path)?;
-    } else {
-        eprintln!(
-            "warning: no definicion_images[{idx}] — falling back to plain text (card design missing)"
-        );
-        set_definicion(&ooxml::slide_path(build, layout.definicion), &defs)?;
+        order.push(layout.definicion);
     }
-    order.push(layout.definicion);
 
     let point = idx + 1;
     fill_ab_block(
@@ -465,7 +476,8 @@ fn fill_ab_block(
     order.extend(&texto_nums);
 
     let body_title = format!("{label} - {}", block.titulo);
-    for (&slide_n, text) in body_slides.iter().zip(block.texto_slides.iter()) {
+    let body_nums = allocate_body_slides(build, body_slides, block.texto_slides.len())?;
+    for (&slide_n, text) in body_nums.iter().zip(block.texto_slides.iter()) {
         set_ab_body_slide(&ooxml::slide_path(build, slide_n), &body_title, text)?;
         order.push(slide_n);
     }
@@ -499,6 +511,27 @@ fn allocate_from_proto(build: &Path, proto: u32, count: usize) -> Result<Vec<u32
     nums.push(proto);
     for _ in 1..count {
         nums.push(ooxml::duplicate_slide(build, proto)?);
+    }
+    Ok(nums)
+}
+
+/// Reuse template A/B body prototypes in order; duplicate the first when JSON
+/// has more slides than the gold layout (same idea as Lectura / Texto packs).
+/// Unused prototype slides stay on disk but are omitted from `order`.
+fn allocate_body_slides(build: &Path, protos: &[u32], count: usize) -> Result<Vec<u32>> {
+    if count == 0 {
+        bail!("allocate_body_slides requires count >= 1");
+    }
+    if protos.is_empty() {
+        bail!("allocate_body_slides needs at least one prototype slide");
+    }
+    let mut nums = Vec::with_capacity(count);
+    for i in 0..count {
+        if i < protos.len() {
+            nums.push(protos[i]);
+        } else {
+            nums.push(ooxml::duplicate_slide(build, protos[0])?);
+        }
     }
     Ok(nums)
 }

@@ -318,6 +318,7 @@ Use these exact section_images paths:
 
 ## Rules
 - Faithful Spanish from the scans; merge cross-page cuts; exclude Ideas para el maestro / Preguntas.
+- Definiciones: ONLY from printed «Definiciones y etimología» boxes (verbatim). Empty [] if no box — never invent.
 - Prefer packed `*_slides` when helpful; otherwise provide full body text fields.
 - Inline scripture refs stay as printed.
 
@@ -369,6 +370,7 @@ Host stamps scenic_images / definicion_images — omit or leave empty.
 
 ## Rules
 - Faithful Spanish from the scans; merge cross-page cuts; skip Ideas para el maestro / Preguntas.
+- Definiciones: ONLY from printed «Definiciones y etimología» boxes (verbatim). Empty [] if no box — never invent.
 - Whole verses only in lectura/texto_biblico.
 
 ---
@@ -436,18 +438,41 @@ fn adult_image_prompts(study: u32, json: &Value) -> Result<Vec<String>> {
         )
     };
     let def_card = |i: usize| {
-        let term = temas
+        let defs = temas
             .get(i)
             .and_then(|t| t.get("definiciones"))
             .and_then(|d| d.as_array())
-            .and_then(|a| a.first())
-            .and_then(|d| d.get("termino"))
-            .and_then(|t| t.as_str())
-            .unwrap_or("definición");
+            .cloned()
+            .unwrap_or_default();
+        if defs.is_empty() {
+            // Host may skip generating this slot; keep a no-op placeholder prompt
+            // that must NOT invent theological terms.
+            return format!(
+                "Widescreen 16:9 blank cream slide with only the header \
+                 'DEFINICIÓN Y ETIMOLOGÍA' centered. No term cards, no verses, \
+                 no quotes, no extra text. Study context: {}.",
+                tema_title(i)
+            );
+        }
+        let mut rows = String::new();
+        for (n, d) in defs.iter().enumerate() {
+            let term = d.get("termino").and_then(|x| x.as_str()).unwrap_or("");
+            let texto = d.get("texto").and_then(|x| x.as_str()).unwrap_or("");
+            let referencia = d.get("referencia").and_then(|x| x.as_str()).unwrap_or("");
+            rows.push_str(&format!(
+                "Row {}: termino=\"{term}\" | texto=\"{texto}\" | referencia=\"{referencia}\". ",
+                n + 1
+            ));
+        }
         format!(
             "Widescreen 16:9 DEFINICIÓN Y ETIMOLOGÍA educational card graphic for adult \
-             Bible study. Clean modern layout with header bar 'DEFINICIÓN Y ETIMOLOGÍA', \
-             rows for theological terms (primary term: {term}). Spanish UI text allowed. \
+             Bible study. Soft landscape/mist background with left text-safe wash. \
+             Header: open-book icon + title 'DEFINICIÓN Y ETIMOLOGÍA' (bold navy) + thin navy rule. \
+             Stack one horizontal rounded white card per term (left icon, coloured chevron with \
+             the EXACT termino, grey rule, definition body). \
+             Render EXACTLY these terms and texts — verbatim Spanish, no paraphrasing, \
+             no invented Hebrew/Greek roots, no extra Bible quotes, no 'Reina-Valera' footer, \
+             no terms not listed: {rows} \
              No watermarks. Theme context: {}.",
             tema_title(i)
         )

@@ -15,9 +15,11 @@ pub enum VerseKind {
     Texto,
 }
 
-/// Split `"18 Y el niño creció..."` into `("18", " Y el niño creció...")`.
+/// Split `"18 Y el niño creció..."` or `"16:1 Dijo Jehová..."` into
+/// `(number, " body…")`. Chapter:verse markers appear when Lectura spans
+/// a chapter boundary (e.g. 1 Samuel 15:22-16:13).
 pub(crate) fn split_verse(v: &str) -> Result<(String, String)> {
-    let re = Regex::new(r"(?s)^(\d+)\s+(.*)$").unwrap();
+    let re = Regex::new(r"(?s)^(\d+(?::\d+)?)\s+(.*)$").unwrap();
     let caps = re
         .captures(v.trim_start())
         .ok_or_else(|| anyhow!("verse must start with number: {:.60}", v))?;
@@ -35,7 +37,8 @@ pub fn expand_glued_verses(verses: &[String]) -> Vec<String> {
 }
 
 fn split_glued_verse_line(line: &str) -> Vec<String> {
-    let re = Regex::new(r"(?:;\s*|\,\s*)(\d+)\s+").unwrap();
+    // Next verse after `;` / `,` — plain `3 …` or chapter change `16:1 …`.
+    let re = Regex::new(r"(?:;\s*|\,\s*)(\d+(?::\d+)?)\s+").unwrap();
     let mut parts: Vec<String> = Vec::new();
     let mut last = 0usize;
     for m in re.find_iter(line) {
@@ -152,8 +155,9 @@ fn set_verses_expanded(
         VerseKind::Texto => "TextBox 4",
     };
     // Match youth Lectura / Texto colour + weight exactly.
+    // Lectura body must be forced black — never inherit a polluted sample fill.
     let (accent, body_rgb, sz): (&str, Option<&str>, u32) = match kind {
-        VerseKind::Lectura => ("FF0000", None, 4400), // red cite/num; body inherits black
+        VerseKind::Lectura => ("FF0000", Some("000000"), 4400), // red cite/num; black body
         VerseKind::Texto => ("FFFF00", Some("FFFFFF"), 4400), // yellow cite/num; white body
     };
 

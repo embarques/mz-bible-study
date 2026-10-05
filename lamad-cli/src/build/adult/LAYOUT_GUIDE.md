@@ -19,6 +19,7 @@ These are enforced in `lamad-cli` build + QC. Do not “match gold” when gold 
 | **Scenic image visible** | After cloning youth section chrome, **remove** the full-bleed black `!!Rectangle`. Normalize pic to one `<a:stretch><a:fillRect/></a:stretch>` full-bleed. QC fails if `!!Rectangle` remains or `<p:pic>` is missing. |
 | **Texto Áureo citation line** | Quote on its own paragraph; biblical citation (`1 Corintios 10:33`) on the **next line** (never same line as the end of the quote). No parentheses on that citation. Shrink long Pensamiento/Áureo body text so it fits the SmartArt boxes. |
 | **Texto verse box** | Clamp `TextBox 4` so verses sit below the “Texto Bíblico” header (`y ≥ 856357` EMU). Never overlap header. |
+| **A/B + intro body count is dynamic** | JSON may have **more or fewer** body paragraphs than the gold template. Builder reuses prototype slides and **duplicates** when needed (same as Lectura/Texto). Never fail with “needs N body slides, got M”. |
 | **A/B body panels unified** | Every `1.A`–`3.B` body slide uses the **same** `Título 1` + body box geometry (`x/cx/y/cy` band). Never keep prototype widths — some gold slides have title `cx` wider than the slide (no wrap / text off edge). Two-line header band; tight gap to body. Only the text differs. |
 | **Package / Repair** | Empty `<a:stretch />`, wrong notes rels, or stale `app.xml` `<Slides>` after duplication → PowerPoint Repair. Validate + open clean before delivery. |
 | **Output path** | Generated decks → repo-root `bible-studies/` only (never `lamad-cli/bible-studies/`). |
@@ -94,12 +95,18 @@ Match the reference deck’s paragraph breaks:
 - Study number badge, `ESCUELA BIBLICA`, church logo, centred title, `Base Bíblica:` label + citations in black rounded pill.
 - `Base Bíblica:` **space after colon**; citations separated with `; ` on one line.
 - **No highlight background** on the main title (match youth). Strip `<a:highlight>`.
+- **Long titles (HARD):** keep title **grande** (near gold 115pt). Split long titles into 2–3 explicit lines; size ≈104pt (2 lines) / 96pt (3 lines). Expand `CuadroTexto 1` above Base Bíblica with top anchor. Never cover the citation.
+
+### Enseñanza + Datos generales
+
+- FECHA / AUTOR / LUGAR content shapes are tall (gold multi-line). After fill, force `bodyPr anchor="ctr"`.
+- **Short FECHA (HARD):** values like `930 a. C.` also get a tightened box (`y≈4.78"`, `cy≈0.55"`) on the FECHA banner midline — never leave them floating between PERSONAJES and FECHA.
 
 ### Lectura antifonal
 
 - Same verse formatting as youth **Lectura Bíblica** (`set_verses` + `VerseKind::Lectura`): red citation/numbers, black body, whole verses only.
 - Pack at `VERSE_BUDGET` (**280 chars**, same as youth) after expanding glued verses. If the next whole verse would overflow, **new slide**. Never dump Mateo 6:1–4 onto one slide. Citation only on the first slide of each passage.
-- **Colours (match youth Lectura):** citation + verse numbers **red** `#FF0000` bold; verse body **black** `#000000` regular — forced explicitly (never inherit a wrong sample fill).
+- **Colours (match youth Lectura):** citation + verse numbers **red** `#FF0000` bold; verse body **black** `#000000` regular — forced explicitly (never inherit a wrong sample fill). Chapter-boundary markers like `16:1` are verse numbers too (red/bold), not body text.
 - Template ships 4 prototype slides (2–5). If more packs are needed, **duplicate** the lectura prototype and insert into the active order (same allocate pattern as youth). Unused prototypes stay on disk but drop out of `sldIdLst`.
 - Header `LECTURA ANTIFONAL` + citation with semicolon when the template sample has one.
 
@@ -144,10 +151,12 @@ JSON fields per term (`Definicion`):
 
 | Field | Role |
 |-------|------|
-| `termino` | Chevron title (quoted on the art) |
-| `texto` | Definition body |
-| `referencia` | Optional verse/ref in the chevron |
+| `termino` | Chevron title (quoted on the art) — **verbatim from the printed «Definiciones y etimología» box** |
+| `texto` | Definition body — **verbatim from that box** |
+| `referencia` | Optional verse/ref **only if printed in that box** |
 | `icono_izq` / `icono_der` | Optional motif hints for the image generator |
+
+**HARD — never invent:** If the tema has no «Definiciones y etimología» box on the scan, use `definiciones: []` and **omit** the definición slide. Do not fabricate terms from body prose (Rebelión, Anatema, Unción, Hebrew roots, extra verses, Reina-Valera footers, etc.). Card PNGs must render only the JSON terms.
 
 ---
 
