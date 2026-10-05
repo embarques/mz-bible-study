@@ -81,11 +81,15 @@ lamad-cli/tools/*.dylib
 lamad-cli/tools/lib/
 !lamad-cli/tools/README.md
 
-# Adult template assets (local gold decks — copy to master-template.pptx locally)
+# Adult template scratch / local gold decks — keep master-template.pptx tracked
 lamad-cli/template/adult/**
 !lamad-cli/template/adult/.gitkeep
+!lamad-cli/template/adult/master-template.pptx
+!lamad-cli/template/adult/assets/
+!lamad-cli/template/adult/assets/**
 template/adult/**
 !template/adult/README.md
+!template/adult/master-template.pptx
 
 # Secrets
 .env

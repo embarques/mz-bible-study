@@ -19,6 +19,7 @@ These are enforced in `lamad-cli` build + QC. Do not “match gold” when gold 
 | **Scenic image visible** | After cloning youth section chrome, **remove** the full-bleed black `!!Rectangle`. Normalize pic to one `<a:stretch><a:fillRect/></a:stretch>` full-bleed. QC fails if `!!Rectangle` remains or `<p:pic>` is missing. |
 | **Texto Áureo citation line** | Quote on its own paragraph; biblical citation (`1 Corintios 10:33`) on the **next line** (never same line as the end of the quote). No parentheses on that citation. Shrink long Pensamiento/Áureo body text so it fits the SmartArt boxes. |
 | **Texto verse box** | Clamp `TextBox 4` so verses sit below the “Texto Bíblico” header (`y ≥ 856357` EMU). Never overlap header. |
+| **A/B body panels unified** | Every `1.A`–`3.B` body slide uses the **same** `Título 1` + body box geometry (`x/cx/y/cy` band). Never keep prototype widths — some gold slides have title `cx` wider than the slide (no wrap / text off edge). Two-line header band; tight gap to body. Only the text differs. |
 | **Package / Repair** | Empty `<a:stretch />`, wrong notes rels, or stale `app.xml` `<Slides>` after duplication → PowerPoint Repair. Validate + open clean before delivery. |
 | **Output path** | Generated decks → repo-root `bible-studies/` only (never `lamad-cli/bible-studies/`). |
 

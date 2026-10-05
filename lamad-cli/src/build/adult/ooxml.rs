@@ -98,11 +98,13 @@ pub fn set_ab_title_header(
     rewrite_as_youth_section_bottom(path, &title, &cite)
 }
 
-/// `MATEO 6:1-4` — never `(MATEO 6:1-4)` on image / Texto Bíblico chrome.
+/// `MATEO 6:1-4` — never `(MATEO 6:1-4)` or trailing `;` on image chrome.
 fn strip_citation_parens(cita: &str) -> String {
     cita.trim()
         .trim_start_matches('(')
         .trim_end_matches(')')
+        .trim()
+        .trim_end_matches(';')
         .trim()
         .to_string()
 }
@@ -424,21 +426,29 @@ pub fn set_ab_body_slide(path: &Path, point_title: &str, body: &str) -> Result<(
     set_content_body_teaching(path, body, None)
 }
 
-/// A/B body header (`Título 1`). Gold uses `anchor="b"` + a soft `<a:br>` that
-/// our leading-run fill turned into a lone `1.B -` on line 1 and the full
-/// title on line 2 — bottom-anchored overflow then paints **above** the slide.
-/// Put the whole title in one flow, top-anchor, and shrink font until it fits.
+/// A/B body header (`Título 1`) + body panel geometry.
+///
+/// Gold prototypes disagree (some titles have **negative Y**). With top-anchor
+/// that climbs off-slide; with a short box + huge gap the body looks detached.
+/// Normalize every A/B body slide to:
+/// - title band on-slide with **room for 2 lines**
+/// - readable font (step down only when still too long)
+/// - body panel tucked up under the title (small gap)
 fn set_ab_body_title(path: &Path, title: &str) -> Result<()> {
     let sz = ab_body_title_font_sz(title);
     let xml = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let xml = transform_shape(&xml, "Título 1", |b| {
         let mut s = set_simple_text_block(b, title, Some(true))?;
-        // Grow downward if anything wraps — never off the top of the slide.
-        s = s.replacen(r#"anchor="b""#, r#"anchor="t""#, 1);
+        // Top-anchor inside an on-slide band (see normalize below).
+        if s.contains(r#"anchor="b""#) {
+            s = s.replacen(r#"anchor="b""#, r#"anchor="t""#, 1);
+        } else if s.contains("<a:bodyPr") && !s.contains("anchor=") {
+            s = s.replacen("<a:bodyPr", r#"<a:bodyPr anchor="t""#, 1);
+        }
         s = force_all_run_sz(&s, sz);
         Ok(s)
     })?;
-    let xml = deepen_title_box_if_needed(&xml, "Título 1", title, sz)?;
+    let xml = normalize_ab_body_panels(&xml)?;
     fs::write(path, xml).with_context(|| format!("write {}", path.display()))?;
     eprintln!(
         "  ab-title {}: sz={} ({})",
@@ -449,20 +459,119 @@ fn set_ab_body_title(path: &Path, title: &str) -> Result<()> {
     Ok(())
 }
 
-/// Hundredths of a point — step down when the header would overflow.
+/// Hundredths of a point — same ladder for every A/B body header.
 fn ab_body_title_font_sz(title: &str) -> u32 {
     let n = title.chars().count();
-    if n > 72 {
-        2200 // 22pt
-    } else if n > 58 {
-        2600
+    if n > 78 {
+        3200 // 32pt — very long, still two lines inside PANEL_CX
     } else if n > 48 {
-        3000
-    } else if n > 36 {
-        3400
+        3600 // 36pt — wraps cleanly on the shared panel width
     } else {
-        3600
+        4000 // 40pt — short titles stay one line
     }
+}
+
+/// Unified A/B body chrome — **same boxes for 1.A–3.B**. Gold prototypes
+/// disagree (1.B title `cx` > slide width → no wrap; 2.A wraps). Force one
+/// geometry so only the text differs.
+fn normalize_ab_body_panels(xml: &str) -> Result<String> {
+    // Slide 13.333" × 7.5". Match clean 1.A panel inset from master.
+    const PANEL_X: i64 = 162_730;
+    const PANEL_CX: i64 = 11_866_540; // must stay < 12_192_000 so text wraps
+    const TITLE_Y: i64 = 100_000;
+    const TITLE_CY: i64 = 1_050_000; // two-line band at 32–40pt
+    const GAP: i64 = 50_000;
+
+    let body = shape_xfrm(xml, "Marcador de contenido 2")
+        .context("A/B body slide missing Marcador de contenido 2 xfrm")?;
+
+    let title_bottom = TITLE_Y + TITLE_CY;
+    let new_body_y = title_bottom + GAP;
+    // Keep the same bottom edge so the navy footer clearance stays.
+    let body_bottom = body.y + body.cy;
+    let new_body_cy = (body_bottom - new_body_y).max(3_500_000);
+
+    let mut out = set_shape_xfrm(
+        xml,
+        "Título 1",
+        PANEL_X,
+        TITLE_Y,
+        PANEL_CX,
+        TITLE_CY,
+    )?;
+    out = set_shape_xfrm(
+        &out,
+        "Marcador de contenido 2",
+        PANEL_X,
+        new_body_y,
+        PANEL_CX,
+        new_body_cy,
+    )?;
+    Ok(out)
+}
+
+#[derive(Clone, Copy)]
+struct Xfrm {
+    x: i64,
+    y: i64,
+    cx: i64,
+    cy: i64,
+}
+
+fn shape_xfrm(xml: &str, shape: &str) -> Option<Xfrm> {
+    let marker = format!(r#"name="{shape}""#);
+    let name_pos = xml.find(&marker)?;
+    let shape_end = xml[name_pos..]
+        .find("</p:sp>")
+        .map(|i| name_pos + i)?;
+    let block = &xml[name_pos..shape_end];
+    let re = Regex::new(
+        r#"<a:off x="(-?\d+)" y="(-?\d+)"\s*/>\s*<a:ext cx="(-?\d+)" cy="(-?\d+)"\s*/>"#,
+    )
+    .unwrap();
+    let caps = re.captures(block)?;
+    Some(Xfrm {
+        x: caps[1].parse().ok()?,
+        y: caps[2].parse().ok()?,
+        cx: caps[3].parse().ok()?,
+        cy: caps[4].parse().ok()?,
+    })
+}
+
+fn set_shape_xfrm(
+    xml: &str,
+    shape: &str,
+    x: i64,
+    y: i64,
+    cx: i64,
+    cy: i64,
+) -> Result<String> {
+    let marker = format!(r#"name="{shape}""#);
+    let name_pos = xml
+        .find(&marker)
+        .with_context(|| format!("shape {shape} not found"))?;
+    let shape_end = xml[name_pos..]
+        .find("</p:sp>")
+        .map(|i| name_pos + i)
+        .context("shape not closed")?;
+    let block = &xml[name_pos..shape_end];
+    let re = Regex::new(
+        r#"<a:off x="-?\d+" y="-?\d+"\s*/>\s*<a:ext cx="-?\d+" cy="-?\d+"\s*/>"#,
+    )
+    .unwrap();
+    let Some(m) = re.find(block) else {
+        bail!("shape {shape} missing off/ext xfrm");
+    };
+    let abs = name_pos + m.start();
+    let new_xfrm = format!(
+        r#"<a:off x="{x}" y="{y}"/><a:ext cx="{cx}" cy="{cy}"/>"#
+    );
+    Ok(format!(
+        "{}{}{}",
+        &xml[..abs],
+        new_xfrm,
+        &xml[abs + m.as_str().len()..]
+    ))
 }
 
 fn force_all_run_sz(shape_xml: &str, sz: u32) -> String {
@@ -492,49 +601,6 @@ fn force_all_run_sz(shape_xml: &str, sz: u32) -> String {
         }
     })
     .into_owned()
-}
-
-/// Long two-line headers need a taller `Título 1` box so top-anchored text
-/// does not collide with the body.
-fn deepen_title_box_if_needed(
-    xml: &str,
-    shape: &str,
-    title: &str,
-    sz: u32,
-) -> Result<String> {
-    let n = title.chars().count();
-    // Rough: >48 chars or ≤28pt usually wraps to 2 lines on the wide header.
-    if n <= 48 && sz >= 3400 {
-        return Ok(xml.to_string());
-    }
-    let marker = format!(r#"name="{shape}""#);
-    let Some(name_pos) = xml.find(&marker) else {
-        return Ok(xml.to_string());
-    };
-    // Stay inside this shape: from name → closing </p:sp>.
-    let shape_end = xml[name_pos..]
-        .find("</p:sp>")
-        .map(|i| name_pos + i)
-        .unwrap_or(xml.len());
-    let shape_xml = &xml[name_pos..shape_end];
-    // Prefer the spPr xfrm ext (shape frame), not nested text xfrm.
-    let ext_re = Regex::new(r#"<a:ext cx="(\d+)" cy="(\d+)"\s*/>"#).unwrap();
-    let Some(caps) = ext_re.captures(shape_xml) else {
-        return Ok(xml.to_string());
-    };
-    let cx = &caps[1];
-    let cy: i64 = caps[2].parse().unwrap_or(679_677);
-    let new_cy = (cy + 280_000).min(1_100_000);
-    let old_ext = caps.get(0).unwrap().as_str();
-    let new_ext = format!(r#"<a:ext cx="{cx}" cy="{new_cy}"/>"#);
-    let abs_start = name_pos + caps.get(0).unwrap().start();
-    let abs_end = abs_start + old_ext.len();
-    Ok(format!(
-        "{}{}{}",
-        &xml[..abs_start],
-        new_ext,
-        &xml[abs_end..]
-    ))
 }
 
 pub fn set_definicion(path: &Path, text: &str) -> Result<()> {

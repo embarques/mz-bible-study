@@ -6,7 +6,7 @@ User guide: [`../README.md`](../README.md) · Agent playbook: [`../AGENTS.md`](.
 | Path | Audience | Use as |
 |------|----------|--------|
 | [`youth/master-template.pptx`](youth/master-template.pptx) | `youth` (default) | Juveniles / intermedio / jóvenes |
-| [`adult/master-template.pptx`](adult/master-template.pptx) | `adult` | Adultos (add file when ready) |
+| [`adult/master-template.pptx`](adult/master-template.pptx) | `adult` | Adultos (Estudio 24 gold) |
 
 Select with CLI: `mzbs … --audience youth|adult` or override with `--template PATH`.
 

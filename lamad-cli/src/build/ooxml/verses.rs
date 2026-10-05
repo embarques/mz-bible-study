@@ -85,6 +85,17 @@ fn split_poetry_lines(line: &str) -> Vec<String> {
     vec![line.trim().to_string()]
 }
 
+/// Strip `()`, trailing `;`, and extra spaces from a Lectura/Texto citation.
+fn clean_verse_citation(cite: &str) -> String {
+    cite.trim()
+        .trim_start_matches('(')
+        .trim_end_matches(')')
+        .trim()
+        .trim_end_matches(';')
+        .trim()
+        .to_string()
+}
+
 fn format_citation_from_template(
     shape_xml: &str,
     cite: &str,
@@ -94,34 +105,15 @@ fn format_citation_from_template(
         // Texto Bíblico: never parentheses — adult gold prototypes wrap
         // cites in `()` and format_ref_citation_from_template would copy that.
         VerseKind::Texto => {
-            let base = cite
-                .trim()
-                .trim_start_matches('(')
-                .trim_end_matches(')')
-                .trim()
-                .trim_end_matches(';')
-                .trim();
-            Ok(base.to_string())
+            let _ = shape_xml;
+            Ok(clean_verse_citation(cite))
         }
         VerseKind::Lectura => {
-            let nodes = super::xml::all_elements(shape_xml, "a:t");
-            let sample = nodes
-                .iter()
-                .map(|e| e.inner(shape_xml, "a:t"))
-                .find(|t| !t.trim().is_empty())
-                .unwrap_or("");
-            let base = cite
-                .trim()
-                .trim_start_matches('(')
-                .trim_end_matches(')')
-                .trim()
-                .trim_end_matches(';')
-                .trim();
-            if sample.contains(';') {
-                Ok(format!("{base}; "))
-            } else {
-                Ok(base.to_string())
-            }
+            // Lectura / Lectura Antifonal citation title: clean book range only.
+            // Never copy trailing `;` from dirty adult template samples
+            // (`;` belongs on Base Bíblica multi-line lists, not here).
+            let _ = shape_xml;
+            Ok(clean_verse_citation(cite))
         }
     }
 }
