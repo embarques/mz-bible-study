@@ -3,8 +3,10 @@
 use anyhow::{bail, Result};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
+use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::paths;
 use crate::scans;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum, Default)]
@@ -51,23 +53,28 @@ pub struct PrepareJob {
 impl PrepareJob {
     pub fn resolve_pdf(&self) -> Result<PathBuf> {
         if let Some(p) = &self.pdf {
-            if !p.exists() {
-                bail!("PDF not found: {}", p.display());
+            if p.is_file() {
+                return Ok(p.canonicalize().unwrap_or_else(|_| p.clone()));
             }
-            return Ok(p.canonicalize().unwrap_or_else(|_| p.clone()));
+            bail!("{}", missing_scan_pdf_message(p, self.from, self.to));
         }
         let list = scans::list_pending_pdfs()?;
         match list.len() {
             0 => bail!(
-                "No PDF found. Put a scan PDF in scans/ (not scans/complete/ or scans/error/), \
-                 or pass --pdf PATH."
+                "No hay PDF de scan en scans/.\n\
+                 Pon el documento en scans/ (no en scans/complete/ ni scans/error/), \
+                 o pasa --pdf \"Nombre del documento.pdf\".\n\
+                 Ejemplo: --pdf \"scans/Bible Study 4 - Adult.pdf\""
             ),
             1 => Ok(list[0].clone()),
             _ => bail!(
-                "Multiple PDFs in scans/ ({}). Pass --pdf PATH to choose one:\n{}",
+                "Hay varios PDFs en scans/ ({}). Pasa --pdf con el nombre del documento:\n{}",
                 list.len(),
                 list.iter()
-                    .map(|p| format!("  - {}", p.display()))
+                    .map(|p| {
+                        let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("?");
+                        format!("  - {name}\n      ({})", p.display())
+                    })
                     .collect::<Vec<_>>()
                     .join("\n")
             ),
@@ -188,6 +195,99 @@ pub fn is_under_scans(path: &Path) -> bool {
         .any(|c| c.as_os_str() == "scans")
 }
 
+/// Clear error when `--pdf` points at a missing scan document.
+fn missing_scan_pdf_message(path: &Path, from: u32, to: u32) -> String {
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("documento.pdf");
+    let estudio = if from == to {
+        format!("estudio {from}")
+    } else {
+        format!("estudios {from}–{to}")
+    };
+
+    let mut msg = format!(
+        "El documento de scan no está.\n\
+         Documento: {name}\n\
+         Para: {estudio}\n\
+         Ruta pedida: {}",
+        path.display()
+    );
+
+    if let Some(in_error) = find_in_error_tray(name) {
+        msg.push_str(&format!(
+            "\n\
+             Hallado en scans/error/ (falló un prepare anterior):\n\
+               {}\n\
+             Muévelo de vuelta a scans/ o usa:\n\
+               --pdf \"{}\"",
+            in_error.display(),
+            in_error.display()
+        ));
+    } else {
+        msg.push_str(
+            "\n\
+             Pon el PDF en scans/ (no en scans/complete/ ni scans/error/) \
+             y vuelve a correr prepare.",
+        );
+    }
+    msg
+}
+
+/// Same basename (or `stem-N.pdf` unique_dest variants) under `scans/error/`.
+fn find_in_error_tray(file_name: &str) -> Option<PathBuf> {
+    let dir = paths::scans_dir().ok()?;
+    let error_dir = dir.join("error");
+    if !error_dir.is_dir() {
+        return None;
+    }
+    let stem = Path::new(file_name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(file_name);
+    let mut matches: Vec<PathBuf> = Vec::new();
+    let rd = fs::read_dir(&error_dir).ok()?;
+    for entry in rd.flatten() {
+        let p = entry.path();
+        if !p.is_file() {
+            continue;
+        }
+        let is_pdf = p
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("pdf"))
+            .unwrap_or(false);
+        if !is_pdf {
+            continue;
+        }
+        let n = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        // Exact name, or unique_dest variants: "Bible Study 4 - Adult-1.pdf"
+        let is_variant = n
+            .strip_prefix(stem)
+            .map(|rest| {
+                rest.eq_ignore_ascii_case(".pdf")
+                    || (rest.starts_with('-') && rest.to_ascii_lowercase().ends_with(".pdf"))
+            })
+            .unwrap_or(false);
+        if n.eq_ignore_ascii_case(file_name) || is_variant {
+            matches.push(p);
+        }
+    }
+    matches.sort();
+    // Prefer exact basename, else last sorted variant (highest -N)
+    matches
+        .iter()
+        .find(|p| {
+            p.file_name()
+                .and_then(|s| s.to_str())
+                .map(|n| n.eq_ignore_ascii_case(file_name))
+                .unwrap_or(false)
+        })
+        .cloned()
+        .or_else(|| matches.pop())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,5 +302,17 @@ mod tests {
         assert!(pdf_has_proximo_pages(23, 23, 12));
         assert!(!pdf_has_proximo_pages(26, 23, 12));
         assert!(!pdf_has_proximo_pages(23, 23, 3));
+    }
+
+    #[test]
+    fn missing_scan_message_includes_document_name() {
+        let msg = missing_scan_pdf_message(
+            Path::new("scans/Bible Study 4 - Adult.pdf"),
+            4,
+            4,
+        );
+        assert!(msg.contains("El documento de scan no está"));
+        assert!(msg.contains("Bible Study 4 - Adult.pdf"));
+        assert!(msg.contains("estudio 4"));
     }
 }

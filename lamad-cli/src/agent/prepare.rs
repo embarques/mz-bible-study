@@ -376,8 +376,10 @@ fn verify_adult_deliverables(study: u32, root: &Path) -> Result<Deliverables> {
         }
     }
     if !missing_def.is_empty() {
+        // Only warn — empty temas may omit a card; build skips those slides.
         crate::progress::warn(format!(
-            "adult estudio {study}: missing definición cards ({}) — build will use text fallback",
+            "adult estudio {study}: definición cards missing on disk ({}) — \
+             OK if that tema has no «Definiciones y etimología» box",
             missing_def.join(", ")
         ));
     }
@@ -407,20 +409,16 @@ pub fn stamp_adult_image_paths(json_path: &Path, study: u32, root: &Path) -> Res
             ]
         }),
     );
-    let media = adult_media_dir(study, root);
-    let def_paths: Vec<String> = adult_definicion_basenames()
+    // Always stamp 3 slots (one per tema). Missing files are OK when that
+    // tema's `definiciones` is empty — the builder skips the slide.
+    let def_paths: Vec<serde_json::Value> = adult_definicion_basenames()
         .iter()
-        .filter(|name| media.join(name).exists())
-        .map(|name| rel(name))
+        .map(|name| serde_json::Value::String(rel(name)))
         .collect();
-    if def_paths.len() == adult_definicion_basenames().len() {
-        obj.insert(
-            "definicion_images".into(),
-            serde_json::Value::Array(def_paths.into_iter().map(serde_json::Value::String).collect()),
-        );
-    } else {
-        obj.remove("definicion_images");
-    }
+    obj.insert(
+        "definicion_images".into(),
+        serde_json::Value::Array(def_paths),
+    );
     std::fs::write(json_path, serde_json::to_string_pretty(&v)?)?;
     Ok(())
 }
