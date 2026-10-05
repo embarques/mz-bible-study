@@ -17,7 +17,7 @@ Needs Rust + Cargo. Builds when sources change, then runs:
 ```bash
 cd lamad-cli
 cp config.example.toml config.toml   # paste API key(s); set agent_provider
-# Optional: put the scan PDF in scans/
+# Optional: put the scan PDF in scans/pending/
 
 cargo run -- doctor
 cargo run -- prepare --from 23 --to 26    # full run → PPTX + PDF
@@ -63,7 +63,7 @@ Volunteer zip packages already include a prebuilt `lamad` (or `lamad.exe`) next 
 
 ### Prepare
 
-**One command gives you the deck.** Put a PDF in `scans/`, then:
+**One command gives you the deck.** Put a PDF in `scans/pending/`, then:
 
 ```bash
 # Batch (3 pages per estudio; last study has no Próximo)
@@ -116,10 +116,9 @@ OCR discover (`-n N` alone): rasterizes pages, finds title pages (`Base bíblica
 ### Scans tray
 
 ```
-scans/           ← inbox: drop new PDFs here
-scans/pending/   ← moved here after a successful prepare when more estudios remain in the PDF
+scans/pending/   ← inbox: drop new PDFs here (unprocessed / in progress)
 scans/complete/  ← moved here when the entire PDF was prepared successfully
-scans/error/     ← `.log` on failure only; PDF stays in scans/ for retry
+scans/error/     ← `.log` on failure only; PDF stays in pending/ for retry
 ```
 
 ## Configuration
@@ -205,7 +204,7 @@ lamad-app-<os>-<arch>/
     pdftoppm(.exe)            # + DLLs / lib/ as needed
     README.md
   template/youth/master-template.pptx
-  scans/{complete,error}/
+  scans/{pending,complete,error}/
   studies/youth/media/
   bible-studies/
 ```
@@ -213,7 +212,7 @@ lamad-app-<os>-<arch>/
 Ship one zip per OS/arch. Volunteers:
 
 1. Unzip; edit `config.toml` → set `agent_provider` and paste the matching API key.
-2. Put the scan PDF in `scans/`.
+2. Put the scan PDF in `scans/pending/`.
 3. Run `./lamad prepare --from N --to M` (or `lamad.exe` on Windows).
 4. Optional: `export MZBS_ROOT="/path/to/unzipped-folder"` if cwd is elsewhere.
 

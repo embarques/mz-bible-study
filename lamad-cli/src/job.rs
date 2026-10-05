@@ -67,15 +67,14 @@ impl PrepareJob {
         let list = scans::list_pending_pdfs()?;
         match list.len() {
             0 => bail!(
-                "No hay PDF de scan en scans/.\n\
-                 Pon el documento en scans/ (no en pending/, complete/ ni error/), \
+                "No hay PDF de scan en scans/pending/.\n\
+                 Pon el documento en scans/pending/ (no en complete/ ni error/), \
                  o pasa --pdf con la ruta al PDF.\n\
-                 Ejemplo: --pdf \"scans/Bible Study 4 - Adult.pdf\"\n\
-                 Si ya preparaste un estudio, el PDF puede estar en scans/pending/."
+                 Ejemplo: --pdf \"scans/pending/Bible Study 4 - Adult.pdf\""
             ),
             1 => Ok(list[0].clone()),
             _ => bail!(
-                "Hay varios PDFs en scans/ ({}). Pasa --pdf con el nombre del documento:\n{}",
+                "Hay varios PDFs en scans/pending/ ({}). Pasa --pdf con el nombre del documento:\n{}",
                 list.len(),
                 list.iter()
                     .map(|p| {
@@ -108,7 +107,7 @@ impl PrepareJob {
             .pdf
             .as_ref()
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "(auto from scans/)".into());
+            .unwrap_or_else(|| "(auto from scans/pending/)".into());
         println!("Plan:");
         println!("  PDF:     {pdf_disp}");
         if self.discover {
@@ -225,7 +224,7 @@ fn missing_scan_pdf_message(path: &Path, from: u32, to: u32) -> String {
     if let Some(in_pending) = scans::find_in_pending_tray(name) {
         msg.push_str(&format!(
             "\n\
-             Hallado en scans/pending/ (prepare exitoso anterior — más estudios pendientes):\n\
+             Hallado en scans/pending/ (inbox — aún no procesado por completo):\n\
                {}\n\
              Usa:\n\
                --pdf \"{}\"",
@@ -244,7 +243,7 @@ fn missing_scan_pdf_message(path: &Path, from: u32, to: u32) -> String {
             "\n\
              Hallado en scans/error/ (falló un prepare anterior):\n\
                {}\n\
-             Muévelo de vuelta a scans/ o usa:\n\
+             Muévelo de vuelta a scans/pending/ o usa:\n\
                --pdf \"{}\"",
             in_error.display(),
             in_error.display()
@@ -252,7 +251,7 @@ fn missing_scan_pdf_message(path: &Path, from: u32, to: u32) -> String {
     } else {
         msg.push_str(
             "\n\
-             Pon el PDF en scans/ (no en pending/, complete/ ni error/) \
+             Pon el PDF en scans/pending/ (no en complete/ ni error/) \
              y vuelve a correr prepare.",
         );
     }
@@ -348,10 +347,13 @@ mod tests {
         let name = "lamad-resolve-test.pdf";
         let pending_file = pending.join(name);
         std::fs::write(&pending_file, b"%PDF-test").unwrap();
-        let scans_rel = Path::new("scans").join(name);
-        let found = scans::resolve_scan_pdf(Path::new(name))
-            .or_else(|| scans::resolve_scan_pdf(&scans_rel));
-        assert_eq!(found.as_deref(), Some(pending_file.as_path()));
+        let pending_rel = Path::new("scans").join("pending").join(name);
+        let found = scans::resolve_scan_pdf(&pending_rel)
+            .or_else(|| scans::resolve_scan_pdf(Path::new(name)));
+        assert_eq!(
+            found.as_ref().and_then(|p| p.file_name()),
+            pending_file.file_name()
+        );
         let _ = std::fs::remove_file(&pending_file);
     }
 }

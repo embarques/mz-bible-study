@@ -51,7 +51,7 @@ pub async fn run_prepare_tui(cfg: Config) -> Result<()> {
     let pdfs = crate::scans::list_pending_pdfs().unwrap_or_default();
     if pdfs.is_empty() {
         anyhow::bail!(
-            "No PDF in scans/. Put a scan PDF in scans/ (not pending/, complete/, or error/), then retry."
+            "No PDF in scans/pending/. Put a scan PDF there (not complete/ or error/), then retry."
         );
     }
     let mut model = Model::new(pdfs, cfg.audience_enum());

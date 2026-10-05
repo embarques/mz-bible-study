@@ -38,7 +38,7 @@ pub async fn run(job: PrepareJob, cfg: &Config) -> Result<()> {
         .unwrap_or(false);
     job.echo_plan(host_images);
 
-    let pdf = job.resolve_pdf()?;
+    let pdf = scans::normalize_pending_inbox(&job.resolve_pdf()?)?;
     let page_count = pdf_page_count(&pdf)?;
 
     let root = paths::project_root()?;
@@ -196,13 +196,12 @@ pub async fn run(job: PrepareJob, cfg: &Config) -> Result<()> {
     if pdf_fully_prepared {
         scans::move_to_complete(&pdf)?;
         progress::info(format!(
-            "done — {} prepared; PDF archived to scans/complete/",
+            "done — {} prepared; PDF moved to scans/complete/",
             studies.len()
         ));
     } else {
-        scans::move_to_pending(&pdf)?;
         progress::info(format!(
-            "done — {} prepared; PDF archived to scans/pending/ (more estudios remain — use --pdf for the next run)",
+            "done — {} prepared; PDF stays in scans/pending/ (more estudios remain)",
             studies.len()
         ));
     }
@@ -219,7 +218,7 @@ fn more_studies_pending_in_pdf(slices: &[StudySlice], page_count: usize) -> bool
     covered_through < page_count
 }
 
-/// Log failure; keep the PDF in `scans/` so the user can retry.
+/// Log failure; keep the PDF in `scans/pending/` so the user can retry.
 ///
 /// **Never** move the PDF to `error/` here. The study is unfinished — the scan
 /// is still the source for the next prepare. Moving it caused:
@@ -236,7 +235,7 @@ fn finish_with_prepare_errors(
         eprintln!("warning: could not write error log: {e:#}");
     }
     eprintln!(
-        "PDF left in {} for retry (estudio incomplete — not moved to error/).",
+        "PDF left in scans/pending/ for retry (estudio incomplete — not moved to error/). Path: {}",
         pdf.display()
     );
     if errors.len() == 1 {

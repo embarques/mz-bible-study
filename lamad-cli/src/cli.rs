@@ -36,7 +36,7 @@ use crate::job::Audience;
                   to become trained or accustomed; not mere information, but formation. \
                   Related Piel form לִמֵּד (limmed): to teach.\n\n\
                   Mount Zion Church Bible-study CLI — prepare, build, validate, export.\n\n\
-                  Put a scan PDF in scans/, then:\n  lamad prepare --from N --to M\n\
+                  Put a scan PDF in scans/pending/, then:\n  lamad prepare --from N --to M\n\
                   Or run `lamad prepare` (TTY) for the interactive form.\n\
                   See LEEME.md / README.md.",
     after_help = "Name: lamad — Hebrew לָמַד, to learn by instruction, practice, or experience."
@@ -62,7 +62,7 @@ pub enum Commands {
     /// **Optional:** `--prepare-only` (JSON/images only), `--review` (cloud QA).
     /// QA later without re-preparing: `lamad review -n N`.
     ///
-    /// Looks for `*.pdf` directly under `scans/` (inbox — not `pending/`, `complete/`, or `error/`).
+    /// Looks for `*.pdf` in `scans/pending/` (inbox — not `complete/` or `error/`).
     /// Batch: `--from N --to M`. Single: `-n N` (OCR discover) or `--from F -n N` (page math).
     /// Without `--from`/`--to`/`-n` on a TTY, opens the interactive form.
     Prepare(PrepareArgs),
@@ -92,7 +92,7 @@ pub enum Commands {
 
 #[derive(Debug, Clone, Parser)]
 pub struct PrepareArgs {
-    /// Source PDF (optional if exactly one `*.pdf` sits in `scans/`)
+    /// Source PDF (optional if exactly one `*.pdf` sits in `scans/pending/`)
     #[arg(long)]
     pub pdf: Option<PathBuf>,
 
