@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::build::adult::ooxml::{
     apply_scenic_image, convert_video_tema_to_image_layout, ensure_intro_body_logo,
-    remove_orphan_videos, set_ab_body_slide, set_ab_title_header,
+    fit_intro_body_box, remove_orphan_videos, set_ab_body_slide, set_ab_title_header,
     set_definicion_image, set_ensenanza_datos, set_intro_body, set_tema_header_image,
     set_title_or_proximo, AbRefShape,
 };
@@ -241,10 +241,14 @@ pub fn apply_adult_study(build: &Path, study: &AdultStudy) -> Result<Vec<u32>> {
     let intro_nums =
         allocate_body_slides(build, &INTRO_BODY_PROTOS, study.introduccion_slides.len())?;
     for (&slide_num, text) in intro_nums.iter().zip(study.introduccion_slides.iter()) {
-        set_intro_body(&ooxml::slide_path(build, slide_num), text)?;
+        let path = ooxml::slide_path(build, slide_num);
+        set_intro_body(&path, text)?;
         // Adult intro body prototypes lack the Mount Zion logo; youth has it.
         // Copy youth bottom-right logo onto intro body slides only.
         ensure_intro_body_logo(build, slide_num, &youth_intro_logo_path()?)?;
+        // After logo inject — shrink/centre short body boxes so text is not
+        // glued under the header with a full-page empty Marcador.
+        fit_intro_body_box(&path, text)?;
     }
     order.extend(&intro_nums);
 

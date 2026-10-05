@@ -118,15 +118,22 @@ fn qc_image_chrome(slide: u32, xml: &str) -> Vec<QcIssue> {
             hard: true,
             message: "image slide title (CuadroTexto 8) empty".into(),
         });
-    } else if title.chars().count() > 55 {
-        // Soft: long titles must be ≤20pt (sz 2000) or they collide with verse.
+    } else if title.chars().count() > 42 {
+        // Long titles on widened adult panel (~5.4") — cap by length ladder.
         if let Some(block) = shape_block(xml, "CuadroTexto 8") {
             if let Some(caps) = Regex::new(r#"sz="(\d+)""#)
                 .unwrap()
                 .captures(&block)
             {
                 let sz: u32 = caps[1].parse().unwrap_or(0);
-                let max = if title.chars().count() > 70 { 1800 } else { 2000 };
+                let n = title.chars().count();
+                let max = if n > 70 {
+                    2200
+                } else if n > 55 {
+                    2400
+                } else {
+                    2800
+                };
                 if sz > max {
                     issues.push(QcIssue {
                         slide,

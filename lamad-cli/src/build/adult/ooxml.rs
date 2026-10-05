@@ -67,37 +67,48 @@ pub fn set_ensenanza_datos(
     ensenanza: &str,
     datos: &crate::model::adult_study::DatosGenerales,
 ) -> Result<()> {
-    fill_shape_preserving(path, "CuadroTexto 13", ensenanza)?;
-    fill_shape_preserving(path, "CuadroTexto 9", &datos.personajes)?;
-    // FECHA / LUGAR / AUTOR gold boxes are tall (multi-line placeholders). Short
-    // values like "930 a. C." sit at the top of the box and float above their
-    // banner — center vertically, and for FECHA also tighten the box onto the
-    // FECHA row (gold cy≈1.51" starts above the banner).
-    fill_datos_value(path, "CuadroTexto 21", &datos.fecha, Some(FECHA_SHORT_BOX))?;
-    fill_datos_value(path, "CuadroTexto 32", &datos.lugar, None)?;
-    fill_datos_value(path, "CuadroTexto 38", &datos.autor, None)?;
+    // ENSEÑANZA can be two lines — keep prototype height, centre text in box.
+    fill_datos_value(path, "CuadroTexto 13", ensenanza, None)?;
+    fill_datos_value(
+        path,
+        "CuadroTexto 9",
+        &datos.personajes,
+        Some(DATOS_BANNER_PERSONAJES),
+    )?;
+    fill_datos_value(path, "CuadroTexto 21", &datos.fecha, Some(DATOS_BANNER_FECHA))?;
+    fill_datos_value(path, "CuadroTexto 32", &datos.lugar, Some(DATOS_BANNER_LUGAR))?;
+    fill_datos_value(path, "CuadroTexto 38", &datos.autor, Some(DATOS_BANNER_AUTOR))?;
     Ok(())
 }
 
-/// Short FECHA box on the banner midline (EMU). Gold placeholder is taller and
-/// higher so multi-line dates fit; single-line dates must not float between
-/// PERSONAJES and FECHA.
-const FECHA_SHORT_BOX: (i64, i64) = (4_369_872, 502_920); // y≈4.78", cy≈0.55"
+/// Left label-strip `(y, cy)` on gold slide 8 — text boxes align to these rows.
+const DATOS_BANNER_AUTOR: (i64, i64) = (1_786_065, 1_080_200);
+const DATOS_BANNER_PERSONAJES: (i64, i64) = (3_017_233, 1_080_067);
+const DATOS_BANNER_FECHA: (i64, i64) = (4_207_034, 1_080_067);
+const DATOS_BANNER_LUGAR: (i64, i64) = (5_443_272, 1_080_067);
+/// Single-line value box height (~0.55") centred on the banner midline.
+const DATOS_SHORT_CY: i64 = 502_920;
 
 fn fill_datos_value(
     path: &Path,
     shape: &str,
     text: &str,
-    short_box: Option<(i64, i64)>,
+    banner: Option<(i64, i64)>,
 ) -> Result<()> {
     let xml = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let xml = transform_shape(&xml, shape, |b| {
         let mut filled = replace_text_preserving_runs(b, text)?;
         filled = set_body_pr_anchor(&filled, "ctr");
-        if let Some((y, cy)) = short_box {
-            if text.chars().count() <= 48 {
-                filled = set_shape_y_cy(&filled, y, cy);
-            }
+        if let Some((banner_y, banner_cy)) = banner {
+            let single_line = !text.contains('\n') && text.chars().count() <= 90;
+            let (y, cy) = if single_line {
+                let cy = DATOS_SHORT_CY.min(banner_cy);
+                let y = banner_y + (banner_cy - cy) / 2;
+                (y, cy)
+            } else {
+                (banner_y, banner_cy)
+            };
+            filled = set_shape_y_cy(&filled, y, cy);
         }
         Ok(filled)
     })?;
@@ -116,16 +127,21 @@ fn set_body_pr_anchor(shape_xml: &str, anchor: &str) -> String {
     .into_owned()
 }
 
+/// `<a:off>` + `<a:ext>` — self-closing or long-form (`></a:off>`), per OOXML variant.
+const XFRM_PAIR_RE: &str =
+    r#"<a:off x="(-?\d+)" y="(-?\d+)"\s*(?:/>|></a:off>)\s*<a:ext cx="(-?\d+)" cy="(-?\d+)"\s*(?:/>|></a:ext>)"#;
+
+fn format_xfrm_pair(x: i64, y: i64, cx: i64, cy: i64) -> String {
+    format!(r#"<a:off x="{x}" y="{y}"/><a:ext cx="{cx}" cy="{cy}"/>"#)
+}
+
 /// Rewrite shape `a:off y` / `a:ext cy`, keeping x/cx.
 fn set_shape_y_cy(shape_xml: &str, y: i64, cy: i64) -> String {
-    let re = Regex::new(
-        r#"<a:off x="(-?\d+)" y="(-?\d+)"\s*/>\s*<a:ext cx="(-?\d+)" cy="(-?\d+)"\s*/>"#,
-    )
-    .expect("xfrm regex");
+    let re = Regex::new(XFRM_PAIR_RE).expect("xfrm regex");
     re.replace(shape_xml, |caps: &regex::Captures| {
         let x = &caps[1];
         let cx = &caps[3];
-        format!(r#"<a:off x="{x}" y="{y}"/><a:ext cx="{cx}" cy="{cy}"/>"#)
+        format_xfrm_pair(x.parse().unwrap_or(0), y, cx.parse().unwrap_or(0), cy)
     })
     .into_owned()
 }
@@ -201,6 +217,9 @@ fn rewrite_as_youth_section_bottom(path: &Path, title: &str, verse: &str) -> Res
     xml = shift_shape_y(&xml, "CuadroTexto 8", TITLE_Y0 + dy)?;
     xml = shift_shape_y(&xml, "GrayLine", GRAY_Y0 + dy)?;
     xml = shift_shape_y(&xml, "CuadroTexto 3", VERSE_Y0 + dy)?;
+    // Youth section chrome is ~3.6" wide — too narrow for adult TEMA titles.
+    // Widen title / gray line / verse to ~45% of slide (left text-safe band).
+    xml = widen_image_chrome(&xml, IMAGE_CHROME_CX)?;
 
     // Point at this slide's media rid only — leave pic geometry/stretch alone.
     let blip_re = Regex::new(r#"r:embed="rId\d+""#).unwrap();
@@ -208,17 +227,17 @@ fn rewrite_as_youth_section_bottom(path: &Path, title: &str, verse: &str) -> Res
         .replace(&xml, format!(r#"r:embed="{embed}""#).as_str())
         .into_owned();
 
-    xml = transform_shape(&xml, "CuadroTexto 8", |b| {
-        set_simple_text_block(b, title, Some(true))
-    })?;
-    xml = transform_shape(&xml, "CuadroTexto 3", |b| {
-        set_simple_text_block(b, verse, Some(true))
-    })?;
-
     // Long adult TEMA/A-B titles overflow the bottom-left panel and collide
     // with the verse under the gray line — shrink until they fit.
     let title_sz = title_font_sz_hundredths(title);
-    xml = replace_first_run_sz(&xml, "CuadroTexto 8", title_sz);
+    xml = transform_shape(&xml, "CuadroTexto 8", |b| {
+        let s = set_simple_text_block(b, title, Some(true))?;
+        Ok(force_all_run_sz(&s, title_sz))
+    })?;
+    xml = transform_shape(&xml, "CuadroTexto 3", |b| {
+        let s = set_simple_text_block(b, verse, Some(true))?;
+        Ok(force_all_run_sz(&s, IMAGE_VERSE_SZ))
+    })?;
 
     fs::write(path, xml).with_context(|| format!("write {}", path.display()))?;
     // Youth slide8 ships empty `<a:stretch />` + srcRect. That is a schema
@@ -236,20 +255,35 @@ fn rewrite_as_youth_section_bottom(path: &Path, title: &str, verse: &str) -> Res
     Ok(())
 }
 
+/// Bottom-left image chrome width (EMU). Youth default ≈3291840 (~3.6").
+const IMAGE_CHROME_CX: i64 = 4_900_000; // ~5.4" — fits left text-safe band
+const IMAGE_VERSE_SZ: u32 = 2200; // 22pt (youth clone ships 18pt)
+
+/// Widen title / gray line / verse shapes together (same left edge, wider cx).
+fn widen_image_chrome(xml: &str, cx: i64) -> Result<String> {
+    let mut out = xml.to_string();
+    for shape in ["CuadroTexto 8", "GrayLine", "CuadroTexto 3"] {
+        if let Some(xfrm) = shape_xfrm(&out, shape) {
+            out = set_shape_xfrm(&out, shape, xfrm.x, xfrm.y, cx, xfrm.cy)?;
+        }
+    }
+    Ok(out)
+}
+
 /// Hundredths of a point for bottom-left image titles. Longer titles need
 /// smaller type so they stay above the gray line / verse.
 fn title_font_sz_hundredths(title: &str) -> u32 {
     let n = title.chars().count();
     if n > 70 {
-        1800 // 18pt
+        2200 // 22pt
     } else if n > 55 {
-        2000
+        2400 // 24pt — typical TEMA I/II length at widened panel
     } else if n > 42 {
-        2400
-    } else if n > 32 {
         2800
-    } else {
+    } else if n > 32 {
         3200
+    } else {
+        3600
     }
 }
 
@@ -580,10 +614,7 @@ fn shape_xfrm(xml: &str, shape: &str) -> Option<Xfrm> {
         .find("</p:sp>")
         .map(|i| name_pos + i)?;
     let block = &xml[name_pos..shape_end];
-    let re = Regex::new(
-        r#"<a:off x="(-?\d+)" y="(-?\d+)"\s*/>\s*<a:ext cx="(-?\d+)" cy="(-?\d+)"\s*/>"#,
-    )
-    .unwrap();
+    let re = Regex::new(XFRM_PAIR_RE).unwrap();
     let caps = re.captures(block)?;
     Some(Xfrm {
         x: caps[1].parse().ok()?,
@@ -610,17 +641,12 @@ fn set_shape_xfrm(
         .map(|i| name_pos + i)
         .context("shape not closed")?;
     let block = &xml[name_pos..shape_end];
-    let re = Regex::new(
-        r#"<a:off x="-?\d+" y="-?\d+"\s*/>\s*<a:ext cx="-?\d+" cy="-?\d+"\s*/>"#,
-    )
-    .unwrap();
+    let re = Regex::new(XFRM_PAIR_RE).unwrap();
     let Some(m) = re.find(block) else {
         bail!("shape {shape} missing off/ext xfrm");
     };
     let abs = name_pos + m.start();
-    let new_xfrm = format!(
-        r#"<a:off x="{x}" y="{y}"/><a:ext cx="{cx}" cy="{cy}"/>"#
-    );
+    let new_xfrm = format_xfrm_pair(x, y, cx, cy);
     Ok(format!(
         "{}{}{}",
         &xml[..abs],
@@ -798,7 +824,34 @@ fn rewrite_slide_as_fullbleed_pic(slide_xml: &str, embed_rid: &str) -> Result<St
 
 pub fn set_intro_body(path: &Path, text: &str) -> Result<()> {
     warn_if_over_budget(text);
-    set_content_body_teaching(path, text, None)
+    set_content_body_teaching(path, text, None)?;
+    Ok(())
+}
+
+/// Call after logo inject. Expand `Marcador de contenido 2` to the full white
+/// body band (below the blue header, above the logo) and top-align text.
+pub fn fit_intro_body_box(path: &Path, _text: &str) -> Result<()> {
+    // Gold slide 10 — white body inset matches `Título 1` header bar.
+    const BODY_X: i64 = 459_346;
+    const BODY_CX: i64 = 10_945_254;
+    const BODY_TOP: i64 = 1_708_353;
+    // Soft floor above Mount Zion logo (~y=6.19M).
+    const BODY_FLOOR: i64 = 6_050_000;
+    let body_cy = (BODY_FLOOR - BODY_TOP).max(1_500_000);
+
+    let xml = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let mut out = set_shape_xfrm(
+        &xml,
+        "Marcador de contenido 2",
+        BODY_X,
+        BODY_TOP,
+        BODY_CX,
+        body_cy,
+    )?;
+    out = transform_shape(&out, "Marcador de contenido 2", |b| {
+        Ok(set_body_pr_anchor(b, "t"))
+    })?;
+    fs::write(path, out).with_context(|| format!("write {}", path.display()))
 }
 
 /// Youth intro body slides include the Mount Zion logo at bottom-right

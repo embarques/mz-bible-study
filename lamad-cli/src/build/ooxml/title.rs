@@ -29,12 +29,29 @@ pub fn set_title_slide(path: &Path, numero: &str, titulo: &str, base: &[String])
 /// line breaks (2–3 lines) + a slightly smaller size so every word fits
 /// above Base Bíblica without covering it.
 pub fn set_adult_title_slide(path: &Path, numero: &str, titulo: &str, base: &[String]) -> Result<()> {
-    let lines = adult_title_lines(titulo);
+    let max_bottom = ADULT_BASE_BIBLICA_Y - ADULT_TITLE_BASE_GAP;
+    // Probe box geometry from the template before writing text.
+    let probe = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let box_cx = shape_cx(&probe, "CuadroTexto 1").unwrap_or(ADULT_TITLE_BOX_CX);
+    let box_y = shape_y(&probe, "CuadroTexto 1").unwrap_or(ADULT_TITLE_BOX_Y);
+    let available = (max_bottom - box_y).max(500_000);
+
+    // Try 2-line layout first; fall back to 3 lines if we must shrink below 72pt.
+    let words: Vec<&str> = titulo.split_whitespace().filter(|w| !w.is_empty()).collect();
+    let mut lines = adult_title_lines(titulo);
+    let mut title_sz = adult_title_font_sz_fit(titulo, &lines, box_cx, available);
+    if title_sz < 7200 && words.len() >= 6 {
+        let three = split_words_balanced(&words, 3);
+        let sz3 = adult_title_font_sz_fit(titulo, &three, box_cx, available);
+        if sz3 > title_sz {
+            lines = three;
+            title_sz = sz3;
+        }
+    }
+
     fill_title_slide_lines(path, numero, &lines, base, "CuadroTexto 1")?;
     let xml = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let xml = strip_text_highlights(&xml);
-    let title_sz = adult_title_font_sz(titulo, lines.len());
-    let max_bottom = ADULT_BASE_BIBLICA_Y - ADULT_TITLE_BASE_GAP;
     let xml = transform_shape(&xml, "CuadroTexto 1", |b| {
         let b = force_shape_run_sz(b, title_sz);
         let b = set_body_pr_anchor(&b, "t"); // top — wrap down, leave Base clear
@@ -43,38 +60,103 @@ pub fn set_adult_title_slide(path: &Path, numero: &str, titulo: &str, base: &[St
     fs::write(path, xml).with_context(|| format!("write {}", path.display()))
 }
 
-/// Split long titles into 2–3 centred lines so we can stay near gold size.
+/// Default adult title box geometry (gold slide 1) when XML probe fails.
+const ADULT_TITLE_BOX_CX: i64 = 12_529_326;
+const ADULT_TITLE_BOX_Y: i64 = 1_502_300;
+
+/// Split long titles into 2–3 centred lines. Prefer **2 balanced lines**;
+/// only go to 3 when even a shrunk 2-line layout still overflows Base.
 fn adult_title_lines(titulo: &str) -> Vec<String> {
     let words: Vec<&str> = titulo.split_whitespace().filter(|w| !w.is_empty()).collect();
-    if words.len() <= 5 {
+    let chars = titulo.chars().count();
+    if words.len() <= 4 && chars <= 32 {
         return vec![titulo.trim().to_string()];
     }
-    if words.len() <= 8 {
-        let mid = words.len() / 2;
-        let break_at = if mid < words.len()
-            && words[mid].chars().count() <= 2
-            && mid + 1 < words.len()
-        {
-            mid + 1
-        } else {
-            mid
-        };
-        return vec![
-            words[..break_at].join(" "),
-            words[break_at..].join(" "),
-        ];
+    if words.len() >= 5 || chars > 28 {
+        return split_words_balanced(&words, 2);
     }
-    let a = (words.len() + 2) / 3;
-    let b = (words.len() + 2) / 3;
-    vec![
-        words[..a].join(" "),
-        words[a..a + b].join(" "),
-        words[a + b..].join(" "),
-    ]
+    vec![titulo.trim().to_string()]
 }
 
-/// Hundredths of a point — stay grande; fewer lines ⇒ larger type.
-fn adult_title_font_sz(titulo: &str, line_count: usize) -> u32 {
+/// Pick the cut that best balances character counts; keep short glue words
+/// ("A", "DE", "SU") with the **previous** line so they are not orphans.
+fn split_words_balanced(words: &[&str], n: usize) -> Vec<String> {
+    if words.is_empty() {
+        return vec![String::new()];
+    }
+    if n <= 1 || words.len() <= n {
+        return vec![words.join(" ")];
+    }
+    if n == 2 {
+        let mut best = 1usize;
+        let mut best_score = i64::MAX;
+        for cut in 1..words.len() {
+            let left = words[..cut].join(" ").chars().count() as i64;
+            let right = words[cut..].join(" ").chars().count() as i64;
+            let mut score = (left - right).abs();
+            // Prefer not starting the second line with a tiny glue word.
+            if words[cut].chars().count() <= 2 {
+                score += 8;
+            }
+            if score < best_score {
+                best_score = score;
+                best = cut;
+            }
+        }
+        return vec![words[..best].join(" "), words[best..].join(" ")];
+    }
+    // 3 lines — equal char thirds.
+    let total: usize = words.iter().map(|w| w.chars().count() + 1).sum();
+    let mut cuts = Vec::new();
+    let mut acc = 0usize;
+    let mut next_target = total / 3;
+    for (i, w) in words.iter().enumerate() {
+        if cuts.len() >= 2 {
+            break;
+        }
+        acc += w.chars().count() + 1;
+        if acc >= next_target && i + 1 < words.len() {
+            let mut cut = i + 1;
+            if words[cut].chars().count() <= 2 && cut + 1 < words.len() {
+                cut += 1;
+            }
+            if cuts.last().copied() != Some(cut) {
+                cuts.push(cut);
+                next_target = total.saturating_mul(cuts.len() + 1) / 3;
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    for &cut in &cuts {
+        out.push(words[start..cut].join(" "));
+        start = cut;
+    }
+    out.push(words[start..].join(" "));
+    out.into_iter().filter(|s| !s.is_empty()).collect()
+}
+
+/// Hundredths of a point — stay grande when it fits; shrink so wrapped height
+/// never crosses Base Bíblica.
+fn adult_title_font_sz_fit(
+    titulo: &str,
+    lines: &[String],
+    box_cx: i64,
+    available_cy: i64,
+) -> u32 {
+    let mut sz = adult_title_font_sz_start(titulo, lines.len());
+    while sz > 6400 {
+        let visual = estimate_visual_lines(lines, box_cx, sz);
+        let need = (visual as i64) * line_height_emu(sz);
+        if need <= available_cy {
+            break;
+        }
+        sz -= 400; // step down 4pt
+    }
+    sz
+}
+
+fn adult_title_font_sz_start(titulo: &str, line_count: usize) -> u32 {
     let n = titulo.chars().count();
     if n <= 28 && line_count <= 2 {
         11500 // 115pt — gold short titles
@@ -85,6 +167,41 @@ fn adult_title_font_sz(titulo: &str, line_count: usize) -> u32 {
     } else {
         8800
     }
+}
+
+/// Rough visual wrap count for bold caps (Verlag Black) at `sz` hundredths.
+fn estimate_visual_lines(lines: &[String], box_cx: i64, sz: u32) -> usize {
+    // Average capital width ≈ 0.58 × font size (pt) for Verlag Black.
+    let char_emu = ((sz as f64) / 100.0) * 0.58 * (914_400.0 / 72.0);
+    let cpl = ((box_cx as f64) / char_emu).floor().max(8.0) as usize;
+    let mut total = 0usize;
+    for line in lines {
+        let n = line.chars().count().max(1);
+        total += n.div_ceil(cpl);
+    }
+    total.max(1)
+}
+
+fn line_height_emu(sz: u32) -> i64 {
+    // ~1.12× leading — PowerPoint default for display titles.
+    let pt = (sz as f64) / 100.0;
+    ((pt * 1.12) * (914_400.0 / 72.0)) as i64
+}
+
+fn shape_cx(xml: &str, shape: &str) -> Option<i64> {
+    let marker = format!(r#"name="{shape}""#);
+    let pos = xml.find(&marker)?;
+    let block = &xml[pos..xml[pos..].find("</p:sp>").map(|i| pos + i)?];
+    let re = Regex::new(r#"<a:ext cx="(-?\d+)""#).ok()?;
+    re.captures(block)?.get(1)?.as_str().parse().ok()
+}
+
+fn shape_y(xml: &str, shape: &str) -> Option<i64> {
+    let marker = format!(r#"name="{shape}""#);
+    let pos = xml.find(&marker)?;
+    let block = &xml[pos..xml[pos..].find("</p:sp>").map(|i| pos + i)?];
+    let re = Regex::new(r#"<a:off x="-?\d+" y="(-?\d+)""#).ok()?;
+    re.captures(block)?.get(1)?.as_str().parse().ok()
 }
 
 /// Set every `<a:rPr … sz="…">` inside the shape to `sz`.

@@ -13,14 +13,18 @@ use regex::Regex;
 
 use crate::build::ooxml::shape::transform_shape;
 
-/// Mean relative luminance below this → treat region as dark → light text.
-const DARK_LUMA_THRESHOLD: f32 = 0.45;
+/// Left text-safe band mean below this → light (white) chrome.
+const DARK_BAND_THRESHOLD: f32 = 0.48;
+/// Full-frame mean below this → treat as a dark cinematic scene.
+const DARK_GLOBAL_THRESHOLD: f32 = 0.55;
+/// Soft left mist on a dark scene still gets white chrome (band below this).
+const MIST_BAND_CAP: f32 = 0.72;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextTone {
-    /// Dark navy title / dark gray verse (light background).
+    /// Dark navy title / navy verse (true light parchment/wash).
     DarkOnLight,
-    /// White title / light gray verse (dark background).
+    /// White title / white verse (dark scenic / soft mist over dark scene).
     LightOnDark,
 }
 
@@ -34,15 +38,16 @@ impl TextTone {
 
     pub fn verse_rgb(self) -> &'static str {
         match self {
-            Self::DarkOnLight => "444444",
-            Self::LightOnDark => "E8E8E8",
+            // Same navy as title — mid-gray `#444` washed out on lavender mist.
+            Self::DarkOnLight => "1A1A2E",
+            Self::LightOnDark => "FFFFFF",
         }
     }
 
     pub fn gray_line_rgb(self) -> &'static str {
         match self {
             Self::DarkOnLight => "B0B0B0",
-            Self::LightOnDark => "D0D0D0",
+            Self::LightOnDark => "E0E0E0",
         }
     }
 }
@@ -59,15 +64,38 @@ pub fn tone_for_image_bytes(raw: &[u8]) -> Result<TextTone> {
     if w == 0 || h == 0 {
         bail!("image has zero dimensions");
     }
-    // Left ~40% — matches youth/adult text-safe wash under chrome.
-    let x1 = (w as f32 * 0.40) as u32;
-    let step_x = (x1 / 32).max(1);
+    let band = mean_luma(&img, 0, 0, ((w as f32 * 0.40) as u32).max(1), h)?;
+    let global = mean_luma(&img, 0, 0, w, h)?;
+    // Dark left band → white. Also: dark overall scene with a soft left mist
+    // (common adult cinematic art) → white — the mist alone used to force
+    // navy/gray chrome that looked wrong on a dark battlefield/dusk photo.
+    Ok(
+        if band < DARK_BAND_THRESHOLD
+            || (global < DARK_GLOBAL_THRESHOLD && band < MIST_BAND_CAP)
+        {
+            TextTone::LightOnDark
+        } else {
+            TextTone::DarkOnLight
+        },
+    )
+}
+
+fn mean_luma(
+    img: &image::DynamicImage,
+    x0: u32,
+    y0: u32,
+    x1: u32,
+    y1: u32,
+) -> Result<f32> {
+    let w = (x1 - x0).max(1);
+    let h = (y1 - y0).max(1);
+    let step_x = (w / 32).max(1);
     let step_y = (h / 32).max(1);
     let mut sum = 0f32;
     let mut n = 0u32;
-    let mut y = 0u32;
-    while y < h {
-        let mut x = 0u32;
+    let mut y = y0;
+    while y < y1 {
+        let mut x = x0;
         while x < x1 {
             let p = img.get_pixel(x, y).0;
             let r = p[0] as f32 / 255.0;
@@ -83,12 +111,7 @@ pub fn tone_for_image_bytes(raw: &[u8]) -> Result<TextTone> {
     if n == 0 {
         bail!("contrast sample empty");
     }
-    let mean = sum / n as f32;
-    Ok(if mean < DARK_LUMA_THRESHOLD {
-        TextTone::LightOnDark
-    } else {
-        TextTone::DarkOnLight
-    })
+    Ok(sum / n as f32)
 }
 
 /// Resolve the first image relationship target for a slide XML path.
@@ -188,6 +211,7 @@ mod tests {
         let tone = tone_for_image_bytes(&png_bytes([20, 20, 30])).expect("tone");
         assert_eq!(tone, TextTone::LightOnDark);
         assert_eq!(tone.title_rgb(), "FFFFFF");
+        assert_eq!(tone.verse_rgb(), "FFFFFF");
     }
 
     #[test]
@@ -195,5 +219,25 @@ mod tests {
         let tone = tone_for_image_bytes(&png_bytes([240, 235, 220])).expect("tone");
         assert_eq!(tone, TextTone::DarkOnLight);
         assert_eq!(tone.title_rgb(), "1A1A2E");
+        assert_eq!(tone.verse_rgb(), "1A1A2E");
+    }
+
+    /// Soft left mist (light band) over a dark cinematic frame → still white.
+    #[test]
+    fn dark_scene_with_soft_mist_gets_white_chrome() {
+        let mut img = RgbImage::from_pixel(100, 80, Rgb([30, 28, 35])); // dark scene
+        for y in 0..80 {
+            for x in 0..40 {
+                // lavender mist on the left text-safe band
+                img.put_pixel(x, y, Rgb([175, 168, 180]));
+            }
+        }
+        let mut out = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .expect("encode");
+        let tone = tone_for_image_bytes(&out).expect("tone");
+        assert_eq!(tone, TextTone::LightOnDark);
+        assert_eq!(tone.verse_rgb(), "FFFFFF");
     }
 }

@@ -1,7 +1,7 @@
 # Adult study layout guide
 
-**Reference deck:** Estudio 02 — *EL CRUCE MILAGROSO DEL JORDÁN* (58 slides, 16:9).  
-Use this PDF as the **visual authority** for adult builds. Study 24 (`master-template.pptx`) is an earlier OOXML prototype; when the two disagree on layout, **follow this guide**.
+**Reference deck:** Estudio 4 — *DIOS BUSCA DISCÍPULOS CONFORME A SU CORAZÓN* (finished `.pptx` in `bible-studies/` after manual QA).  
+Use that deck + this guide as the **visual authority** for adult builds. `template/adult/master-template.pptx` is the 62-slide OOXML prototype remapped from Estudio 4 (`scripts/prepare_adult_master_template.py`). When an old prototype disagrees with Estudio 4 or this guide, **follow Estudio 4 + this guide**.
 
 Images may use a **new house style** (AI-generated, cinematic, full-bleed). Typography, colours, and chrome come from the template; only the photo/illustration art changes per study.
 
@@ -38,7 +38,7 @@ These slide types use a **single image covering the entire slide** (edge to edge
 | `tema_header` | Cinematic scene for the theme | **Youth section chrome at bottom-left** — orange bar, title, gray line, verse (same idea as youth; lower because adult titles are longer) |
 | `ab_title` | Cinematic scene for the A/B point | **Same youth chrome at bottom-left** (not torn-paper / top bar) |
 
-**Contrast (CLI, automatic):** sample the left ~40% of the scenic PNG. If that band is dark → white title / light verse; if light → navy title / dark verse. Never leave dark text on a dark photo.
+**Contrast (CLI, automatic):** sample the left ~40% **and** the full frame. Dark band **or** dark cinematic scene with a soft left mist → **white** title + **white** verse. Only true light parchment/wash (bright overall) → navy title/verse. Never leave dark/gray text on a dark mood photo.
 
 Do **not** place body paragraphs on image slides. Image slides carry titles + references only.
 
@@ -73,7 +73,7 @@ Every text-heavy slide has a **hard floor** where content stops. Nothing may sit
 | Texto Bíblico header | White centred “Texto Bíblico” on black |
 | Texto citation + verse numbers | **Yellow** `#FFFF00`, bold |
 | Texto verse body | **White** `#FFFFFF`, regular |
-| Tema / A-B image chrome | Youth-style: orange `#E85D04` bar, navy title (Verlag Black), gray line, dark verse — **bottom-left** |
+| Tema / A-B image chrome | Youth-style: orange `#E85D04` bar, title + gray line + verse — **bottom-left**, panel **~5.4" wide** (wider than youth ~3.6"), title **22–36pt** by length, verse **22pt** |
 
 Preserve template run colours when filling OOXML — do not flatten to a single style.
 
@@ -95,12 +95,12 @@ Match the reference deck’s paragraph breaks:
 - Study number badge, `ESCUELA BIBLICA`, church logo, centred title, `Base Bíblica:` label + citations in black rounded pill.
 - `Base Bíblica:` **space after colon**; citations separated with `; ` on one line.
 - **No highlight background** on the main title (match youth). Strip `<a:highlight>`.
-- **Long titles (HARD):** keep title **grande** (near gold 115pt). Split long titles into 2–3 explicit lines; size ≈104pt (2 lines) / 96pt (3 lines). Expand `CuadroTexto 1` above Base Bíblica with top anchor. Never cover the citation.
+- **Long titles (HARD):** keep title **grande** when it fits (near gold 115pt). Split long titles into 2–3 explicit lines; then **shrink** (step −4pt, floor 64pt) until the estimated wrapped height stays above Base Bíblica. Expand `CuadroTexto 1` above Base with top anchor. Never cover the citation.
 
 ### Enseñanza + Datos generales
 
-- FECHA / AUTOR / LUGAR content shapes are tall (gold multi-line). After fill, force `bodyPr anchor="ctr"`.
-- **Short FECHA (HARD):** values like `930 a. C.` also get a tightened box (`y≈4.78"`, `cy≈0.55"`) on the FECHA banner midline — never leave them floating between PERSONAJES and FECHA.
+- **Datos row text (HARD):** AUTOR / PERSONAJES / FECHA / LUGAR value boxes must sit **vertically centred on the left label banner** for that row (`bodyPr anchor="ctr"` + tighten `y`/`cy` to the banner midline for single-line values). Never leave short text top-aligned in a tall gold placeholder.
+- ENSEÑANZA (`CuadroTexto 13`) may stay tall when two lines; still `anchor="ctr"`.
 
 ### Lectura antifonal
 
@@ -119,7 +119,8 @@ Match the reference deck’s paragraph breaks:
 ### Introducción
 
 1. **`intro_header`** — full-bleed image + centred translucent box, “INTRODUCCIÓN” only.
-2. **`intro_body`** (×N) — blue header bar + white justified body + navy footer. Split before footer.
+2. **`intro_body`** (×N) — blue header bar + white body + logo. Split before the logo floor.
+3. **Intro body box (HARD):** `Marcador de contenido 2` fills the **full white band** below the blue header (same width as `Título 1`, top-aligned text). Short paragraphs stay at the **top** of the box — never shrink + centre a tiny box mid-slide.
 
 ### Definición y etimología (`definicion`) — **image card design**
 
@@ -254,6 +255,6 @@ Insert via OOXML media replace (`ppt/media/imageN.png`) — same pattern as yout
 | File | Role |
 |------|------|
 | `reference/definicion-etimologia-design.png` | Visual authority for definición cards |
-| `SLIDE_MAP.md` | OOXML shape names for study 24 prototype |
+| `SLIDE_MAP.md` | OOXML shape names for study 4 prototype |
 | `scripts/prepare_adult_master_template.py` | Build `master-template.pptx` from gold PPTX |
 | `scripts/extract_adult_study_json.py` | Extract JSON from a finished deck |

@@ -1,7 +1,7 @@
-# Adult template slide map — study 24 (`24 EL VALOR DE LA MODESTIA.pptx`)
+# Adult template slide map — study 4 (`4 - DIOS BUSCA DISCÍPULOS CONFORME A SU CORAZÓN.pptx`)
 
-Source template: `lamad-cli/template/adult/24 EL VALOR DE LA MODESTIA.pptx`  
-Build template: `lamad-cli/template/adult/master-template.pptx` (copy of gold + repaired `notesSlide` rels — run `scripts/prepare_adult_master_template.py`)
+Visual gold: `bible-studies/4 - DIOS BUSCA DISCÍPULOS CONFORME A SU CORAZÓN.pptx` (finished deck after manual QA)  
+Build template: `template/adult/master-template.pptx` (62-slide prototype — run `lamad-cli/scripts/prepare_adult_master_template.py` to remap gold layouts onto proto slide numbers)
 
 Total slides in `sldIdLst`: **62** (`slide1.xml` … `slide62.xml`)
 
