@@ -132,6 +132,7 @@ async fn main() -> ExitCode {
 
 async fn real_main() -> Result<()> {
     let cli = Cli::parse_from(normalize_argv(std::env::args().collect()));
+    lamad::progress::set_verbosity(cli.verbose);
     let mut cfg = Config::load(cli.config.as_deref())?;
 
     match cli.command {

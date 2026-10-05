@@ -337,6 +337,21 @@ fn verify_adult_deliverables(study: u32, root: &Path) -> Result<Deliverables> {
             study_model.objetivos.len()
         );
     }
+    for (idx, tema) in study_model.temas.iter().enumerate() {
+        let n = idx + 1;
+        if tema.a.texto_slides.is_empty() {
+            bail!(
+                "{} tema {n} A has empty texto_slides — pack body paragraphs (~360–400 chars each)",
+                paths.json.display()
+            );
+        }
+        if tema.b.texto_slides.is_empty() {
+            bail!(
+                "{} tema {n} B has empty texto_slides — pack body paragraphs (~360–400 chars each)",
+                paths.json.display()
+            );
+        }
+    }
 
     let media = adult_media_dir(study, root);
     let mut missing_scenic = Vec::new();
@@ -1228,8 +1243,26 @@ fn build_adult_cloud_prepare_prompt(req: &PrepareRequest, host_images: bool) -> 
   "proximo": {"numero":0,"titulo":"…","base_biblica":["…"]}
 }
 ```
-Exactly **3** `temas`, each with A and B. Host stamps `scenic_images` / `definicion_images`."#;
+Exactly **3** `temas`, each with A and B. Every A and B must include **non-empty** \
+`texto_slides` (1+ paragraphs, ~360–400 chars each — pack densely; count may differ \
+from other studies). Host stamps `scenic_images` / `definicion_images`."#;
     let schema = schema.replace("STUDY", &study.to_string());
+
+    // Append HARD rule about Definiciones — never invent.
+    let schema = format!(
+        "{schema}
+
+## Definiciones y etimología — HARD (never invent)
+- `temas[].definiciones` MUST come **only** from the printed sidebar box titled \
+**«Definiciones y etimología»** on the scans.
+- Copy `termino` + `texto` (+ any citation in that box) **verbatim**. Do **not** \
+paraphrase, expand with Hebrew/Greek roots, or pull phrases from the body prose.
+- If a tema section has **no** such box → `\"definiciones\": []` (empty array). \
+Do **not** invent Rebelión / Anatema / Unción / etc. from the commentary.
+- Definición **card images** (when the host generates them) must render **only** \
+those verbatim terms — never add quotes, extra verses, or footer disclaimers \
+not in the box."
+    );
 
     if host_images {
         return Ok(format!(
@@ -1297,6 +1330,7 @@ Prefer PNG; JPG is accepted. **Scenic images (intro/tema/ab) are required**; def
 
 ## Rules
 - Faithful Spanish from the scans; merge cross-page cuts; skip Ideas para el maestro / Preguntas.
+- **Definiciones y etimología:** copy ONLY from that printed box; empty array if the tema has no box — never invent terms or etymologies.
 - Lectura/Texto = whole verses; body slides ~360–400 chars when packing.
 - End only after `{study}.json` + all 13 PNGs exist under `artifacts/`.
 

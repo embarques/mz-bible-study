@@ -24,8 +24,11 @@ pub fn qc_deck(build: &Path, order: &[u32], image_slides: &[u32]) -> Result<()> 
     }
     let hard: Vec<_> = issues.iter().filter(|i| i.hard).collect();
     for i in &issues {
-        let tag = if i.hard { "QC FAIL" } else { "QC warn" };
-        eprintln!("  {tag} slide {}: {}", i.slide, i.message);
+        if i.hard {
+            eprintln!("  QC FAIL slide {}: {}", i.slide, i.message);
+        } else {
+            crate::progress::debug(format!("QC warn slide {}: {}", i.slide, i.message));
+        }
     }
     if !hard.is_empty() {
         bail!(
@@ -34,7 +37,7 @@ pub fn qc_deck(build: &Path, order: &[u32], image_slides: &[u32]) -> Result<()> 
             if hard.len() == 1 { "" } else { "s" }
         );
     }
-    println!("QC: {} slides checked — OK", order.len());
+    crate::progress::ok(format!("QC: {} slides checked — OK", order.len()));
     Ok(())
 }
 

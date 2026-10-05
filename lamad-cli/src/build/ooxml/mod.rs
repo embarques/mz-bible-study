@@ -61,6 +61,16 @@ mod tests {
     }
 
     #[test]
+    fn split_verse_chapter_boundary() {
+        let (n, b) = split_verse(
+            "16:1 Dijo Jehová a Samuel: ¿Hasta cuándo llorarás a Saúl?",
+        )
+        .unwrap();
+        assert_eq!(n, "16:1");
+        assert!(b.starts_with(" Dijo Jehová"));
+    }
+
+    #[test]
     fn set_simple_text_roundtrip() {
         let shape = r#"<p:sp><p:nvSpPr><p:cNvPr id="9" name="TextBox 4"/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="es-DO" sz="5000" b="1"><a:latin typeface="Gill Sans MT"/></a:rPr><a:t>16</a:t></a:r></a:p></p:txBody></p:sp>"#;
         let out = set_simple_text_block(shape, "17", Some(true)).unwrap();

@@ -64,6 +64,9 @@ impl CloudAgentProgress {
             return;
         }
         self.plan_printed = true;
+        if !progress::at_least(3) {
+            return;
+        }
         let aud = self.audience.as_str();
         let eta = progress::prepare_eta(self.audience, false, self.json_only);
         let (lo, hi) = eta.per_study_min;
