@@ -101,6 +101,30 @@ pub fn write_error_log(pdf: &Path, log: &str) -> Result<PathBuf> {
     Ok(log_path)
 }
 
+/// Resolve a scan PDF path: exact file, inbox under `scans/`, then `pending/` / `complete/` by basename.
+pub fn resolve_scan_pdf(requested: &Path) -> Option<PathBuf> {
+    if requested.is_file() {
+        return Some(requested.to_path_buf());
+    }
+    let scans_dir = paths::scans_dir().ok()?;
+    let under_scans = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        scans_dir.join(requested)
+    };
+    if under_scans.is_file() {
+        return Some(under_scans);
+    }
+    let file_name = requested
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    if file_name.is_empty() {
+        return None;
+    }
+    find_in_pending_tray(file_name).or_else(|| find_in_complete_tray(file_name))
+}
+
 /// Locate a PDF archived under `scans/pending/` (same basename / `-N` variants).
 pub fn find_in_pending_tray(file_name: &str) -> Option<PathBuf> {
     find_in_tray("pending", file_name)

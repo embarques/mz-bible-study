@@ -53,8 +53,14 @@ pub struct PrepareJob {
 impl PrepareJob {
     pub fn resolve_pdf(&self) -> Result<PathBuf> {
         if let Some(p) = &self.pdf {
-            if p.is_file() {
-                return Ok(p.canonicalize().unwrap_or_else(|_| p.clone()));
+            if let Some(found) = scans::resolve_scan_pdf(p) {
+                if found != *p && crate::progress::at_least(1) {
+                    crate::progress::info(format!(
+                        "Using scan PDF from {} (archived after a previous prepare)",
+                        found.display()
+                    ));
+                }
+                return Ok(found.canonicalize().unwrap_or(found));
             }
             bail!("{}", missing_scan_pdf_message(p, self.from, self.to));
         }
@@ -332,5 +338,20 @@ mod tests {
         assert!(msg.contains("El documento de scan no está"));
         assert!(msg.contains("Bible Study 4 - Adult.pdf"));
         assert!(msg.contains("estudio 4"));
+    }
+
+    #[test]
+    fn resolve_scan_pdf_finds_pending_by_basename() {
+        let scans = paths::scans_dir().expect("scans dir");
+        let _ = scans::ensure_tray(&scans);
+        let pending = scans.join("pending");
+        let name = "lamad-resolve-test.pdf";
+        let pending_file = pending.join(name);
+        std::fs::write(&pending_file, b"%PDF-test").unwrap();
+        let scans_rel = Path::new("scans").join(name);
+        let found = scans::resolve_scan_pdf(Path::new(name))
+            .or_else(|| scans::resolve_scan_pdf(&scans_rel));
+        assert_eq!(found.as_deref(), Some(pending_file.as_path()));
+        let _ = std::fs::remove_file(&pending_file);
     }
 }
