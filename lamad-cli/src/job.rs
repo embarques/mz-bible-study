@@ -37,6 +37,8 @@ pub struct PrepareJob {
     pub to: u32,
     /// When true (typical `-n N` alone), locate the estudio via OCR instead of page math.
     pub discover: bool,
+    /// When true (`--pdf` with no range), discover **all** estudios in the PDF once.
+    pub discover_all: bool,
     pub audience: Audience,
     pub prepare_only: bool,
     /// When true, ignore local JSON/images and re-run the cloud agent.
@@ -90,17 +92,29 @@ impl PrepareJob {
     pub fn echo_plan(&self, host_images: bool) {
         // Default: one info line. Full plan at -v+.
         if !crate::progress::at_least(1) {
-            crate::progress::info(format!(
-                "prepare estudios {}–{} ({}){}",
-                self.from,
-                self.to,
-                self.audience.as_str(),
-                if host_images {
-                    " · host images"
-                } else {
-                    ""
-                }
-            ));
+            if self.discover_all {
+                crate::progress::info(format!(
+                    "prepare ALL estudios in PDF ({}){}",
+                    self.audience.as_str(),
+                    if host_images {
+                        " · host images"
+                    } else {
+                        ""
+                    }
+                ));
+            } else {
+                crate::progress::info(format!(
+                    "prepare estudios {}–{} ({}){}",
+                    self.from,
+                    self.to,
+                    self.audience.as_str(),
+                    if host_images {
+                        " · host images"
+                    } else {
+                        ""
+                    }
+                ));
+            }
             return;
         }
         let pdf_disp = self
@@ -110,7 +124,11 @@ impl PrepareJob {
             .unwrap_or_else(|| "(auto from scans/pending/)".into());
         println!("Plan:");
         println!("  PDF:     {pdf_disp}");
-        if self.discover {
+        if self.discover_all {
+            println!(
+                "  Studies: discover ALL in PDF via OCR (then prepare each)"
+            );
+        } else if self.discover {
             println!(
                 "  Studies: {}–{} (discover pages via OCR)",
                 self.from, self.to
@@ -159,8 +177,12 @@ impl PrepareJob {
                 "no — run `lamad review` later if you want a checklist"
             }
         );
-        let n = self.to.saturating_sub(self.from).saturating_add(1);
-        crate::progress::print_prepare_eta(self.audience, n, self.prepare_only, host_images);
+        if self.discover_all && self.from == 0 {
+            println!("  ETA:      after OCR discovers how many estudios…");
+        } else {
+            let n = self.to.saturating_sub(self.from).saturating_add(1);
+            crate::progress::print_prepare_eta(self.audience, n, self.prepare_only, host_images);
+        }
     }
 }
 

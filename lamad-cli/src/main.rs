@@ -155,10 +155,33 @@ async fn real_main() -> Result<()> {
             let range = args.range()?;
             match range {
                 None => {
+                    // Non-TTY with no flags: if exactly one pending PDF, discover all.
                     if !std::io::stdin().is_terminal() {
+                        let pending = lamad::scans::list_pending_pdfs()?;
+                        if pending.len() == 1 {
+                            let job = PrepareJob {
+                                pdf: Some(pending[0].clone()),
+                                pdf_from: 0,
+                                from: 0,
+                                to: 0,
+                                discover: true,
+                                discover_all: true,
+                                audience: args.audience.into(),
+                                prepare_only: args.prepare_only,
+                                force_prepare: args.force_prepare,
+                                gen_images: args.gen_images,
+                                export_pdf: args.export_pdf,
+                                review: args.review,
+                                template: args.template_effective(),
+                                stream: args.stream,
+                                stop_on_error: args.stop_on_error,
+                            };
+                            return lamad::run(job, &cfg).await;
+                        }
                         bail!(
-                            "prepare without --from/--to requires a TTY. \
-                             Pass --from N --to M (or -n N)."
+                            "prepare without --from/--to requires a TTY, --pdf, or \
+                             exactly one PDF in scans/pending/. \
+                             Pass --from N --to M, -n N, or --pdf path.pdf"
                         );
                     }
                     lamad::tui::run_prepare_tui(cfg).await
@@ -170,6 +193,7 @@ async fn real_main() -> Result<()> {
                         from: range.from,
                         to: range.to,
                         discover: range.discover,
+                        discover_all: range.discover_all,
                         audience: args.audience.into(),
                         prepare_only: args.prepare_only,
                         force_prepare: args.force_prepare,

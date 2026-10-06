@@ -378,3 +378,31 @@ pub(crate) fn format_ref_citation_from_template(shape_xml: &str, cita: &str) -> 
         Ok(cite.to_string())
     }
 }
+
+/// Set `sz` on every visible `<a:rPr>` in a shape block (section titles).
+pub(crate) fn force_run_sz(shape_xml: &str, sz: u32) -> String {
+    let re = Regex::new(r#"<a:rPr\b[^>]*/?>"#).unwrap();
+    re.replace_all(shape_xml, |caps: &regex::Captures| {
+        let tag = caps[0].to_string();
+        let self_close = tag.ends_with("/>");
+        let inner = tag
+            .trim_start_matches("<a:rPr")
+            .trim_end_matches("/>")
+            .trim_end_matches('>')
+            .to_string();
+        let attrs = if inner.contains("sz=\"") {
+            Regex::new(r#"sz="\d+""#)
+                .unwrap()
+                .replace_all(&inner, format!(r#"sz="{sz}""#).as_str())
+                .into_owned()
+        } else {
+            format!(r#"{inner} sz="{sz}""#)
+        };
+        if self_close {
+            format!("<a:rPr{attrs}/>")
+        } else {
+            format!("<a:rPr{attrs}>")
+        }
+    })
+    .into_owned()
+}

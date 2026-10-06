@@ -66,7 +66,10 @@ Volunteer zip packages already include a prebuilt `lamad` (or `lamad.exe`) next 
 **One command gives you the deck.** Put a PDF in `scans/pending/`, then:
 
 ```bash
-# Batch (3 pages per estudio; last study has no Próximo)
+# Discover every estudio in the PDF (OCR) — no --from/--to needed
+lamad prepare --pdf "scans/pending/YouthBatch.pdf"
+
+# Batch with page math (3 pages per estudio; PDF page 1 = estudio 20)
 lamad prepare --from 20 --to 22
 
 # Single study (PDF page 1 = estudio 23)

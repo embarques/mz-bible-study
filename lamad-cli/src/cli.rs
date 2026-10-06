@@ -37,6 +37,7 @@ use crate::job::Audience;
                   Related Piel form לִמֵּד (limmed): to teach.\n\n\
                   Mount Zion Church Bible-study CLI — prepare, build, validate, export.\n\n\
                   Put a scan PDF in scans/pending/, then:\n  lamad prepare --from N --to M\n\
+                  Or: lamad prepare --pdf path.pdf  (discovers every estudio)\n\
                   Or run `lamad prepare` (TTY) for the interactive form.\n\
                   See LEEME.md / README.md.",
     after_help = "Name: lamad — Hebrew לָמַד, to learn by instruction, practice, or experience."
@@ -262,13 +263,15 @@ impl PrepareArgs {
 
     /// Resolve prepare range.
     ///
-    /// Returns `None` if the interactive form should open.
+    /// Returns `None` if the interactive form should open (TTY, no PDF hint).
     ///
     /// | Flags | Meaning |
     /// |-------|---------|
     /// | `--from F --to T` | PDF page 1 = estudio F; prepare F…T (page math) |
     /// | `-n N` | Discover estudio N inside the PDF via OCR |
     /// | `--from F -n N` | PDF page 1 = estudio F; prepare only N (page math) |
+    /// | `--pdf …` (no range) | Discover **all** estudios in that PDF via OCR |
+    /// | no flags (TTY) | Interactive form |
     pub fn range(&self) -> anyhow::Result<Option<PrepareRange>> {
         match (self.from, self.to, self.study) {
             (Some(f), Some(t), None) => {
@@ -280,6 +283,7 @@ impl PrepareArgs {
                     from: f,
                     to: t,
                     discover: false,
+                    discover_all: false,
                 }))
             }
             (None, None, Some(n)) => Ok(Some(PrepareRange {
@@ -287,6 +291,7 @@ impl PrepareArgs {
                 from: n,
                 to: n,
                 discover: true,
+                discover_all: false,
             })),
             (Some(f), None, Some(n)) => {
                 if n < f {
@@ -297,6 +302,7 @@ impl PrepareArgs {
                     from: n,
                     to: n,
                     discover: false,
+                    discover_all: false,
                 }))
             }
             (Some(f), Some(t), Some(n)) => {
@@ -308,6 +314,7 @@ impl PrepareArgs {
                     from: n,
                     to: n,
                     discover: false,
+                    discover_all: false,
                 }))
             }
             (None, Some(_), _) => {
@@ -316,7 +323,21 @@ impl PrepareArgs {
             (Some(_), None, None) => {
                 anyhow::bail!("--from alone needs --to (batch) or -n N (one study)")
             }
-            (None, None, None) => Ok(None),
+            (None, None, None) => {
+                // `--pdf` alone (or non-interactive with one pending PDF) →
+                // discover every estudio. Bare TTY `lamad prepare` still opens the form.
+                if self.pdf.is_some() {
+                    Ok(Some(PrepareRange {
+                        pdf_from: 0,
+                        from: 0,
+                        to: 0,
+                        discover: true,
+                        discover_all: true,
+                    }))
+                } else {
+                    Ok(None)
+                }
+            }
         }
     }
 }
@@ -328,6 +349,8 @@ pub struct PrepareRange {
     pub from: u32,
     pub to: u32,
     pub discover: bool,
+    /// Discover every estudio in the PDF (no --from/--to/-n).
+    pub discover_all: bool,
 }
 
 impl ReviewArgs {

@@ -825,7 +825,25 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
         vec![resolve_json_artifact(req.study, &artifacts, &dest)?]
     } else {
         match req.audience {
-            Audience::Youth => resolve_artifacts(req.study, &artifacts, &dest)?,
+            Audience::Youth => match resolve_artifacts(req.study, &artifacts, &dest) {
+                Ok(r) => r,
+                Err(e) => {
+                    let can_host = req
+                        .image_api_key
+                        .as_ref()
+                        .map(|k| !k.trim().is_empty())
+                        .unwrap_or(false);
+                    if can_host && artifact_list_has_study_json(req.study, &artifacts) {
+                        crate::progress::warn(format!(
+                            "agent section images incomplete ({e:#}); \
+                             downloading JSON and generating images via OpenAI…"
+                        ));
+                        vec![resolve_json_artifact(req.study, &artifacts, &dest)?]
+                    } else {
+                        return Err(e);
+                    }
+                }
+            },
             Audience::Adult => resolve_adult_artifacts(req.study, &artifacts, &req.root)?,
         }
     };
@@ -852,7 +870,17 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
         stamp_adult_image_paths(&dest.json, req.study, &req.root)?;
     }
 
-    if host_images {
+    let can_host = req
+        .image_api_key
+        .as_ref()
+        .map(|k| !k.trim().is_empty())
+        .unwrap_or(false);
+    let need_host_images = host_images
+        || (can_host
+            && req.audience == Audience::Youth
+            && !required_images_present(req.study, req.audience, &req.root));
+
+    if need_host_images {
         verify_json_only(req.study, req.audience, &req.root)?;
         crate::agent::prepare_openai::generate_host_images(&req).await?;
     }

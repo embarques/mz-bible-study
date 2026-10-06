@@ -87,6 +87,7 @@ impl Model {
             from,
             to,
             discover: false,
+            discover_all: false,
             audience: self.audience,
             prepare_only: false,
             force_prepare: false,

@@ -6,19 +6,56 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use super::shape::{
-    set_body_with_refs_block, set_body_with_refs_paragraphs, set_simple_text_block,
+    force_run_sz, set_body_with_refs_block, set_body_with_refs_paragraphs, set_simple_text_block,
     split_teaching_paragraphs, transform_shape,
 };
 
 pub fn set_section_chrome(path: &Path, title: &str, rango: &str, n: u32) -> Result<()> {
     let xml = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let title_text = format!("{n}- {title}");
+    let title_sz = section_title_font_sz_hundredths(&title_text);
     let xml = transform_shape(&xml, "CuadroTexto 8", |b| {
-        set_simple_text_block(b, &title_text, Some(true))
+        let s = set_simple_text_block(b, &title_text, Some(true))?;
+        Ok(force_run_sz(&s, title_sz))
     })?;
     let xml = transform_shape(&xml, "CuadroTexto 3", |b| set_simple_text_block(b, rango, Some(true)))?;
-    let xml = strip_arc_shapes(&xml);
+    let mut xml = strip_arc_shapes(&xml);
+    // Template ships a full-bleed black rect under the photo — it paints over the scenic image.
+    xml = strip_named_shape(&xml, "!!Rectangle");
     fs::write(path, xml).with_context(|| format!("write {}", path.display()))
+}
+
+/// Hundredths of a point — long section titles must shrink to pass QC and stay above the gray line.
+fn section_title_font_sz_hundredths(title: &str) -> u32 {
+    let n = title.chars().count();
+    if n > 70 {
+        2200
+    } else if n > 55 {
+        2400
+    } else if n > 42 {
+        2800
+    } else if n > 32 {
+        3200
+    } else {
+        3600
+    }
+}
+
+/// Remove the first `<p:sp>…</p:sp>` whose `cNvPr` name matches.
+fn strip_named_shape(xml: &str, name: &str) -> String {
+    let marker = format!(r#"name="{name}""#);
+    let Some(name_pos) = xml.find(&marker) else {
+        return xml.to_string();
+    };
+    let Some(sp_start) = xml[..name_pos].rfind("<p:sp") else {
+        return xml.to_string();
+    };
+    let after = &xml[sp_start..];
+    let Some(end_rel) = after.find("</p:sp>") else {
+        return xml.to_string();
+    };
+    let sp_end = sp_start + end_rel + "</p:sp>".len();
+    format!("{}{}", &xml[..sp_start], &xml[sp_end..])
 }
 
 /// Remove any `<p:sp>...</p:sp>` block whose shape name starts with `Arc`

@@ -13,8 +13,12 @@ Herramienta para voluntarios: un solo binario. **No necesita Python.** `lamad --
      - ChatGPT → `openai_api_key` (OpenAI platform)
    - `pdftoppm_path` ya apunta a `tools/pdftoppm` (o `.exe` en Windows).
 2. Ponga el PDF de escaneo en `scans/pending/` (no en `complete/` ni `error/`).
-3. Ejecute:
+3. Ejecute (cualquiera de estas formas):
    ```bash
+   # Descubre todos los estudios del PDF (OCR)
+   ./lamad prepare --pdf "scans/pending/TuArchivo.pdf"
+
+   # O con rango conocido (página 1 = estudio 23)
    ./lamad prepare --from 23 --to 26
    ```
    Eso genera el **PowerPoint y el PDF** en `bible-studies/` (un comando, sin pasos extra).

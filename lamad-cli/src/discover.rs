@@ -63,19 +63,88 @@ pub fn discover_study_pages_batch(
     Ok(out)
 }
 
-fn study_pages_from_texts(
+/// Discover **every** estudio in the PDF (one OCR/text pass).
+///
+/// Used by `lamad prepare --pdf …` with no `--from`/`--to`/`-n` so volunteers
+/// can drop a multi-study scan and prepare the whole file.
+pub fn discover_all_study_pages(
     pdf: &Path,
-    study: u32,
+    pdftoppm_path: Option<&Path>,
+) -> Result<Vec<StudyPages>> {
+    let page_count = pdf_page_count(pdf)?;
+    if page_count == 0 {
+        bail!("PDF has no pages: {}", pdf.display());
+    }
+    let texts = page_texts(pdf, page_count, pdftoppm_path)?;
+    let filled = build_filled_title_map(&texts, page_count)?;
+    if filled.is_empty() {
+        bail!(
+            "Could not find any estudios in {}. \
+             Title pages usually contain “Base bíblica” and “Idea principal”. \
+             Pass --from F --to T if you know the range.",
+            pdf.display()
+        );
+    }
+
+    let mut ordered: Vec<(u32, u32)> = filled.into_iter().collect(); // (page, study)
+    ordered.sort_by_key(|(p, _)| *p);
+
+    let mut out = Vec::with_capacity(ordered.len());
+    for (i, &(start, study)) in ordered.iter().enumerate() {
+        let next_title = ordered.get(i + 1).map(|(p, _)| *p).or_else(|| {
+            let guess = start + 3;
+            if (guess as usize) <= page_count {
+                Some(guess)
+            } else {
+                None
+            }
+        });
+        let end = match next_title {
+            Some(n) if n > start => n - 1,
+            _ => (start + 2).min(page_count as u32),
+        };
+        if end < start {
+            bail!("Estudio {study}: invalid page range {start}–{end}");
+        }
+        let proximo_title_page = next_title.filter(|p| (*p as usize) <= page_count);
+        println!(
+            "  Discovered estudio {study} at PDF pages {start}–{end}{}",
+            match proximo_title_page {
+                Some(p) => format!(" (próximo title page {p})"),
+                None => " (no Próximo in PDF)".into(),
+            }
+        );
+        out.push(StudyPages {
+            study,
+            pages: (start, end),
+            proximo_title_page,
+        });
+    }
+
+    // Title-page order (not OCR badge digits — tesseract often misreads “1” as “57”, etc.).
+    out.sort_by_key(|s| s.pages.0);
+    renumber_discovered_estudios(pdf, &mut out);
+
+    crate::progress::ok(format!(
+        "Discovered {} estudio{} in {}",
+        out.len(),
+        if out.len() == 1 { "" } else { "s" },
+        pdf.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("PDF")
+    ));
+    Ok(out)
+}
+
+/// Build page→estudio map from title pages (shared by single + all discover).
+fn build_filled_title_map(
     texts: &[String],
-    page_count: usize,
-) -> Result<StudyPages> {
+    _page_count: usize,
+) -> Result<BTreeMap<u32, u32>> {
     let mut title_pages = find_title_pages(texts);
-    // Also accept pages that clearly show "N LECTURA B…" as title anchors
-    // even when Base/Idea OCR is weak.
     for (i, t) in texts.iter().enumerate() {
         let p = (i as u32) + 1;
         if extract_study_number(t).is_some() && !title_pages.contains(&p) {
-            // Only treat as title if it looks like a study open (not mid-body).
             let low = t.to_lowercase();
             if low.contains("lectura") || low.contains("base b") {
                 title_pages.push(p);
@@ -87,15 +156,12 @@ fn study_pages_from_texts(
 
     if title_pages.is_empty() {
         bail!(
-            "Could not find any estudio title pages in {}. \
-             Title pages usually contain “Base bíblica” and “Idea principal”. \
-             Pass --from F -n {study} if you know the first estudio on page 1 \
-             (e.g. --from 23 -n {study}).",
-            pdf.display()
+            "Could not find any estudio title pages. \
+             Title pages usually contain “Base bíblica” and “Idea principal”."
         );
     }
 
-    let mut numbered: BTreeMap<u32, u32> = BTreeMap::new(); // page -> study
+    let mut numbered: BTreeMap<u32, u32> = BTreeMap::new();
     for &p in &title_pages {
         let idx = (p as usize).saturating_sub(1);
         if let Some(t) = texts.get(idx) {
@@ -104,7 +170,6 @@ fn study_pages_from_texts(
             }
         }
     }
-    // Fallback: scan every page head for a number and snap to nearest title page.
     if numbered.is_empty() {
         for (i, t) in texts.iter().enumerate() {
             let p = (i as u32) + 1;
@@ -119,7 +184,23 @@ fn study_pages_from_texts(
         }
     }
 
-    let mut filled = fill_sequence(&title_pages, &numbered)?;
+    fill_sequence(&title_pages, &numbered)
+}
+
+fn study_pages_from_texts(
+    pdf: &Path,
+    study: u32,
+    texts: &[String],
+    page_count: usize,
+) -> Result<StudyPages> {
+    let mut filled = build_filled_title_map(texts, page_count).map_err(|e| {
+        anyhow::anyhow!(
+            "{e} Pass --from F -n {study} if you know the first estudio on page 1 \
+             (e.g. --from 23 -n {study}). PDF: {}",
+            pdf.display()
+        )
+    })?;
+
     let start = match filled.iter().find(|(_, n)| **n == study).map(|(p, _)| *p) {
         Some(p) => p,
         None => {
@@ -130,6 +211,7 @@ fn study_pages_from_texts(
                 .iter()
                 .map(|(p, n)| format!("estudio {n} @ page {p}"))
                 .collect();
+            let title_pages: Vec<u32> = filled.keys().copied().collect();
             if title_pages.first() == Some(&1) {
                 eprintln!(
                     "  warn: OCR did not see estudio {study} (saw: {}). \
@@ -420,6 +502,54 @@ fn is_title_page(t: &str) -> bool {
         || (has_base && has_aureo && has_pensamiento)
 }
 
+/// Parse `Bible study 1-8.pdf`, `Estudio 23-26.pdf`, etc. when the span matches
+/// how many title pages OCR found.
+fn estudio_range_from_filename(pdf: &Path, discovered_count: usize) -> Option<(u32, u32)> {
+    let name = pdf.file_name()?.to_str()?;
+    let re = Regex::new(r"(?i)(?:estudio|study|bible\s+study)?\s*(\d+)\s*[-–]\s*(\d+)").ok()?;
+    let caps = re.captures(name)?;
+    let start: u32 = caps.get(1)?.as_str().parse().ok()?;
+    let end: u32 = caps.get(2)?.as_str().parse().ok()?;
+    if end >= start && (end - start + 1) as usize == discovered_count {
+        Some((start, end))
+    } else {
+        None
+    }
+}
+
+/// Fix OCR badge digits on batch PDFs: renumber in title-page order using the
+/// filename span when it matches, else `1..=N`.
+fn renumber_discovered_estudios(pdf: &Path, out: &mut [StudyPages]) {
+    if out.is_empty() {
+        return;
+    }
+    let (start, _) = estudio_range_from_filename(pdf, out.len()).unwrap_or((1, out.len() as u32));
+    let old: Vec<u32> = out.iter().map(|s| s.study).collect();
+    for (i, entry) in out.iter_mut().enumerate() {
+        entry.study = start + i as u32;
+    }
+    if old != out.iter().map(|s| s.study).collect::<Vec<_>>() {
+        eprintln!(
+            "  warn: OCR estudio numbers {:?} → renumbered {}–{} from PDF title-page order",
+            old,
+            start,
+            start + out.len() as u32 - 1
+        );
+        for s in out.iter() {
+            println!(
+                "  Discovered estudio {} at PDF pages {}–{}{}",
+                s.study,
+                s.pages.0,
+                s.pages.1,
+                match s.proximo_title_page {
+                    Some(p) => format!(" (próximo title page {p})"),
+                    None => " (no Próximo in PDF)".into(),
+                }
+            );
+        }
+    }
+}
+
 fn extract_study_number(t: &str) -> Option<u32> {
     // Drop common false friends.
     let cleaned = Regex::new(r"(?is)desarrollo\s+del\s+estudio")
@@ -591,6 +721,36 @@ LECTURA ANTIFONAL
     }
 
     #[test]
+    fn estudio_range_from_filename_matches_batch_pdf_name() {
+        let pdf = PathBuf::from("Bible study 1-8.pdf");
+        assert_eq!(estudio_range_from_filename(&pdf, 8), Some((1, 8)));
+        let pdf2 = PathBuf::from("Estudio 23-26.pdf");
+        assert_eq!(estudio_range_from_filename(&pdf2, 4), Some((23, 26)));
+        assert_eq!(estudio_range_from_filename(&pdf, 4), None);
+    }
+
+    #[test]
+    fn renumber_discovered_estudios_uses_filename_span() {
+        let pdf = PathBuf::from("Bible study 1-8.pdf");
+        let mut out = vec![
+            StudyPages {
+                study: 57,
+                pages: (4, 6),
+                proximo_title_page: Some(7),
+            },
+            StudyPages {
+                study: 58,
+                pages: (7, 9),
+                proximo_title_page: Some(10),
+            },
+        ];
+        renumber_discovered_estudios(&pdf, &mut out);
+        assert_eq!(out[0].study, 1);
+        assert_eq!(out[1].study, 2);
+        assert_eq!(out[0].pages, (4, 6));
+    }
+
+    #[test]
     fn fills_sequence_from_one_anchor() {
         let titles = vec![1, 4, 7, 10];
         let mut numbered = BTreeMap::new();
@@ -600,6 +760,20 @@ LECTURA ANTIFONAL
         assert_eq!(filled.get(&4), Some(&24));
         assert_eq!(filled.get(&7), Some(&25));
         assert_eq!(filled.get(&10), Some(&26));
+    }
+
+    #[test]
+    fn build_filled_map_finds_three_youth_titles() {
+        // Minimal 9-page youth batch: titles on 1, 4, 7.
+        let mut texts = vec![String::new(); 9];
+        texts[0] = "ESTUDIO 20\nBase bíblica\nGénesis 1:1\nIdea principal\nAlgo\nLECTURA BÍBLICA".into();
+        texts[3] = "ESTUDIO 21\nBase bíblica\nGénesis 2:1\nIdea principal\nAlgo\nLECTURA BÍBLICA".into();
+        texts[6] = "ESTUDIO 22\nBase bíblica\nGénesis 3:1\nIdea principal\nAlgo\nLECTURA BÍBLICA".into();
+        let filled = build_filled_title_map(&texts, 9).unwrap();
+        assert_eq!(filled.len(), 3);
+        assert_eq!(filled.get(&1), Some(&20));
+        assert_eq!(filled.get(&4), Some(&21));
+        assert_eq!(filled.get(&7), Some(&22));
     }
 
     #[test]

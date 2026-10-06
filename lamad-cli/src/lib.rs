@@ -30,7 +30,7 @@ use crate::config::Config;
 use crate::job::{Audience, PrepareJob};
 
 /// Run a full prepare job (agent → optional build → optional review).
-pub async fn run(job: PrepareJob, cfg: &Config) -> Result<()> {
+pub async fn run(mut job: PrepareJob, cfg: &Config) -> Result<()> {
     let host_images = cfg
         .openai_api_key
         .as_ref()
@@ -42,63 +42,98 @@ pub async fn run(job: PrepareJob, cfg: &Config) -> Result<()> {
     let page_count = pdf_page_count(&pdf)?;
 
     let root = paths::project_root()?;
-    let studies = (job.from..=job.to).collect::<Vec<_>>();
     let mut errors: Vec<String> = Vec::new();
     let mut outputs: Vec<StudyOutput> = Vec::new();
 
-    // If every estudio in range already has complete JSON + images, skip OCR
-    // and the cloud agent — only rebuild PPTX/PDF.
-    let all_resumable = !job.force_prepare
-        && !job.gen_images
-        && studies.iter().all(|n| {
-            agent::prepare::try_resume_deliverables(*n, job.audience, &root).is_some()
-        });
-
-    let slices = if all_resumable {
+    // Discover-all: OCR once, learn from/to, then same prepare loop.
+    let slices = if job.discover_all {
         progress::now_step(
             1,
             4,
-            "Find pages",
-            "Skipped — complete JSON + images already on disk (resume)",
+            "Find pages (OCR)",
+            "Discovering every estudio in the PDF (one pass)…",
         );
+        let found =
+            discover::discover_all_study_pages(&pdf, cfg.pdftoppm_path.as_deref())?;
+        if found.is_empty() {
+            bail!("No estudios discovered in {}", pdf.display());
+        }
+        job.from = found.first().map(|s| s.study).unwrap();
+        job.to = found.last().map(|s| s.study).unwrap();
+        job.pdf_from = job.from;
+        job.discover = true;
         progress::ok(format!(
-            "RESUME — {} estudio{} already prepared locally; skipping OCR + agent",
-            studies.len(),
-            if studies.len() == 1 { "" } else { "s" }
+            "Step 1/4 done — {} estudio{} mapped ({}–{})",
+            found.len(),
+            if found.len() == 1 { "" } else { "s" },
+            job.from,
+            job.to
         ));
-        // Placeholder page ranges (unused when agent is skipped).
-        studies
-            .iter()
-            .map(|&study| StudySlice {
-                study,
-                pages: job::default_pages(study, job.pdf_from),
-                proximo_title_page: None,
+        found
+            .into_iter()
+            .map(|s| StudySlice {
+                study: s.study,
+                pages: s.pages,
+                proximo_title_page: s.proximo_title_page,
             })
             .collect::<Vec<_>>()
     } else {
-        // Pre-resolve page slices (discover once for -n, or page-math for --from/--to).
-        if job.discover {
-            progress::now_step(
-                1,
-                4,
-                "Find pages (OCR)",
-                "Looking for this estudio inside the PDF (parallel OCR, usually under ~40s)…",
-            );
-        } else {
+        let studies = (job.from..=job.to).collect::<Vec<_>>();
+        // If every estudio in range already has complete JSON + images, skip OCR
+        // and the cloud agent — only rebuild PPTX/PDF.
+        let all_resumable = !job.force_prepare
+            && !job.gen_images
+            && studies.iter().all(|n| {
+                agent::prepare::try_resume_deliverables(*n, job.audience, &root).is_some()
+            });
+
+        if all_resumable {
             progress::now_step(
                 1,
                 4,
                 "Find pages",
-                "Using page math from --from (no OCR)…",
+                "Skipped — complete JSON + images already on disk (resume)",
             );
+            progress::ok(format!(
+                "RESUME — {} estudio{} already prepared locally; skipping OCR + agent",
+                studies.len(),
+                if studies.len() == 1 { "" } else { "s" }
+            ));
+            // Placeholder page ranges (unused when agent is skipped).
+            studies
+                .iter()
+                .map(|&study| StudySlice {
+                    study,
+                    pages: job::default_pages(study, job.pdf_from),
+                    proximo_title_page: None,
+                })
+                .collect::<Vec<_>>()
+        } else {
+            // Pre-resolve page slices (discover once for -n, or page-math for --from/--to).
+            if job.discover {
+                progress::now_step(
+                    1,
+                    4,
+                    "Find pages (OCR)",
+                    "Looking for this estudio inside the PDF (parallel OCR, usually under ~40s)…",
+                );
+            } else {
+                progress::now_step(
+                    1,
+                    4,
+                    "Find pages",
+                    "Using page math from --from (no OCR)…",
+                );
+            }
+            let slices =
+                resolve_study_slices(&job, &pdf, page_count, cfg.pdftoppm_path.as_deref())?;
+            progress::ok(format!(
+                "Step 1/4 done — {} estudio{} mapped",
+                slices.len(),
+                if slices.len() == 1 { "" } else { "s" }
+            ));
+            slices
         }
-        let slices = resolve_study_slices(&job, &pdf, page_count, cfg.pdftoppm_path.as_deref())?;
-        progress::ok(format!(
-            "Step 1/4 done — {} estudio{} mapped",
-            slices.len(),
-            if slices.len() == 1 { "" } else { "s" }
-        ));
-        slices
     };
 
     let total = slices.len();
@@ -183,7 +218,8 @@ pub async fn run(job: PrepareJob, cfg: &Config) -> Result<()> {
     print_run_summary(&outputs, &job, &root);
 
     if job.review {
-        run_review(&studies, &pdf, !job.prepare_only, &job, cfg, &root).await?;
+        let study_nums: Vec<u32> = slices.iter().map(|s| s.study).collect();
+        run_review(&study_nums, &pdf, !job.prepare_only, &job, cfg, &root).await?;
     }
 
     // Archive the scan PDF only after a fully successful prepare.
@@ -197,12 +233,12 @@ pub async fn run(job: PrepareJob, cfg: &Config) -> Result<()> {
         scans::move_to_complete(&pdf)?;
         progress::info(format!(
             "done — {} prepared; PDF moved to scans/complete/",
-            studies.len()
+            slices.len()
         ));
     } else {
         progress::info(format!(
             "done — {} prepared; PDF stays in scans/pending/ (more estudios remain)",
-            studies.len()
+            slices.len()
         ));
     }
     Ok(())
