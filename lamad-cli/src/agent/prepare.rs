@@ -59,28 +59,38 @@ pub fn adult_media_dir(study: u32, root: &Path) -> PathBuf {
         .join(study.to_string())
 }
 
-/// Scenic full-bleed art (required for a good adult deck).
-pub fn adult_scenic_basenames() -> &'static [&'static str] {
-    &[
-        "intro-header.png",
-        "tema-1.png",
-        "tema-2.png",
-        "tema-3.png",
-        "ab-1A.png",
-        "ab-1B.png",
-        "ab-2A.png",
-        "ab-2B.png",
-        "ab-3A.png",
-        "ab-3B.png",
-    ]
+/// Scenic + definición basenames derived from adult study shape (variable temas/points).
+pub fn adult_basenames_for_study(study: &crate::model::adult_study::AdultStudy) -> Vec<String> {
+    let mut out = vec!["intro-header.png".to_string()];
+    for i in 0..study.temas.len() {
+        out.push(format!("tema-{}.png", i + 1));
+    }
+    for (ti, tema) in study.temas.iter().enumerate() {
+        for p in &tema.puntos {
+            out.push(format!("ab-{}{}.png", ti + 1, p.letra));
+        }
+    }
+    for i in 0..study.temas.len() {
+        out.push(format!("definicion-{}.png", i + 1));
+    }
+    out
 }
 
-/// DEFINICIÓN Y ETIMOLOGÍA cards (preferred; builder can fall back to text).
-pub fn adult_definicion_basenames() -> &'static [&'static str] {
-    &["definicion-1.png", "definicion-2.png", "definicion-3.png"]
+/// Scenic only (required before build).
+pub fn adult_scenic_basenames_for(study: &crate::model::adult_study::AdultStudy) -> Vec<String> {
+    adult_basenames_for_study(study)
+        .into_iter()
+        .filter(|n| !n.starts_with("definicion-"))
+        .collect()
 }
 
-/// All adult image basenames (scenic + definición).
+pub fn adult_definicion_basenames_for(n_temas: usize) -> Vec<String> {
+    (1..=n_temas)
+        .map(|i| format!("definicion-{i}.png"))
+        .collect()
+}
+
+/// Legacy fixed list (3×A/B) — used when JSON is not yet available (progress UX).
 pub fn adult_image_basenames() -> &'static [&'static str] {
     &[
         "intro-header.png",
@@ -97,6 +107,27 @@ pub fn adult_image_basenames() -> &'static [&'static str] {
         "definicion-2.png",
         "definicion-3.png",
     ]
+}
+
+/// Legacy scenic-only subset of [`adult_image_basenames`].
+pub fn adult_scenic_basenames() -> &'static [&'static str] {
+    &[
+        "intro-header.png",
+        "tema-1.png",
+        "tema-2.png",
+        "tema-3.png",
+        "ab-1A.png",
+        "ab-1B.png",
+        "ab-2A.png",
+        "ab-2B.png",
+        "ab-3A.png",
+        "ab-3B.png",
+    ]
+}
+
+/// Legacy definición slots.
+pub fn adult_definicion_basenames() -> &'static [&'static str] {
+    &["definicion-1.png", "definicion-2.png", "definicion-3.png"]
 }
 
 pub fn expected_paths(study: u32, audience: Audience, root: &Path) -> Deliverables {
@@ -161,8 +192,17 @@ pub fn required_images_present(study: u32, audience: Audience, root: &Path) -> b
             p.img1.is_file() && p.img2.is_file() && p.img3.is_file()
         }
         Audience::Adult => {
+            let paths = expected_paths(study, Audience::Adult, root);
+            let Ok(text) = std::fs::read_to_string(&paths.json) else {
+                return false;
+            };
+            let Ok(model) =
+                serde_json::from_str::<crate::model::adult_study::AdultStudy>(&text)
+            else {
+                return false;
+            };
             let media = adult_media_dir(study, root);
-            adult_scenic_basenames()
+            adult_scenic_basenames_for(&model)
                 .iter()
                 .all(|n| media.join(n).is_file())
         }
@@ -199,12 +239,17 @@ pub fn verify_json_only(study: u32, audience: Audience, root: &Path) -> Result<P
                 .map_err(|e| {
                     anyhow::anyhow!("{} is not valid adult study JSON ({e})", paths.json.display())
                 })?;
-            if study_model.temas.len() != 3 {
-                bail!(
-                    "{} must have exactly 3 temas, got {}",
-                    paths.json.display(),
-                    study_model.temas.len()
-                );
+            if study_model.temas.is_empty() {
+                bail!("{} must have at least 1 tema", paths.json.display());
+            }
+            for (i, tema) in study_model.temas.iter().enumerate() {
+                if tema.puntos.is_empty() {
+                    bail!(
+                        "{} tema {} has no puntos (need A…N)",
+                        paths.json.display(),
+                        i + 1
+                    );
+                }
             }
             Ok(paths.json)
         }
@@ -229,19 +274,47 @@ pub fn existing_inventory_summary(study: u32, audience: Audience, root: &Path) -
         }
         Audience::Adult => {
             let media = adult_media_dir(study, root);
-            let scenic = adult_scenic_basenames()
-                .iter()
-                .filter(|n| media.join(n).is_file())
-                .count();
-            let defs = adult_definicion_basenames()
-                .iter()
-                .filter(|n| media.join(n).is_file())
+            let (scenic_need, def_need) = if json_ok {
+                std::fs::read_to_string(&paths.json)
+                    .ok()
+                    .and_then(|t| {
+                        serde_json::from_str::<crate::model::adult_study::AdultStudy>(&t).ok()
+                    })
+                    .map(|m| {
+                        (
+                            adult_scenic_basenames_for(&m).len(),
+                            m.temas.len(),
+                        )
+                    })
+                    .unwrap_or((adult_scenic_basenames().len(), 3))
+            } else {
+                (adult_scenic_basenames().len(), 3)
+            };
+            let scenic = if json_ok {
+                std::fs::read_to_string(&paths.json)
+                    .ok()
+                    .and_then(|t| {
+                        serde_json::from_str::<crate::model::adult_study::AdultStudy>(&t).ok()
+                    })
+                    .map(|m| {
+                        adult_scenic_basenames_for(&m)
+                            .iter()
+                            .filter(|n| media.join(n).is_file())
+                            .count()
+                    })
+                    .unwrap_or(0)
+            } else {
+                adult_scenic_basenames()
+                    .iter()
+                    .filter(|n| media.join(n).is_file())
+                    .count()
+            };
+            let defs = (1..=def_need)
+                .filter(|i| media.join(format!("definicion-{i}.png")).is_file())
                 .count();
             format!(
-                "JSON={} · scenic={scenic}/{} · definición={defs}/{} ({})",
+                "JSON={} · scenic={scenic}/{scenic_need} · definición={defs}/{def_need} ({})",
                 if json_ok { "yes" } else { "no" },
-                adult_scenic_basenames().len(),
-                adult_definicion_basenames().len(),
                 paths.json.display()
             )
         }
@@ -310,7 +383,8 @@ fn verify_adult_deliverables(study: u32, root: &Path) -> Result<Deliverables> {
             anyhow::anyhow!(
                 "{} is not valid adult study JSON ({e}). \
                  Need lectura_antifonal, objetivos, pensamiento_central, texto_aureo, \
-                 ensenanza, datos_generales, introduccion_slides, temas[3] with A/B, proximo.",
+                 ensenanza, datos_generales, introduccion_slides, temas[1+] with \
+                 puntos A…N (or legacy A/B keys), proximo.",
                 paths.json.display()
             )
         })?;
@@ -323,12 +397,8 @@ fn verify_adult_deliverables(study: u32, root: &Path) -> Result<Deliverables> {
             study_model.numero
         );
     }
-    if study_model.temas.len() != 3 {
-        bail!(
-            "{} must have exactly 3 temas, got {}",
-            paths.json.display(),
-            study_model.temas.len()
-        );
+    if study_model.temas.is_empty() {
+        bail!("{} must have at least 1 tema", paths.json.display());
     }
     if study_model.objetivos.len() != 3 {
         bail!(
@@ -339,23 +409,27 @@ fn verify_adult_deliverables(study: u32, root: &Path) -> Result<Deliverables> {
     }
     for (idx, tema) in study_model.temas.iter().enumerate() {
         let n = idx + 1;
-        if tema.a.texto_slides.is_empty() {
+        if tema.puntos.is_empty() {
             bail!(
-                "{} tema {n} A has empty texto_slides — pack body paragraphs (~360–400 chars each)",
+                "{} tema {n} has no puntos — need lettered points A…N until Afianzamiento",
                 paths.json.display()
             );
         }
-        if tema.b.texto_slides.is_empty() {
-            bail!(
-                "{} tema {n} B has empty texto_slides — pack body paragraphs (~360–400 chars each)",
-                paths.json.display()
-            );
+        for p in &tema.puntos {
+            if p.texto_slides.is_empty() {
+                bail!(
+                    "{} tema {n} point {} has empty texto_slides — pack body paragraphs (~360–400 chars each)",
+                    paths.json.display(),
+                    p.letra
+                );
+            }
         }
     }
 
     let media = adult_media_dir(study, root);
+    let scenic_needed = adult_scenic_basenames_for(&study_model);
     let mut missing_scenic = Vec::new();
-    for name in adult_scenic_basenames() {
+    for name in &scenic_needed {
         let p = media.join(name);
         if !p.exists() {
             missing_scenic.push(p.display().to_string());
@@ -369,17 +443,20 @@ fn verify_adult_deliverables(study: u32, root: &Path) -> Result<Deliverables> {
         );
     }
     let mut missing_def = Vec::new();
-    for name in adult_definicion_basenames() {
-        let p = media.join(name);
-        if !p.exists() {
-            missing_def.push(name.to_string());
+    for (i, tema) in study_model.temas.iter().enumerate() {
+        if tema.definiciones.is_empty() {
+            continue;
+        }
+        let name = format!("definicion-{}.png", i + 1);
+        if !media.join(&name).exists() {
+            missing_def.push(name);
         }
     }
     if !missing_def.is_empty() {
-        // Only warn — empty temas may omit a card; build skips those slides.
         crate::progress::warn(format!(
             "adult estudio {study}: definición cards missing on disk ({}) — \
-             OK if that tema has no «Definiciones y etimología» box",
+             OK only if that tema has no «Definiciones y etimología» box (then \
+             clear definiciones in JSON); otherwise generate the card PNG",
             missing_def.join(", ")
         ));
     }
@@ -389,31 +466,41 @@ fn verify_adult_deliverables(study: u32, root: &Path) -> Result<Deliverables> {
 /// Write `scenic_images` + `definicion_images` paths into adult JSON after PNGs land.
 pub fn stamp_adult_image_paths(json_path: &Path, study: u32, root: &Path) -> Result<()> {
     let text = std::fs::read_to_string(json_path)?;
+    let study_model: crate::model::adult_study::AdultStudy = serde_json::from_str(&text)
+        .map_err(|e| anyhow::anyhow!("{} is not valid adult study JSON ({e})", json_path.display()))?;
     let mut v: serde_json::Value = serde_json::from_str(&text)?;
     let obj = v
         .as_object_mut()
         .ok_or_else(|| anyhow::anyhow!("adult JSON root must be an object"))?;
 
+    let _ = root; // media paths are repo-relative under studies/adult/
     let rel = |name: &str| -> String {
         format!("studies/adult/{study}/{name}")
     };
+
+    let tema_paths: Vec<serde_json::Value> = (1..=study_model.temas.len())
+        .map(|i| serde_json::Value::String(rel(&format!("tema-{i}.png"))))
+        .collect();
+    let mut ab_paths = Vec::new();
+    for (ti, tema) in study_model.temas.iter().enumerate() {
+        for p in &tema.puntos {
+            ab_paths.push(serde_json::Value::String(rel(&format!(
+                "ab-{}{}.png",
+                ti + 1,
+                p.letra
+            ))));
+        }
+    }
     obj.insert(
         "scenic_images".into(),
         serde_json::json!({
             "intro_header": rel("intro-header.png"),
-            "tema": [rel("tema-1.png"), rel("tema-2.png"), rel("tema-3.png")],
-            "ab": [
-                rel("ab-1A.png"), rel("ab-1B.png"),
-                rel("ab-2A.png"), rel("ab-2B.png"),
-                rel("ab-3A.png"), rel("ab-3B.png")
-            ]
+            "tema": tema_paths,
+            "ab": ab_paths
         }),
     );
-    // Always stamp 3 slots (one per tema). Missing files are OK when that
-    // tema's `definiciones` is empty — the builder skips the slide.
-    let def_paths: Vec<serde_json::Value> = adult_definicion_basenames()
-        .iter()
-        .map(|name| serde_json::Value::String(rel(name)))
+    let def_paths: Vec<serde_json::Value> = (1..=study_model.temas.len())
+        .map(|i| serde_json::Value::String(rel(&format!("definicion-{i}.png"))))
         .collect();
     obj.insert(
         "definicion_images".into(),
@@ -838,6 +925,30 @@ async fn download_resolved_artifacts(
                     if let Some(parent) = dest_path.parent() {
                         std::fs::create_dir_all(parent)?;
                     }
+                    // HARD: never overwrite a finished DEFINICIÓN card PNG.
+                    // Agents often emit parchment/centered-text junk; keep the
+                    // locked card design (white rows + chevron + icons) once on disk.
+                    let is_def = dest_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n.starts_with("definicion-") && n.ends_with(".png"))
+                        .unwrap_or(false);
+                    if is_def && dest_path.is_file() {
+                        let keep = std::fs::metadata(&dest_path)
+                            .map(|m| m.len() > 50_000)
+                            .unwrap_or(false);
+                        if keep {
+                            crate::progress::warn(format!(
+                                "keeping existing {} (locked card design — not overwriting agent art)",
+                                dest_path
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("definicion.png")
+                            ));
+                            bar.inc(1);
+                            return Ok(());
+                        }
+                    }
                     client
                         .download_artifact_quiet(&agent_id, &art_path, &dest_path)
                         .await?;
@@ -863,6 +974,11 @@ async fn download_resolved_artifacts(
 /// Accepts `.png`/`.jpg`/`.jpeg`/`.webp` under `artifacts/` or `artifacts/assets/`
 /// (host converts to PNG on download). Matching is case-insensitive on the stem
 /// (`ab-1A.jpg` → `ab-1A.png`).
+///
+/// Required scenic count is **variable** (temas × points). We accept any
+/// `intro-header` / `tema-N` / `ab-N{Letter}` / `definicion-N` stems present;
+/// hard-fail only when `intro-header` or all tema/ab slots are missing.
+/// [`verify_adult_deliverables`] checks completeness against the JSON after download.
 fn resolve_adult_artifacts(
     study: u32,
     artifacts: &[Artifact],
@@ -890,62 +1006,99 @@ fn resolve_adult_artifacts(
         );
     }
 
-    let mut missing_scenic = Vec::new();
-    let mut missing_def = Vec::new();
-    for name in adult_image_basenames() {
-        let stem = name.trim_end_matches(".png");
-        let stem_l = stem.to_lowercase();
-        let mut found = None;
-        for (idx, art) in artifacts.iter().enumerate() {
-            if used[idx] {
-                continue;
-            }
-            let basename = art.path.rsplit('/').next().unwrap_or(&art.path);
-            let lower = basename.to_lowercase();
-            let (file_stem, ext) = match lower.rsplit_once('.') {
-                Some(pair) => pair,
-                None => continue,
-            };
-            if !matches!(ext, "png" | "jpg" | "jpeg" | "webp") {
-                continue;
-            }
-            // Exact stem, or `{study}-stem` prefix from some agents.
-            let ok = file_stem == stem_l
-                || file_stem == format!("{study}-{stem_l}")
-                || file_stem.ends_with(&format!("-{stem_l}"));
-            if ok {
-                found = Some((idx, art.path.clone()));
-                break;
-            }
+    let mut got_intro = false;
+    let mut tema_n = 0usize;
+    let mut ab_n = 0usize;
+    let mut def_n = 0usize;
+
+    for (idx, art) in artifacts.iter().enumerate() {
+        if used[idx] {
+            continue;
         }
-        if let Some((idx, path)) = found {
-            used[idx] = true;
-            out.push((path, media.join(name)));
-        } else if adult_scenic_basenames().contains(&name) {
-            missing_scenic.push(name.to_string());
-        } else {
-            missing_def.push(name.to_string());
+        let basename = art.path.rsplit('/').next().unwrap_or(&art.path);
+        let lower = basename.to_lowercase();
+        let (file_stem, ext) = match lower.rsplit_once('.') {
+            Some(pair) => pair,
+            None => continue,
+        };
+        if !matches!(ext, "png" | "jpg" | "jpeg" | "webp") {
+            continue;
         }
+        let Some(dest_name) = adult_media_dest_from_stem(file_stem, study) else {
+            continue;
+        };
+        used[idx] = true;
+        if dest_name == "intro-header.png" {
+            got_intro = true;
+        } else if dest_name.starts_with("tema-") {
+            tema_n += 1;
+        } else if dest_name.starts_with("ab-") {
+            ab_n += 1;
+        } else if dest_name.starts_with("definicion-") {
+            def_n += 1;
+        }
+        out.push((art.path.clone(), media.join(dest_name)));
     }
 
-    if !missing_scenic.is_empty() {
+    if !got_intro || tema_n == 0 || ab_n == 0 {
         let found: Vec<&str> = artifacts.iter().map(|a| a.path.as_str()).collect();
         bail!(
-            "adult prepare missing required scenic images for estudio {study}: {}. \
+            "adult prepare missing required scenic images for estudio {study} \
+             (need intro-header + ≥1 tema-N + ≥1 ab-N{{Letter}}; \
+             got intro={got_intro} tema={tema_n} ab={ab_n}). \
              Artifacts found ({}): {:?}. \
              Tip: JPG under artifacts/assets/ is OK (converted to PNG).",
-            missing_scenic.join(", "),
             found.len(),
             found
         );
     }
-    if !missing_def.is_empty() {
+    if def_n == 0 {
         crate::progress::warn(format!(
-            "adult prepare: no definición cards yet ({}) — continuing; build uses text fallback",
-            missing_def.join(", ")
+            "adult prepare: no definición cards in artifacts — continuing; \
+             generate definicion-N.png when a tema has a printed «Definiciones» box"
         ));
     }
     Ok(out)
+}
+
+/// Normalize an artifact stem to a local media basename (`ab-1c` → `ab-1C.png`).
+fn adult_media_dest_from_stem(file_stem: &str, study: u32) -> Option<String> {
+    let mut s = file_stem.to_lowercase();
+    let prefix = format!("{study}-");
+    if let Some(rest) = s.strip_prefix(&prefix) {
+        s = rest.to_string();
+    }
+
+    if s == "intro-header" {
+        return Some("intro-header.png".into());
+    }
+    if let Some(rest) = s.strip_prefix("tema-") {
+        if !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()) {
+            return Some(format!("tema-{rest}.png"));
+        }
+    }
+    if let Some(rest) = s.strip_prefix("definicion-") {
+        if !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()) {
+            return Some(format!("definicion-{rest}.png"));
+        }
+    }
+    if let Some(rest) = s.strip_prefix("ab-") {
+        let mut num = String::new();
+        let mut letter: Option<char> = None;
+        for c in rest.chars() {
+            if c.is_ascii_digit() && letter.is_none() {
+                num.push(c);
+            } else if c.is_ascii_alphabetic() && !num.is_empty() && letter.is_none() {
+                letter = Some(c.to_ascii_uppercase());
+            } else {
+                return None;
+            }
+        }
+        if let Some(l) = letter {
+            return Some(format!("ab-{num}{l}.png"));
+        }
+    }
+    None
 }
 
 pub(crate) fn stamp_audience(json_path: &Path, audience: Audience) -> Result<()> {
@@ -1208,12 +1361,6 @@ When finished, confirm the four artifact paths and `section_style.id`.
 fn build_adult_cloud_prepare_prompt(req: &PrepareRequest, host_images: bool) -> Result<String> {
     let study = req.study;
     let proximo_block = proximo_prompt_block(req)?;
-    let img_list = adult_image_basenames()
-        .iter()
-        .enumerate()
-        .map(|(i, n)| format!("{}. `artifacts/{n}`", i + 2))
-        .collect::<Vec<_>>()
-        .join("\n");
 
     let schema = r#"## Adult JSON schema (required keys)
 ```json
@@ -1235,31 +1382,39 @@ fn build_adult_cloud_prepare_prompt(req: &PrepareRequest, host_images: bool) -> 
       "rango": "Libro N:N-N",
       "definiciones": [{"termino":"…","texto":"…","referencia":"(Libro N:N)"}],
       "A": {"titulo":"…","texto_slides":["…"],"texto_biblico":{"cita":"…","versiculos":["…"]}},
-      "B": {"titulo":"…","texto_slides":["…"],"texto_biblico":{"cita":"…","versiculos":["…"]}}
+      "B": {"titulo":"…","texto_slides":["…"],"texto_biblico":{"cita":"…","versiculos":["…"]}},
+      "C": {"titulo":"…","texto_slides":["…"],"texto_biblico":{"cita":"…","versiculos":["…"]}}
     }
   ],
   "proximo": {"numero":0,"titulo":"…","base_biblica":["…"]}
 }
 ```
-Exactly **3** `temas`, each with A and B. Every A and B must include **non-empty** \
-`texto_slides` (1+ paragraphs, ~360–400 chars each — pack densely; count may differ \
-from other studies). Host stamps `scenic_images` / `definicion_images`."#;
+**Variable structure (HARD):**
+- `temas`: **1+** (not fixed to 3). One object per printed `I.` / `II.` / … until **RESUMEN GENERAL** (RESUMEN body is **not** in the deck — stop there).
+- Each tema: lettered points **A…N** as keys `A`,`B`,`C`,… (or a `puntos` array with `letra`). Count varies — stop at **Afianzamiento y aplicación** (skip that section and Ideas/Preguntas).
+- Every lettered point needs **non-empty** `texto_slides` (~360–400 chars each).
+- Scans may be **1-up or 2-up** — treat each half of a two-up spread as its own printed page when reading order.
+- Host stamps `scenic_images` / `definicion_images`."#;
     let schema = schema.replace("STUDY", &study.to_string());
 
     // Append HARD rule about Definiciones — never invent.
     let schema = format!(
         "{schema}
 
-## Definiciones y etimología — HARD (never invent)
+## Definiciones y etimología — HARD (never invent + LOCKED card design)
 - `temas[].definiciones` MUST come **only** from the printed sidebar box titled \
-**«Definiciones y etimología»** on the scans.
+**«Definiciones y etimología»** on the scans. **Every TEMA (I, II, …) that has \
+that box must have a non-empty `definiciones` array** — do not leave TEMA II+ empty.
 - Copy `termino` + `texto` (+ any citation in that box) **verbatim**. Do **not** \
 paraphrase, expand with Hebrew/Greek roots, or pull phrases from the body prose.
 - If a tema section has **no** such box → `\"definiciones\": []` (empty array). \
 Do **not** invent Rebelión / Anatema / Unción / etc. from the commentary.
-- Definición **card images** (when the host generates them) must render **only** \
-those verbatim terms — never add quotes, extra verses, or footer disclaimers \
-not in the box."
+- Definición **card images** MUST use the **locked house card design** (white rounded \
+rows + coloured chevron + left/right icons + soft landscape + header \
+`DEFINICIÓN Y ETIMOLOGÍA`). **FORBIDDEN:** parchment page, centered essay text, \
+plain serif dump, cream title-only. Never invent a new definición visual style.
+- Card images must render **only** those verbatim terms — never add quotes, extra \
+verses, or footer disclaimers not in the box."
     );
 
     if host_images {
@@ -1268,7 +1423,8 @@ not in the box."
 
 Follow AGENTS.md adult HARD rules. Do **NOT** build a .pptx.
 Do **NOT** generate images — the host CLI generates all scenic/definición PNGs after you finish.
-Adult JSON is **not** the youth schema (no `puntos` / `section_images` / `section_style`).
+Adult JSON is **not** the youth schema (youth uses top-level `puntos` 1/2/3; adult uses \
+`temas[].A/B/C…` or `temas[].puntos` — no `section_images` / `section_style`).
 
 ## Inputs
 - Estudio **{study}** (audience=adult)
@@ -1282,7 +1438,7 @@ Use Write/Shell to create:
 {schema}
 
 ## Rules
-- Faithful Spanish from the scans; merge cross-page cuts; skip Ideas para el maestro / Preguntas.
+- Faithful Spanish from the scans; merge cross-page cuts; skip Ideas para el maestro / Preguntas / Afianzamiento / RESUMEN GENERAL body.
 - Lectura/Texto = whole verses.
 - End as soon as `artifacts/{study}.json` exists. Speed matters — JSON only, no images.
 
@@ -1301,7 +1457,8 @@ Use Write/Shell to create:
         r#"You are a no-repo Cursor Cloud Agent preparing a Mount Zion Church **adult** Bible study.
 
 Follow AGENTS.md adult HARD rules and LAYOUT_GUIDE ideas below. Do **NOT** build a .pptx.
-Adult JSON is **not** the youth schema (no `puntos` / `section_images` / `section_style`).
+Adult JSON is **not** the youth schema (youth uses top-level `puntos` 1/2/3; adult uses \
+`temas[].A/B/C…` — no `section_images` / `section_style`).
 
 ## Inputs
 - Estudio **{study}** (audience=adult)
@@ -1312,25 +1469,27 @@ Adult JSON is **not** the youth schema (no `puntos` / `section_images` / `sectio
 Use Write / Shell / image tools. Host CLI downloads via List Artifacts.
 
 1. `artifacts/{study}.json`  ← required adult schema (see below)
-{img_list}
+2. Scenic + definición PNGs named from the JSON (see Images below)
 
 Image paths may also be `artifacts/assets/<name>.png` **or `.jpg`** (host converts to PNG).
-Prefer PNG; JPG is accepted. **Scenic images (intro/tema/ab) are required**; definición cards are strongly preferred.
+Prefer PNG; JPG is accepted. **Scenic images (intro/tema/ab) are required**; definición cards are strongly preferred when that tema has a printed box.
 
 {schema}
 
-## Images — HARD (13 PNGs, exact basenames)
+## Images — HARD (variable count; exact basenames)
 16:9 ≈1408×768. No text/letters/logos/watermarks/yellow dashed arcs.
 - `intro-header.png` — cinematic intro full-bleed
-- `tema-1.png` … `tema-3.png` — one scenic per tema (different scenes)
-- `ab-1A.png` … `ab-3B.png` — six scenic A/B title slides
-- `definicion-1.png` … `definicion-3.png` — DEFINICIÓN Y ETIMOLOGÍA card graphics (header + term rows; readable Spanish text **is** allowed on these three definición cards only)
+- `tema-{{n}}.png` — one scenic per tema in order
+- `ab-{{n}}{{letra}}.png` — one scenic per lettered point (e.g. `ab-1A.png`, `ab-1C.png`, `ab-2B.png`)
+- `definicion-{{n}}.png` — DEFINICIÓN Y ETIMOLOGÍA **locked card design** for each tema \
+  with a printed box (white rows + coloured chevrons + icons on soft landscape). \
+  **FORBIDDEN:** parchment / centered essay / plain text dump. One card per TEMA that has the box.
 
 ## Rules
-- Faithful Spanish from the scans; merge cross-page cuts; skip Ideas para el maestro / Preguntas.
+- Faithful Spanish from the scans; merge cross-page cuts; skip Ideas / Afianzamiento / Preguntas / RESUMEN body.
 - **Definiciones y etimología:** copy ONLY from that printed box; empty array if the tema has no box — never invent terms or etymologies.
 - Lectura/Texto = whole verses; body slides ~360–400 chars when packing.
-- End only after `{study}.json` + all 13 PNGs exist under `artifacts/`.
+- End only after `{study}.json` + all required scenic PNGs exist under `artifacts/`.
 
 ---
 # AGENTS.md (rules)
@@ -1381,9 +1540,33 @@ mod tests {
             // no definición — should warn but succeed
         ];
         let resolved = resolve_adult_artifacts(4, &arts, &root).expect("map");
-        assert_eq!(resolved.len(), 1 + adult_scenic_basenames().len());
+        assert_eq!(resolved.len(), 1 + 10); // json + intro + 3 tema + 6 ab
         assert!(resolved.iter().any(|(_, d)| d.ends_with("ab-1A.png")));
         assert!(resolved.iter().any(|(src, _)| src.ends_with("ab-1A.jpg")));
+    }
+
+    #[test]
+    fn maps_adult_variable_tema_point_images() {
+        // Estudio 4 shape: 2 temas, A–D + A–B — must not require tema-3 / ab-3*.
+        let root = PathBuf::from("/repo");
+        let arts = vec![
+            art("artifacts/4.json"),
+            art("artifacts/assets/ab-1A.jpg"),
+            art("artifacts/assets/ab-1B.jpg"),
+            art("artifacts/assets/ab-1C.jpg"),
+            art("artifacts/assets/ab-1D.jpg"),
+            art("artifacts/assets/ab-2A.jpg"),
+            art("artifacts/assets/ab-2B.jpg"),
+            art("artifacts/assets/definicion-1.jpg"),
+            art("artifacts/assets/intro-header.jpg"),
+            art("artifacts/assets/tema-1.jpg"),
+            art("artifacts/assets/tema-2.jpg"),
+        ];
+        let resolved = resolve_adult_artifacts(4, &arts, &root).expect("map variable");
+        assert!(resolved.iter().any(|(_, d)| d.ends_with("ab-1C.png")));
+        assert!(resolved.iter().any(|(_, d)| d.ends_with("ab-1D.png")));
+        assert!(!resolved.iter().any(|(_, d)| d.ends_with("tema-3.png")));
+        assert_eq!(resolved.len(), 11); // json + 10 images
     }
 
     #[test]

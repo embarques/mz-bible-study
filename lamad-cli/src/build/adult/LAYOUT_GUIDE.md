@@ -124,7 +124,12 @@ Match the reference deck’s paragraph breaks:
 
 ### Definición y etimología (`definicion`) — **image card design**
 
-**Visual authority:** [`reference/definicion-etimologia-design.png`](reference/definicion-etimologia-design.png).
+**Visual authority (LOCKED — do not invent a new style):**
+[`reference/definicion-etimologia-design.png`](reference/definicion-etimologia-design.png)
++ study-24 / estudio-4 card PNGs (white rows + coloured chevrons + icons on soft landscape).
+
+This design is **final**. Do **not** change it, “improve” it, or replace it with another motif
+(parchment page, centered serif essay, plain text dump, cream title-only slide, etc.).
 
 Do **not** dump definitions as a plain blue-header body slide. Each tema’s definición slide is a **composed 16:9 graphic** (full-bleed) matching this layout:
 
@@ -146,7 +151,13 @@ Do **not** dump definitions as a plain blue-header body slide. Each tema’s def
 
 **Icons are content-specific** — do not reuse the sample’s clock/storm/brain icons when the study talks about *justicia*, *modestia*, *humildad*, etc. Generate new icon pairs that fit each termino/texto.
 
-**Build path:** generate `definicion-{tema}.png` (≈1408×768+) with all of the above baked into the image (including title + body text — this is a composed slide, not chrome-over-photo). Swap onto the definición prototype slide’s picture fill / main image shape. Clear leftover text placeholders so they do not double-render.
+**FORBIDDEN (HARD — never ship):**
+- Parchment / paper texture with centered essay text
+- Plain serif paragraphs without white cards + chevrons
+- Title-only cream slide when the tema has real `definiciones`
+- Overwriting an existing good `definicion-N.png` on disk with a different design
+
+**Build path:** generate `definicion-{tema}.png` (≈1408×768+) with all of the above baked into the image (including title + body text — this is a composed slide, not chrome-over-photo). Swap onto the definición prototype slide’s picture fill / main image shape. Clear leftover text placeholders so they do not double-render. If a correct card PNG already exists for that tema, **keep it**.
 
 JSON fields per term (`Definicion`):
 
@@ -157,7 +168,7 @@ JSON fields per term (`Definicion`):
 | `referencia` | Optional verse/ref **only if printed in that box** |
 | `icono_izq` / `icono_der` | Optional motif hints for the image generator |
 
-**HARD — never invent:** If the tema has no «Definiciones y etimología» box on the scan, use `definiciones: []` and **omit** the definición slide. Do not fabricate terms from body prose (Rebelión, Anatema, Unción, Hebrew roots, extra verses, Reina-Valera footers, etc.). Card PNGs must render only the JSON terms.
+**HARD — never invent:** If the tema has no «Definiciones y etimología» box on the scan, use `definiciones: []` and **omit** the definición slide. Do not fabricate terms from body prose (Rebelión, Anatema, Unción, Hebrew roots, extra verses, Reina-Valera footers, etc.). Card PNGs must render only the JSON terms. **Every printed TEMA (I, II, …) that has the box gets its own Definiciones slide** — never skip TEMA II+ when the box is present.
 
 ---
 
@@ -172,7 +183,7 @@ ab_body              → blue header + white body + navy footer (N slides)
 (repeat ab_title → texto → ab_body for each A/B/C point in the theme)
 ```
 
-Study 02 tema II has **three** points (A.2, B.2, C.2); tema I and III have two. Slide count per tema is **variable** — allocate from template or duplicate prototype slides.
+**Temas and points are variable:** print may have 1–N temas (stop at RESUMEN GENERAL) and A…N points per tema (stop at Afianzamiento). Study 02: tema II has three points (A/B/C); others have two. Estudio 4: TEMA I has A–D, TEMA II has A–B. Builder clones prototype slides — never invent layouts.
 
 ### Texto Bíblico
 
@@ -222,9 +233,9 @@ For each study, generate **full-bleed 16:9 PNGs** (~1408×768 or larger):
 | Image | Used on |
 |-------|---------|
 | `intro-header.png` | `intro_header` |
-| `tema-{1,2,3}.png` | Each `tema_header` |
-| `definicion-{1,2,3}.png` | Each `definicion` — **card layout** (see design ref above); icons unique per term |
-| `ab-{tema}{letter}.png` | Each `ab_title` (e.g. `ab-1A.png`, `ab-2B.png`) |
+| `tema-{n}.png` | Each `tema_header` (count = `temas.len()`, not fixed to 3) |
+| `definicion-{n}.png` | Each tema with a printed Definiciones box |
+| `ab-{tema}{letter}.png` | Each lettered point (e.g. `ab-1A.png`, `ab-1D.png`, `ab-2B.png`) |
 
 Requirements:
 

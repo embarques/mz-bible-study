@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 
 use crate::agent::openai::{self, OpenAiClient};
 use crate::agent::prepare::{
-    adult_image_basenames, adult_media_dir, expected_paths, stamp_adult_image_paths, stamp_audience,
-    verify_deliverables, Deliverables, PrepareRequest,
+    adult_media_dir, expected_paths, stamp_adult_image_paths, stamp_audience, verify_deliverables,
+    Deliverables, PrepareRequest,
 };
 use crate::agent::{AGENTS_MD, PREPARE_STUDY_MD};
 use crate::job::Audience;
@@ -199,8 +199,17 @@ async fn generate_adult_images(
 
     let media = adult_media_dir(req.study, &req.root);
     std::fs::create_dir_all(&media)?;
+    let study_model: crate::model::adult_study::AdultStudy = serde_json::from_value(study_json.clone())
+        .context("adult JSON for image gen must match AdultStudy shape")?;
+    let names = crate::agent::prepare::adult_basenames_for_study(&study_model);
     let prompts = adult_image_prompts(req.study, study_json)?;
-    let names = adult_image_basenames();
+    if prompts.len() != names.len() {
+        bail!(
+            "adult image prompt count {} != basename count {}",
+            prompts.len(),
+            names.len()
+        );
+    }
     let img_bar =
         crate::progress::bar(names.len() as u64, "Generating adult images (×4 parallel)");
     let model = req.image_model.clone();
@@ -217,6 +226,24 @@ async fn generate_adult_images(
             let model = model.clone();
             let bar = img_bar.clone();
             async move {
+                let is_def = path
+                    .file_name()
+                    .and_then(|x| x.to_str())
+                    .map(|x| x.starts_with("definicion-"))
+                    .unwrap_or(false);
+                if is_def
+                    && path.is_file()
+                    && std::fs::metadata(&path).map(|m| m.len() > 50_000).unwrap_or(false)
+                {
+                    crate::progress::warn(format!(
+                        "keeping existing {} (locked definición card design)",
+                        path.file_name()
+                            .and_then(|x| x.to_str())
+                            .unwrap_or("definicion.png")
+                    ));
+                    bar.inc(1);
+                    return Ok(());
+                }
                 let png = generate_png_with_retry(client, &model, &prompt, n).await?;
                 std::fs::write(&path, &png)
                     .with_context(|| format!("write {}", path.display()))?;
@@ -346,7 +373,8 @@ fn build_openai_adult_prompts(req: &PrepareRequest) -> Result<(String, String)> 
     let proximo_block = proximo_block(req)?;
     let system = r#"You extract Mount Zion Church Spanish **adult** Bible-study content from scan images into JSON.
 Adult schema (not youth): lectura_antifonal, objetivos, pensamiento_central, texto_aureo,
-ensenanza, datos_generales, introduccion_slides, temas[3] with A/B blocks.
+ensenanza, datos_generales, introduccion_slides, temas[1+] with lettered points A…N
+(stop at Afianzamiento; end temas at RESUMEN GENERAL). Scans may be 1-up or 2-up.
 Reply with a single JSON object only (no markdown). Do NOT generate images. Do NOT build a .pptx."#
         .to_string();
 
@@ -364,14 +392,16 @@ pensamiento_central (string),
 texto_aureo {{texto, cita}} — cita without parentheses,
 ensenanza, datos_generales {{autor, personajes, fecha, lugar}},
 introduccion_slides (array of paragraphs),
-temas (exactly 3): each {{titulo, rango, definiciones[], A {{titulo, texto_slides[], texto_biblico}}, B {{…}}}},
+temas (1+ until RESUMEN GENERAL): each {{titulo, rango, definiciones[], A/B/C… blocks
+  or puntos[{{letra,titulo,texto_slides,texto_biblico}}]}},
 proximo (or null if last).
 Host stamps scenic_images / definicion_images — omit or leave empty.
 
 ## Rules
-- Faithful Spanish from the scans; merge cross-page cuts; skip Ideas para el maestro / Preguntas.
+- Faithful Spanish from the scans; merge cross-page cuts; skip Ideas / Afianzamiento / Preguntas / RESUMEN body.
 - Definiciones: ONLY from printed «Definiciones y etimología» boxes (verbatim). Empty [] if no box — never invent.
 - Whole verses only in lectura/texto_biblico.
+- Do **not** force 3 temas or only A/B — follow the print (e.g. 2 temas with A–D then A–B is valid).
 
 ---
 # AGENTS.md (rules)
@@ -406,28 +436,8 @@ fn adult_image_prompts(study: u32, json: &Value) -> Result<Vec<String>> {
         .get("titulo")
         .and_then(|t| t.as_str())
         .unwrap_or("estudio bíblico");
-    let temas = json
-        .get("temas")
-        .and_then(|t| t.as_array())
-        .context("adult JSON missing temas array")?;
-    let tema_title = |i: usize| -> String {
-        temas
-            .get(i)
-            .and_then(|t| t.get("titulo"))
-            .and_then(|t| t.as_str())
-            .unwrap_or("tema bíblico")
-            .to_string()
-    };
-    let ab_title = |ti: usize, side: &str| -> String {
-        let key = if side == "A" { "A" } else { "B" };
-        temas
-            .get(ti)
-            .and_then(|t| t.get(key))
-            .and_then(|b| b.get("titulo"))
-            .and_then(|t| t.as_str())
-            .unwrap_or("punto bíblico")
-            .to_string()
-    };
+    let study_model: crate::model::adult_study::AdultStudy = serde_json::from_value(json.clone())
+        .context("adult JSON missing/invalid temas for image prompts")?;
 
     let scenic = |theme: &str| {
         format!(
@@ -437,62 +447,58 @@ fn adult_image_prompts(study: u32, json: &Value) -> Result<Vec<String>> {
              No text, letters, logos, watermarks, captions, or yellow dashed arcs."
         )
     };
-    let def_card = |i: usize| {
-        let defs = temas
-            .get(i)
-            .and_then(|t| t.get("definiciones"))
-            .and_then(|d| d.as_array())
-            .cloned()
-            .unwrap_or_default();
-        if defs.is_empty() {
-            // Host may skip generating this slot; keep a no-op placeholder prompt
-            // that must NOT invent theological terms.
+    let def_card = |tema: &crate::model::adult_study::TemaAdult| {
+        if tema.definiciones.is_empty() {
+            // Should not be generated for empty temas — host skips unused slots.
+            // Never invent a cream/parchment title-only slide as "content".
             return format!(
-                "Widescreen 16:9 blank cream slide with only the header \
-                 'DEFINICIÓN Y ETIMOLOGÍA' centered. No term cards, no verses, \
-                 no quotes, no extra text. Study context: {}.",
-                tema_title(i)
+                "Widescreen 16:9 soft landscape only, no readable text, no cards. \
+                 Placeholder only (tema has no definiciones). Context: {}.",
+                tema.titulo
             );
         }
         let mut rows = String::new();
-        for (n, d) in defs.iter().enumerate() {
-            let term = d.get("termino").and_then(|x| x.as_str()).unwrap_or("");
-            let texto = d.get("texto").and_then(|x| x.as_str()).unwrap_or("");
-            let referencia = d.get("referencia").and_then(|x| x.as_str()).unwrap_or("");
+        for (n, d) in tema.definiciones.iter().enumerate() {
+            let referencia = d.referencia.as_deref().unwrap_or("");
             rows.push_str(&format!(
-                "Row {}: termino=\"{term}\" | texto=\"{texto}\" | referencia=\"{referencia}\". ",
-                n + 1
+                "Row {}: termino=\"{}\" | texto=\"{}\" | referencia=\"{referencia}\". ",
+                n + 1,
+                d.termino,
+                d.texto
             ));
         }
         format!(
-            "Widescreen 16:9 DEFINICIÓN Y ETIMOLOGÍA educational card graphic for adult \
-             Bible study. Soft landscape/mist background with left text-safe wash. \
-             Header: open-book icon + title 'DEFINICIÓN Y ETIMOLOGÍA' (bold navy) + thin navy rule. \
-             Stack one horizontal rounded white card per term (left icon, coloured chevron with \
-             the EXACT termino, grey rule, definition body). \
-             Render EXACTLY these terms and texts — verbatim Spanish, no paraphrasing, \
+            "Widescreen 16:9 DEFINICIÓN Y ETIMOLOGÍA LOCKED card design for adult Bible study \
+             (same house style every study — do NOT invent a new layout). \
+             Soft muted landscape/mist background. \
+             Header top-left: open-book icon + bold navy title 'DEFINICIÓN Y ETIMOLOGÍA' + thin navy rule. \
+             Stack one horizontal rounded WHITE card per term: left circular icon | coloured chevron \
+             with EXACT termino | grey vertical rule | definition body | right icon. \
+             Chevron colours rotate (teal / navy / purple). \
+             FORBIDDEN: parchment paper, centered serif essay, plain text dump, cream title-only slide, \
+             decorative double border without cards. \
+             Render EXACTLY these Spanish terms and texts — verbatim, no paraphrasing, \
              no invented Hebrew/Greek roots, no extra Bible quotes, no 'Reina-Valera' footer, \
              no terms not listed: {rows} \
              No watermarks. Theme context: {}.",
-            tema_title(i)
+            tema.titulo
         )
     };
 
-    Ok(vec![
-        scenic(&format!("introducción — {titulo}")),
-        scenic(&tema_title(0)),
-        scenic(&tema_title(1)),
-        scenic(&tema_title(2)),
-        scenic(&ab_title(0, "A")),
-        scenic(&ab_title(0, "B")),
-        scenic(&ab_title(1, "A")),
-        scenic(&ab_title(1, "B")),
-        scenic(&ab_title(2, "A")),
-        scenic(&ab_title(2, "B")),
-        def_card(0),
-        def_card(1),
-        def_card(2),
-    ])
+    let mut out = Vec::new();
+    out.push(scenic(&format!("introducción — {titulo}")));
+    for tema in &study_model.temas {
+        out.push(scenic(&tema.titulo));
+    }
+    for tema in &study_model.temas {
+        for p in &tema.puntos {
+            out.push(scenic(&p.titulo));
+        }
+    }
+    for tema in &study_model.temas {
+        out.push(def_card(tema));
+    }
+    Ok(out)
 }
 
 /// Force CLI-owned fields the model must not invent wrong.

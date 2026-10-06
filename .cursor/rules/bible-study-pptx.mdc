@@ -38,6 +38,7 @@ Full guide: `lamad-cli/src/build/adult/LAYOUT_GUIDE.md`. Builder: `lamad-cli` ad
 - **Title/próximo:** strip `<a:highlight>` — no cyan chip behind the title (match youth).
 - **Text overflow:** if text is too big, **decrease the font** (long TEMA/A-B image titles → 18–20pt; A/B body headers → next smaller size, top-anchored). Title must never overlap the verse under the gray line or climb off the top of the slide.
 - **Image slides:** clone youth chrome at bottom-left; **remove** black `!!Rectangle`; force full-bleed `<a:stretch><a:fillRect/></a:stretch>`; scenic pic must be visible.
+- **Definición y etimología (LOCKED):** composed card PNG only — white rows + coloured chevron + icons + soft landscape + header `DEFINICIÓN Y ETIMOLOGÍA` (`LAYOUT_GUIDE` + `reference/definicion-etimologia-design.png`). **Never** parchment/centered essay. **Never** overwrite a good existing `definicion-N.png`. Every TEMA with a printed box gets its own card slide.
 - **Pensamiento / Texto Áureo:** correct SmartArt slots; citation on the **next line** under the quote; no `()`; shrink long diagram text.
 - **Texto box:** clamp verse box below “Texto Bíblico” header; no overlap.
 - Output only to repo-root `bible-studies/`. Run QC + validate; no PowerPoint Repair.

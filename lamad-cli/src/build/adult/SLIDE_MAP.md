@@ -3,7 +3,9 @@
 Visual QA reference: Estudio 4 (layout rules in `LAYOUT_GUIDE.md` + Rust builder).  
 Build template: `template/adult/master-template.pptx` (62-slide prototype package). Do **not** remap finished decks into this file.
 
-Total slides in `sldIdLst`: **62** (`slide1.xml` … `slide62.xml`)
+**Variable deck length:** the prototype has 3×A/B tema chains as clonesource slides. The builder emits **1+ temas** and **A…N points per tema** by duplicating prototypes (Estudio 4 = TEMA I A–D + TEMA II A–B). Afianzamiento / RESUMEN GENERAL are print markers only — not slides.
+
+Total slides in `sldIdLst` (prototype): **62** (`slide1.xml` … `slide62.xml`)
 
 This document maps each slide index to its **slide type**, the **shape names** the Rust adult builder should target for text replacement, and implementation notes (SmartArt, media, layout quirks).
 

@@ -16,7 +16,7 @@ use crate::build::adult::ooxml::{
 use crate::build::ooxml::{self, VerseKind};
 use crate::build::ooxml::verses::expand_glued_verses;
 use crate::job::Audience;
-use crate::model::adult_study::{AdultStudy, TemaAdult};
+use crate::model::adult_study::{tema_label, AdultStudy, TemaAdult};
 use crate::model::study::VERSE_BUDGET;
 use crate::pack;
 use crate::paths;
@@ -35,61 +35,15 @@ const INTRO_BODY_PROTOS: [u32; 4] = [10, 11, 12, 13];
 /// clipped mid-line at the bottom (HARD: never overflow).
 const ADULT_LECTURA_BUDGET: usize = VERSE_BUDGET;
 
-struct TemaLayout {
-    header: u32,
-    video_header: bool,
-    definicion: u32,
-    a_title: u32,
-    a_ref: AbRefShape,
-    texto_a: u32,
-    a_bodies: &'static [u32],
-    b_title: u32,
-    b_ref: AbRefShape,
-    texto_b: u32,
-    b_bodies: &'static [u32],
-}
-
-const TEMA_LAYOUTS: [TemaLayout; 3] = [
-    TemaLayout {
-        header: 14,
-        video_header: false,
-        definicion: 15,
-        a_title: 16,
-        a_ref: AbRefShape::CuadroTexto6,
-        texto_a: 17,
-        a_bodies: &[18, 19, 20, 21],
-        b_title: 22,
-        b_ref: AbRefShape::CuadroTexto4,
-        texto_b: 23,
-        b_bodies: &[24, 25, 26, 27, 28],
-    },
-    TemaLayout {
-        header: 29,
-        video_header: true,
-        definicion: 30,
-        a_title: 31,
-        a_ref: AbRefShape::Titulo6,
-        texto_a: 32,
-        a_bodies: &[33, 34, 35, 36],
-        b_title: 37,
-        b_ref: AbRefShape::Titulo7,
-        texto_b: 38,
-        b_bodies: &[39, 40, 41, 42, 43],
-    },
-    TemaLayout {
-        header: 44,
-        video_header: true,
-        definicion: 45,
-        a_title: 46,
-        a_ref: AbRefShape::Titulo6,
-        texto_a: 47,
-        a_bodies: &[48, 49, 50, 51, 52],
-        b_title: 53,
-        b_ref: AbRefShape::Titulo6,
-        texto_b: 54,
-        b_bodies: &[55, 56, 57, 58, 59, 60, 61],
-    },
-];
+/// Prototype slides for dynamic tema / punto allocation (clone these; do not
+/// invent layouts). Video tema headers 29/44 are converted to match slide 14.
+const PROTO_TEMA_HEADER: u32 = 14;
+const PROTO_DEFINICION: u32 = 15;
+const PROTO_AB_TITLE: u32 = 16;
+const PROTO_TEXTO: u32 = 17;
+const PROTO_AB_BODIES: [u32; 4] = [18, 19, 20, 21];
+/// Legacy video-poster tema headers — convert once so unused parts stay clean.
+const VIDEO_TEMA_HEADERS: [u32; 2] = [29, 44];
 
 /// Build an adult study deck from JSON + the adult master template.
 pub fn build_study(
@@ -252,23 +206,31 @@ pub fn apply_adult_study(build: &Path, study: &AdultStudy) -> Result<Vec<u32>> {
     }
     order.extend(&intro_nums);
 
-    // Tema II/III templates are video posters — convert to the still-image
-    // tema layout (slide 14) BEFORE scenic swaps / text fill. Stripping
-    // video XML in place triggers PowerPoint "Repair".
-    for layout in &TEMA_LAYOUTS {
-        if layout.video_header {
-            convert_video_tema_to_image_layout(build, layout.header, 14)?;
-        }
+    // Legacy video-poster tema headers → still-image layout (slide 14) so
+    // unused template parts stay clean. Stripping video XML in place triggers Repair.
+    for &vh in &VIDEO_TEMA_HEADERS {
+        convert_video_tema_to_image_layout(build, vh, PROTO_TEMA_HEADER)?;
     }
-
-    apply_scenic_images(build, study)?;
     remove_orphan_videos(build)?;
 
-    if study.temas.len() != 3 {
-        bail!("expected 3 temas, got {}", study.temas.len());
+    // Intro scenic (if any) before temas; tema/punto scenic applied as slides allocate.
+    apply_intro_scenic(build, study)?;
+
+    if study.temas.is_empty() {
+        bail!("expected at least 1 tema, got 0");
     }
+    let mut image_slides = Vec::new();
+    let mut ab_image_i = 0usize;
     for (idx, tema) in study.temas.iter().enumerate() {
-        fill_tema(build, idx, tema, study, &mut order)?;
+        fill_tema(
+            build,
+            idx,
+            tema,
+            study,
+            &mut order,
+            &mut image_slides,
+            &mut ab_image_i,
+        )?;
     }
 
     let prox_base = study
@@ -285,13 +247,6 @@ pub fn apply_adult_study(build: &Path, study: &AdultStudy) -> Result<Vec<u32>> {
     )?;
     order.push(ADULT_SLIDE_COUNT);
 
-    // Image-chrome slides (TEMA headers + A/B titles) for QC.
-    let mut image_slides = Vec::new();
-    for layout in &TEMA_LAYOUTS {
-        image_slides.push(layout.header);
-        image_slides.push(layout.a_title);
-        image_slides.push(layout.b_title);
-    }
     crate::build::qc_deck(build, &order, &image_slides)?;
 
     crate::progress::ok(format!("Filled adult deck with {} slides", order.len()));
@@ -302,21 +257,45 @@ fn validate_counts(study: &AdultStudy) -> Result<()> {
     if study.lectura_antifonal.is_empty() {
         bail!("lectura_antifonal must have at least one passage");
     }
-    if study.temas.len() != TEMA_LAYOUTS.len() {
-        bail!("expected {} temas", TEMA_LAYOUTS.len());
+    if study.temas.is_empty() {
+        bail!("expected at least 1 tema");
     }
     for (idx, tema) in study.temas.iter().enumerate() {
         let n = idx + 1;
-        if tema.a.texto_slides.is_empty() {
+        if tema.puntos.is_empty() {
+            bail!("tema {n} has no puntos (need A…N lettered points)");
+        }
+        for p in &tema.puntos {
+            if p.texto_slides.is_empty() {
+                bail!(
+                    "tema {n} point {} has empty texto_slides — agent must pack body paragraphs",
+                    p.letra
+                );
+            }
+        }
+    }
+    if let Some(scenic) = study.scenic_images.as_ref() {
+        if scenic.tema.len() != study.temas.len() {
             bail!(
-                "tema {n} A has empty texto_slides — agent must pack body paragraphs \
-                 (builder will allocate as many A/B body slides as needed)"
+                "scenic_images.tema must have {} paths, got {}",
+                study.temas.len(),
+                scenic.tema.len()
             );
         }
-        if tema.b.texto_slides.is_empty() {
+        let ab_needed = study.punto_count();
+        if scenic.ab.len() != ab_needed {
             bail!(
-                "tema {n} B has empty texto_slides — agent must pack body paragraphs \
-                 (builder will allocate as many A/B body slides as needed)"
+                "scenic_images.ab must have {ab_needed} paths (one per punto), got {}",
+                scenic.ab.len()
+            );
+        }
+    }
+    if let Some(imgs) = study.definicion_images.as_ref() {
+        if imgs.len() != study.temas.len() {
+            bail!(
+                "definicion_images must have {} paths (one per tema), got {}",
+                study.temas.len(),
+                imgs.len()
             );
         }
     }
@@ -373,35 +352,40 @@ fn fill_tema(
     tema: &TemaAdult,
     study: &AdultStudy,
     order: &mut Vec<u32>,
+    image_slides: &mut Vec<u32>,
+    ab_image_i: &mut usize,
 ) -> Result<()> {
-    let layout = &TEMA_LAYOUTS[idx];
-    let tema_label = match idx {
-        0 => "TEMA I",
-        1 => "TEMA II",
-        _ => "TEMA III",
+    let label = tema_label(idx);
+    let header = if idx == 0 {
+        PROTO_TEMA_HEADER
+    } else {
+        ooxml::duplicate_slide(build, PROTO_TEMA_HEADER)?
     };
-    let header_path = ooxml::slide_path(build, layout.header);
-    // All tema headers use the image layout (video slides converted earlier).
-    set_tema_header_image(&header_path, tema_label, &tema.titulo, &tema.rango)?;
-    order.push(layout.header);
+    if let Some(scenic) = study.scenic_images.as_ref() {
+        apply_scenic_image(build, header, &resolve_study_path(&scenic.tema[idx])?, true)?;
+    }
+    set_tema_header_image(
+        &ooxml::slide_path(build, header),
+        &label,
+        &tema.titulo,
+        &tema.rango,
+    )?;
+    order.push(header);
+    image_slides.push(header);
 
     // Only emit a Definición slide when the printed study has a
     // "Definiciones y etimología" box for this tema. Never invent terms.
     if !tema.definiciones.is_empty() {
+        let def_slide = if idx == 0 {
+            PROTO_DEFINICION
+        } else {
+            ooxml::duplicate_slide(build, PROTO_DEFINICION)?
+        };
         if let Some(imgs) = study.definicion_images.as_ref() {
-            if imgs.len() != study.temas.len() {
-                bail!(
-                    "definicion_images must have {} paths (one per tema), got {}",
-                    study.temas.len(),
-                    imgs.len()
-                );
-            }
             let img_path = resolve_study_path(&imgs[idx])?;
             if img_path.is_file() {
-                set_definicion_image(build, layout.definicion, &img_path)?;
+                set_definicion_image(build, def_slide, &img_path)?;
             } else {
-                // Adult definición slides are image-cards — there is no
-                // `Marcador de contenido 2` text shape. Fail clearly.
                 bail!(
                     "missing definición card for tema {} ({}). \
                      Generate studies/adult/.../definicion-{}.png from the printed \
@@ -419,32 +403,51 @@ fn fill_tema(
                 idx
             );
         }
-        order.push(layout.definicion);
+        order.push(def_slide);
     }
 
-    let point = idx + 1;
-    fill_ab_block(
-        build,
-        point,
-        "A",
-        &tema.a,
-        layout.a_title,
-        layout.a_ref,
-        layout.texto_a,
-        layout.a_bodies,
-        order,
-    )?;
-    fill_ab_block(
-        build,
-        point,
-        "B",
-        &tema.b,
-        layout.b_title,
-        layout.b_ref,
-        layout.texto_b,
-        layout.b_bodies,
-        order,
-    )
+    let point_n = idx + 1;
+    for (p_i, punto) in tema.puntos.iter().enumerate() {
+        let use_proto = idx == 0 && p_i == 0;
+        let title_slide = if use_proto {
+            PROTO_AB_TITLE
+        } else {
+            ooxml::duplicate_slide(build, PROTO_AB_TITLE)?
+        };
+        let texto_proto = if use_proto {
+            PROTO_TEXTO
+        } else {
+            // First texto of each punto chain: duplicate proto once as base.
+            ooxml::duplicate_slide(build, PROTO_TEXTO)?
+        };
+        let body_protos: Vec<u32> = if use_proto {
+            PROTO_AB_BODIES.to_vec()
+        } else {
+            vec![ooxml::duplicate_slide(build, PROTO_AB_BODIES[0])?]
+        };
+
+        if let Some(scenic) = study.scenic_images.as_ref() {
+            let path = scenic
+                .ab
+                .get(*ab_image_i)
+                .with_context(|| format!("scenic_images.ab missing index {ab_image_i}"))?;
+            apply_scenic_image(build, title_slide, &resolve_study_path(path)?, true)?;
+            *ab_image_i += 1;
+        }
+
+        fill_ab_block(
+            build,
+            point_n,
+            &punto.letra,
+            &punto.as_bloque(),
+            title_slide,
+            texto_proto,
+            &body_protos,
+            order,
+            image_slides,
+        )?;
+    }
+    Ok(())
 }
 
 fn fill_ab_block(
@@ -453,10 +456,10 @@ fn fill_ab_block(
     letter: &str,
     block: &crate::model::adult_study::BloqueAdult,
     title_slide: u32,
-    ref_shape: AbRefShape,
     texto_proto: u32,
     body_slides: &[u32],
     order: &mut Vec<u32>,
+    image_slides: &mut Vec<u32>,
 ) -> Result<()> {
     let label = format!("{point}.{letter}");
     set_ab_title_header(
@@ -464,12 +467,11 @@ fn fill_ab_block(
         &label,
         &block.titulo,
         &block.texto_biblico.cita,
-        ref_shape,
+        AbRefShape::CuadroTexto6,
     )?;
     order.push(title_slide);
+    image_slides.push(title_slide);
 
-    // Same rules as youth Texto Bíblico: expand → pack at VERSE_BUDGET →
-    // allocate continuation slides; citation only on first pack.
     let packs = texto_biblico_packs(&block.texto_biblico);
     if packs.is_empty() {
         bail!("{label} texto_biblico produced no verse packs");
@@ -599,55 +601,18 @@ fn extract_media_from_pptx(pptx: &Path, inner: &str, dest: &Path) -> Result<()> 
     Ok(())
 }
 
-/// Swap scenic art onto intro / tema / A-B title slides.
-///
-/// All image slides are **full-bleed**. TEMA / A-B chrome is rewritten later
-/// to the youth section layout (orange bar + title + gray line + verse)
-/// anchored at the bottom-left — see `set_tema_header_image` /
-/// `set_ab_title_header`.
-fn apply_scenic_images(build: &Path, study: &AdultStudy) -> Result<()> {
+/// Swap intro scenic art (tema/punto scenic applied during `fill_tema`).
+fn apply_intro_scenic(build: &Path, study: &AdultStudy) -> Result<()> {
     let Some(scenic) = study.scenic_images.as_ref() else {
         eprintln!("warning: no scenic_images — image slides keep template art (may be inset)");
         return Ok(());
     };
-    if scenic.tema.len() != study.temas.len() {
-        bail!(
-            "scenic_images.tema must have {} paths, got {}",
-            study.temas.len(),
-            scenic.tema.len()
-        );
-    }
-    let ab_needed = study.temas.len() * 2;
-    if scenic.ab.len() != ab_needed {
-        bail!(
-            "scenic_images.ab must have {ab_needed} paths (A+B per tema), got {}",
-            scenic.ab.len()
-        );
-    }
-
     apply_scenic_image(
         build,
         INTRO_HEADER_SLIDE,
         &resolve_study_path(&scenic.intro_header)?,
         true,
     )?;
-
-    for (idx, path) in scenic.tema.iter().enumerate() {
-        apply_scenic_image(build, TEMA_LAYOUTS[idx].header, &resolve_study_path(path)?, true)?;
-    }
-
-    let mut ab_i = 0usize;
-    for layout in &TEMA_LAYOUTS {
-        for &slide in &[layout.a_title, layout.b_title] {
-            apply_scenic_image(
-                build,
-                slide,
-                &resolve_study_path(&scenic.ab[ab_i])?,
-                true,
-            )?;
-            ab_i += 1;
-        }
-    }
     Ok(())
 }
 
