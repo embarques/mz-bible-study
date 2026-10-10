@@ -289,6 +289,16 @@ fn validate_counts(study: &AdultStudy) -> Result<()> {
                 scenic.ab.len()
             );
         }
+        // Intro + every TEMA + every A/B scenic must be distinct files/bytes.
+        let mut scenic_paths: Vec<PathBuf> = Vec::new();
+        scenic_paths.push(resolve_study_path(&scenic.intro_header)?);
+        for p in &scenic.tema {
+            scenic_paths.push(resolve_study_path(p)?);
+        }
+        for p in &scenic.ab {
+            scenic_paths.push(resolve_study_path(p)?);
+        }
+        crate::build::assert_unique_image_files(&scenic_paths, "adult scenic_images")?;
     }
     if let Some(imgs) = study.definicion_images.as_ref() {
         if imgs.len() != study.temas.len() {

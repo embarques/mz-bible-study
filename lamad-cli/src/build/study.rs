@@ -281,6 +281,7 @@ pub fn apply_study(build: &Path, study: &Study) -> Result<Vec<u32>> {
             }
         })
         .collect();
+    crate::build::assert_unique_image_files(&images, "youth section_images")?;
     ooxml::replace_section_images(build, &images)?;
     // Contrast after media swap (colour only — layout untouched).
     for &sec_n in &PROTO.section {

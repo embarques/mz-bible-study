@@ -3,8 +3,10 @@
 //! Runs after content fill, before zip. Hard failures abort the build so a
 //! broken deck is never delivered.
 
+use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use regex::Regex;
@@ -22,6 +24,7 @@ pub fn qc_deck(build: &Path, order: &[u32], image_slides: &[u32]) -> Result<()> 
     for &n in order {
         issues.extend(qc_slide(build, n, image_slides.contains(&n))?);
     }
+    issues.extend(qc_unique_scenic_media(build, image_slides)?);
     let hard: Vec<_> = issues.iter().filter(|i| i.hard).collect();
     for i in &issues {
         if i.hard {
@@ -38,6 +41,125 @@ pub fn qc_deck(build: &Path, order: &[u32], image_slides: &[u32]) -> Result<()> 
         );
     }
     crate::progress::ok(format!("QC: {} slides checked — OK", order.len()));
+    Ok(())
+}
+
+/// HARD: every scenic/section image on chrome slides must be byte-unique.
+/// Shared media Targets (duplicate-slide bug) or reused source PNGs fail here.
+fn content_key(bytes: &[u8]) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut h);
+    h.finish()
+}
+
+fn qc_unique_scenic_media(build: &Path, image_slides: &[u32]) -> Result<Vec<QcIssue>> {
+    let mut by_hash: HashMap<u64, Vec<(u32, String)>> = HashMap::new();
+    let mut issues = Vec::new();
+    for &slide in image_slides {
+        let Some((media_name, bytes)) = scenic_media_bytes(build, slide)? else {
+            continue;
+        };
+        // Skip tiny logo-sized assets if somehow listed.
+        if bytes.len() < 80_000 {
+            continue;
+        }
+        by_hash
+            .entry(content_key(&bytes))
+            .or_default()
+            .push((slide, media_name));
+    }
+    for slides in by_hash.values() {
+        if slides.len() < 2 {
+            continue;
+        }
+        let list = slides
+            .iter()
+            .map(|(n, m)| format!("slide{n}/{m}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        issues.push(QcIssue {
+            slide: slides[0].0,
+            hard: true,
+            message: format!(
+                "duplicate scenic image content on {list} — each TEMA/section/A-B \
+                 scenic must be a unique file (never reuse the same PNG)"
+            ),
+        });
+    }
+    Ok(issues)
+}
+
+fn scenic_media_bytes(build: &Path, slide: u32) -> Result<Option<(String, Vec<u8>)>> {
+    let rels_path = build
+        .join("ppt")
+        .join("slides")
+        .join("_rels")
+        .join(format!("slide{slide}.xml.rels"));
+    if !rels_path.is_file() {
+        return Ok(None);
+    }
+    let rels = fs::read_to_string(&rels_path).with_context(|| format!("read {}", rels_path.display()))?;
+    let re = Regex::new(
+        r#"Type="[^"]*/relationships/image"[^>]*Target="\.\./media/([^"]+)""#,
+    )
+    .unwrap();
+    let Some(caps) = re.captures(&rels) else {
+        return Ok(None);
+    };
+    let media_name = caps[1].to_string();
+    if media_name.to_ascii_lowercase().contains("logo") {
+        return Ok(None);
+    }
+    let path = build.join("ppt").join("media").join(&media_name);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+    Ok(Some((media_name, bytes)))
+}
+
+/// Fail if any two paths are the same file or have identical bytes.
+/// Used for youth `section_images` and adult scenic intro/tema/ab lists.
+pub fn assert_unique_image_files(paths: &[PathBuf], label: &str) -> Result<()> {
+    if paths.len() < 2 {
+        return Ok(());
+    }
+    let mut by_hash: HashMap<u64, Vec<&Path>> = HashMap::new();
+    let mut seen_canon: HashMap<PathBuf, &Path> = HashMap::new();
+    for p in paths {
+        if !p.is_file() {
+            bail!("{label}: image not found: {}", p.display());
+        }
+        let canon = p.canonicalize().unwrap_or_else(|_| p.clone());
+        if let Some(other) = seen_canon.insert(canon.clone(), p.as_path()) {
+            bail!(
+                "{label}: same image path used twice — {} and {} (each scenic/section \
+                 must be a distinct file)",
+                other.display(),
+                p.display()
+            );
+        }
+        let bytes = fs::read(p).with_context(|| format!("read {}", p.display()))?;
+        by_hash
+            .entry(content_key(&bytes))
+            .or_default()
+            .push(p.as_path());
+    }
+    for group in by_hash.values() {
+        if group.len() < 2 {
+            continue;
+        }
+        let list = group
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        bail!(
+            "{label}: identical image bytes used more than once ({list}). \
+             Each youth section / adult intro·tema·ab scenic must be unique — \
+             regenerate distinct scenes; do not copy or reuse PNGs."
+        );
+    }
     Ok(())
 }
 
@@ -304,5 +426,29 @@ mod tests {
         <p:txBody><a:p><a:r><a:t>1</a:t></a:r></a:p><a:p><a:r><a:t>2</a:t></a:r></a:p></p:txBody></p:sp></p:sld>"#;
         let issues = qc_verse_like(2, xml);
         assert!(issues.iter().any(|i| i.hard && i.message.contains("body missing")));
+    }
+
+    #[test]
+    fn assert_unique_image_files_rejects_identical_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.png");
+        let b = dir.path().join("b.png");
+        fs::write(&a, b"same-bytes").unwrap();
+        fs::write(&b, b"same-bytes").unwrap();
+        let err = assert_unique_image_files(&[a, b], "test").unwrap_err();
+        assert!(
+            err.to_string().contains("identical image bytes"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn assert_unique_image_files_accepts_distinct_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.png");
+        let b = dir.path().join("b.png");
+        fs::write(&a, b"scene-one").unwrap();
+        fs::write(&b, b"scene-two").unwrap();
+        assert_unique_image_files(&[a, b], "test").unwrap();
     }
 }

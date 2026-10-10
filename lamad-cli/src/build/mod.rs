@@ -8,7 +8,7 @@ mod study;
 pub mod adult;
 
 pub(crate) use contrast::apply_image_chrome_contrast;
-pub(crate) use qc::qc_deck;
+pub(crate) use qc::{assert_unique_image_files, qc_deck};
 
 pub use proto::PROTO;
 pub use study::{apply_study, apply_study_value};

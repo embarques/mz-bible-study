@@ -1097,6 +1097,11 @@ fn send_fullbleed_pics_to_back(slide_path: &Path) -> Result<()> {
 /// 2.A-style slides), force edge-to-edge geometry and put the pic behind
 /// chrome. When false (TEMA header / inset 1.A), **keep template geometry**
 /// so the top title bar stays visible and the photo sits in its frame.
+///
+/// **HARD — unique media part:** duplicated TEMA / A-B title slides share the
+/// prototype's `../media/imageN.png` Target. Overwriting that file makes every
+/// section show the same last-written photo. Always write a **new** media part
+/// and retarget this slide's image relationship.
 pub fn apply_scenic_image(
     build: &Path,
     slide_num: u32,
@@ -1122,21 +1127,38 @@ pub fn apply_scenic_image(
     .unwrap();
     rels = video_re.replace_all(&rels, "").into_owned();
 
-    let img_re = Regex::new(
-        r#"Type="[^"]*/relationships/image"[^>]*Target="\.\./media/([^"]+)""#,
-    )
-    .unwrap();
-    let media_name = img_re
-        .captures(&rels)
-        .map(|c| c[1].to_string())
-        .context("slide has no image relationship to replace")?;
+    // Find first image Relationship and retarget its media file (attribute
+    // order varies: Type…Target or Target…Type).
+    let rel_tag_re = Regex::new(r#"<Relationship\b[^>]*/>"#).unwrap();
+    let is_image = Regex::new(r#"Type="[^"]*/relationships/image""#).unwrap();
+    let target_re = Regex::new(r#"Target="\.\./media/([^"]+)""#).unwrap();
+    let Some(img_tag) = rel_tag_re
+        .find_iter(&rels)
+        .map(|m| m.as_str())
+        .find(|tag| is_image.is_match(tag) && target_re.is_match(tag))
+    else {
+        bail!(
+            "slide {slide_num} has no image relationship to replace ({})",
+            rels_path.display()
+        );
+    };
 
-    let dest = build.join("ppt").join("media").join(&media_name);
+    let media_dir = build.join("ppt").join("media");
+    std::fs::create_dir_all(&media_dir)
+        .with_context(|| format!("mkdir {}", media_dir.display()))?;
+    // New part every call — never overwrite a Target still shared by siblings.
+    let media_name = next_media_png_name(&media_dir)?;
+    let dest = media_dir.join(&media_name);
     let raw = fs::read(image).with_context(|| format!("read {}", image.display()))?;
     // Cover-crop for scenic art (text is OOXML chrome, not baked in).
     let png = crate::build::ooxml::resize_section_png(&raw)
         .with_context(|| format!("resize scenic {}", image.display()))?;
     fs::write(&dest, png).with_context(|| format!("write {}", dest.display()))?;
+
+    let new_tag = target_re
+        .replace(img_tag, format!(r#"Target="../media/{media_name}""#).as_str())
+        .into_owned();
+    rels = rels.replacen(img_tag, &new_tag, 1);
     fs::write(&rels_path, &rels).with_context(|| format!("write {}", rels_path.display()))?;
 
     // Strip leftover video XML if this was a video-poster slide.

@@ -140,7 +140,8 @@ Follow slide order and recipes below, then the checklist.
 
 **One design family per study; different family from other studies.**
 
-- Within a study, all three section images share the **same visual design language** (lighting, finish, edge treatment, optional accents).
+- Within a study, all section/scenic images share the **same visual design language** (lighting, finish, edge treatment, optional accents).
+- **HARD — unique scenes:** every image file must be a **different scene** (youth `section1` ≠ `section2` ≠ `section3`; adult `intro-header` ≠ each `tema-N` ≠ each `ab-N{Letter}`). Never copy the same PNG, never reuse one photo for TEMA I/II/III or for 1.A/1.B/1.C. Builder QC fails on identical bytes. Adult builder must give each scenic slide its **own** media part (duplicated slides must not share one `imageN.png`).
 - Across studies, **change the design** — `mzbs` assigns a rotating family; chat builds must not reuse the previous study’s look (e.g. if study 16 used yellow dashed accent arcs / a particular white-curve panel, study 17 and 18 must not copy that).
 - Catalog: `python/mz_bible_study/section_styles.py` (parchment, lavender mist, sage paper, ink wash, dawn gold, …).
 - When cloning a prior deck, **always strip** PowerPoint shapes named `Arc …` (yellow dashed/dotted arcs). That motif is retired — **do not** keep or redraw dotted/dashed arc chrome on section slides for any new study.
@@ -416,6 +417,7 @@ If it fails: **fix and re-run** — do not tell the user the deck is ready.
 - Don’t ask the user before generating section images — just generate and insert them.  
 - Don’t skip the PDF export after a validated `.pptx` — always write `bible-studies/{N} - {TITLE}.pdf`.  
 - Don’t reuse the same section-image design across studies — one design family per study, change it for the next.  
+- Don’t reuse the **same photo/PNG** for multiple sections inside one study (youth section1/2/3 or adult intro/tema/ab) — each must be a unique scene.  
 - Don’t leave cloned yellow `Arc` dashed/dotted shapes on section slides — always strip them; that motif is retired.  
 - Don’t let section title text overlap the verse under the gray line.  
 - Don’t place unreadable title/verse over busy or low-contrast image areas — fix the art under the text or change the text color.  

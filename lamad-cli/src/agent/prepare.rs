@@ -1360,6 +1360,8 @@ JSON must include `"audience": "{aud}"`, `section_images` pointing at the three 
 {style_block}
 
 Also: 16:9 ≈1408×768; no text/logos/watermarks/yellow dashed arcs; calm left for title.
+**UNIQUE SCENES (HARD):** `section1`, `section2`, and `section3` must be **three different
+illustrations** (same design family, different subjects). Never copy one PNG to the other paths.
 Generate the three PNGs with the image tool (or equivalent) and save them to the paths above.
 
 ## Rules
@@ -1506,9 +1508,12 @@ Prefer PNG; JPG is accepted. **Scenic images (intro/tema/ab) are required**; def
 
 ## Images — HARD (variable count; exact basenames)
 16:9 ≈1408×768. No text/letters/logos/watermarks/yellow dashed arcs.
+**UNIQUE SCENES (HARD):** every scenic PNG must be a **different** illustration \
+(intro ≠ tema-1 ≠ tema-2 ≠ ab-1A ≠ ab-1B ≠ …). Do **not** copy/reuse the same \
+image for multiple sections. Same design family OK; identical photos FAIL host QC.
 - `intro-header.png` — cinematic intro full-bleed
-- `tema-{{n}}.png` — one scenic per tema in order
-- `ab-{{n}}{{letra}}.png` — one scenic per lettered point (e.g. `ab-1A.png`, `ab-1C.png`, `ab-2B.png`)
+- `tema-{{n}}.png` — one **distinct** scenic per tema in order
+- `ab-{{n}}{{letra}}.png` — one **distinct** scenic per lettered point (e.g. `ab-1A.png`, `ab-1C.png`, `ab-2B.png`)
 - `definicion-{{n}}.png` — DEFINICIÓN Y ETIMOLOGÍA **locked card design** for each tema \
   with a printed box (white rows + coloured chevrons + icons on soft landscape). \
   **FORBIDDEN:** parchment / centered essay / plain text dump. One card per TEMA that has the box.

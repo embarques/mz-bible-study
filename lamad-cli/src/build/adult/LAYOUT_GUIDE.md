@@ -240,7 +240,7 @@ For each study, generate **full-bleed 16:9 PNGs** (~1408×768 or larger):
 Requirements:
 
 - **Full bleed** — subject/scene fills the **entire** slide edge-to-edge (same as adult 2.A reference). Builder forces pic `xfrm` to `0,0` / `12192000×6858000` and strips `srcRect` crops.
-- **Multiple designs per study** — intro, each tema, and each A/B title get **different** cinematic looks (palette/lighting/composition). Do not reuse one motif for every slide.
+- **UNIQUE scenes (HARD)** — intro, each `tema-N`, and each `ab-N{Letter}` must be **different PNG content** (different subject/composition). Never copy the same file onto TEMA I/II or 1.A/1.B/1.C. Builder writes a **new media part per scenic slide** (duplicated slides must not share `imageN.png`) and QC fails on identical bytes.
 - **Text-safe bottom-left (~35–40% width):** soft mist / parchment wash under the youth-style chrome (navy title + gray verse). Same idea as youth section art — calm area under text, scene on the right.
 - **No text, logos, or watermarks** in the image itself (chrome is OOXML).
 - Video tema headers (II/III): strip video; use still full-bleed poster art.
