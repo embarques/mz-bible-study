@@ -193,6 +193,7 @@ pub fn required_images_present(study: u32, audience: Audience, root: &Path) -> b
         }
         Audience::Adult => {
             let paths = expected_paths(study, Audience::Adult, root);
+            let _ = normalize_adult_agent_json(&paths.json);
             let Ok(text) = std::fs::read_to_string(&paths.json) else {
                 return false;
             };
@@ -234,6 +235,7 @@ pub fn verify_json_only(study: u32, audience: Audience, root: &Path) -> Result<P
             if !paths.json.is_file() {
                 bail!("deliverable missing: {}", paths.json.display());
             }
+            let _ = normalize_adult_agent_json(&paths.json)?;
             let text = std::fs::read_to_string(&paths.json)?;
             let study_model: crate::model::adult_study::AdultStudy = serde_json::from_str(&text)
                 .map_err(|e| {
@@ -377,6 +379,7 @@ fn verify_adult_deliverables(study: u32, root: &Path) -> Result<Deliverables> {
     if !paths.json.exists() {
         bail!("deliverable missing: {}", paths.json.display());
     }
+    let _ = normalize_adult_agent_json(&paths.json)?;
     let text = std::fs::read_to_string(&paths.json)?;
     let study_model: crate::model::adult_study::AdultStudy = serde_json::from_str(&text)
         .map_err(|e| {
@@ -463,8 +466,79 @@ fn verify_adult_deliverables(study: u32, root: &Path) -> Result<Deliverables> {
     Ok(paths)
 }
 
+/// Strip / coerce agent-authored image path quirks **before** schema parse.
+///
+/// Cloud agents often invent:
+/// - `definicion_images` as `{"1":"…","2":"…"}` instead of an array
+/// - `scenic_images` as a flat basename map (`intro-header`, `ab-1A`, …)
+///
+/// Host [`stamp_adult_image_paths`] writes the canonical shapes. Removing junk
+/// here keeps prepare from failing on mature content that is otherwise valid.
+/// Returns `true` when the file was rewritten.
+pub fn normalize_adult_agent_json(json_path: &Path) -> Result<bool> {
+    let text = std::fs::read_to_string(json_path)?;
+    let mut v: serde_json::Value = serde_json::from_str(&text)?;
+    let Some(obj) = v.as_object_mut() else {
+        bail!("{} root must be an object", json_path.display());
+    };
+    let mut changed = false;
+
+    if let Some(def) = obj.get("definicion_images") {
+        match def {
+            serde_json::Value::Array(_) => {}
+            serde_json::Value::Object(map) => {
+                let mut pairs: Vec<(i64, String)> = map
+                    .iter()
+                    .filter_map(|(k, val)| {
+                        let path = val.as_str()?.to_string();
+                        let idx = k.parse::<i64>().ok().unwrap_or(i64::MAX);
+                        Some((idx, path))
+                    })
+                    .collect();
+                pairs.sort_by_key(|(i, _)| *i);
+                let arr: Vec<serde_json::Value> = pairs
+                    .into_iter()
+                    .map(|(_, p)| serde_json::Value::String(p))
+                    .collect();
+                obj.insert("definicion_images".into(), serde_json::Value::Array(arr));
+                changed = true;
+            }
+            _ => {
+                obj.remove("definicion_images");
+                changed = true;
+            }
+        }
+    }
+
+    if let Some(sc) = obj.get("scenic_images") {
+        let ok = sc
+            .as_object()
+            .map(|m| {
+                m.contains_key("intro_header") && m.contains_key("tema") && m.contains_key("ab")
+            })
+            .unwrap_or(false);
+        if !ok {
+            obj.remove("scenic_images");
+            changed = true;
+        }
+    }
+
+    // Youth leftovers some agents paste into adult JSON — harmless but noisy.
+    for junk in ["section_images", "section_style"] {
+        if obj.remove(junk).is_some() {
+            changed = true;
+        }
+    }
+
+    if changed {
+        std::fs::write(json_path, serde_json::to_string_pretty(&v)?)?;
+    }
+    Ok(changed)
+}
+
 /// Write `scenic_images` + `definicion_images` paths into adult JSON after PNGs land.
 pub fn stamp_adult_image_paths(json_path: &Path, study: u32, root: &Path) -> Result<()> {
+    let _ = normalize_adult_agent_json(json_path)?;
     let text = std::fs::read_to_string(json_path)?;
     let study_model: crate::model::adult_study::AdultStudy = serde_json::from_str(&text)
         .map_err(|e| anyhow::anyhow!("{} is not valid adult study JSON ({e})", json_path.display()))?;
@@ -867,6 +941,7 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
 
     stamp_audience(&dest.json, req.audience)?;
     if req.audience == Audience::Adult {
+        let _ = normalize_adult_agent_json(&dest.json)?;
         stamp_adult_image_paths(&dest.json, req.study, &req.root)?;
     }
 
@@ -1424,7 +1499,9 @@ fn build_adult_cloud_prepare_prompt(req: &PrepareRequest, host_images: bool) -> 
 - Each tema: lettered points **A…N** as keys `A`,`B`,`C`,… (or a `puntos` array with `letra`). Count varies — stop at **Afianzamiento y aplicación** (skip that section and Ideas/Preguntas).
 - Every lettered point needs **non-empty** `texto_slides` (~360–400 chars each).
 - Scans may be **1-up or 2-up** — treat each half of a two-up spread as its own printed page when reading order.
-- Host stamps `scenic_images` / `definicion_images`."#;
+- **OMIT** `scenic_images` and `definicion_images` entirely — the host CLI stamps \
+canonical paths after images land. Do **not** invent path arrays, index maps \
+(`{\"1\":\"…\"}`), or flat basename maps (`intro-header` / `ab-1A`)."#;
     let schema = schema.replace("STUDY", &study.to_string());
 
     // Append HARD rule about Definiciones — never invent.
@@ -1600,6 +1677,37 @@ mod tests {
         assert!(resolved.iter().any(|(_, d)| d.ends_with("ab-1D.png")));
         assert!(!resolved.iter().any(|(_, d)| d.ends_with("tema-3.png")));
         assert_eq!(resolved.len(), 11); // json + 10 images
+    }
+
+    #[test]
+    fn normalize_adult_agent_json_coerces_image_field_quirks() {
+        let dir = std::env::temp_dir().join(format!(
+            "lamad-normalize-adult-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("6.json");
+        let raw = serde_json::json!({
+            "numero": 6,
+            "titulo": "T",
+            "definicion_images": {"2": "b.png", "1": "a.png"},
+            "scenic_images": {"intro-header": "x.png", "tema-1": "t.png"},
+            "section_images": ["y.png"],
+            "section_style": {"id": "nope"}
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&raw).unwrap()).unwrap();
+        assert!(normalize_adult_agent_json(&path).unwrap());
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            v["definicion_images"],
+            serde_json::json!(["a.png", "b.png"])
+        );
+        assert!(v.get("scenic_images").is_none());
+        assert!(v.get("section_images").is_none());
+        assert!(v.get("section_style").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

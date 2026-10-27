@@ -171,10 +171,15 @@ pub struct AdultStudy {
     /// One composed PNG per tema for DEFINICIÓN Y ETIMOLOGÍA card slides
     /// (paths relative to repo root unless absolute). Length must equal
     /// `temas.len()` when present.
-    #[serde(default)]
+    ///
+    /// Agents sometimes emit a map (`{"1":"…","2":"…"}`) instead of an array —
+    /// accepted and coerced. Host prepare stamps the canonical array anyway.
+    #[serde(default, deserialize_with = "deserialize_definicion_images")]
     pub definicion_images: Option<Vec<String>>,
     /// Full-bleed scenic art for intro / tema / point-title slides.
-    #[serde(default)]
+    /// Flat agent maps (`{"intro-header":…,"tema-1":…}`) are ignored → `None`
+    /// (host stamps the canonical shape).
+    #[serde(default, deserialize_with = "deserialize_scenic_images")]
     pub scenic_images: Option<AdultScenicImages>,
 }
 
@@ -186,6 +191,77 @@ pub struct AdultScenicImages {
     pub tema: Vec<String>,
     /// Order: tema1.A, tema1.B, …, tema2.A, … (all puntos in order).
     pub ab: Vec<String>,
+}
+
+/// Accept array **or** index-keyed object (`{"1":"a.png","2":"b.png"}`).
+fn deserialize_definicion_images<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let v = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(coerce_definicion_images(v.unwrap_or(serde_json::Value::Null)))
+}
+
+fn coerce_definicion_images(v: serde_json::Value) -> Option<Vec<String>> {
+    match v {
+        serde_json::Value::Null => None,
+        serde_json::Value::Array(arr) => {
+            let out: Vec<String> = arr
+                .into_iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect();
+            if out.is_empty() {
+                None
+            } else {
+                Some(out)
+            }
+        }
+        serde_json::Value::Object(map) => {
+            let mut pairs: Vec<(i64, String)> = map
+                .into_iter()
+                .filter_map(|(k, val)| {
+                    let path = val.as_str()?.to_string();
+                    let idx = k.parse::<i64>().ok().unwrap_or(i64::MAX);
+                    Some((idx, path))
+                })
+                .collect();
+            if pairs.is_empty() {
+                return None;
+            }
+            pairs.sort_by_key(|(i, _)| *i);
+            Some(pairs.into_iter().map(|(_, p)| p).collect())
+        }
+        // Junk shapes → ignore; host stamps later.
+        _ => None,
+    }
+}
+
+/// Accept canonical `{intro_header,tema,ab}` or treat other shapes as absent.
+fn deserialize_scenic_images<'de, D>(
+    deserializer: D,
+) -> Result<Option<AdultScenicImages>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let v = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(coerce_scenic_images(v.unwrap_or(serde_json::Value::Null)))
+}
+
+fn coerce_scenic_images(v: serde_json::Value) -> Option<AdultScenicImages> {
+    match v {
+        serde_json::Value::Null => None,
+        serde_json::Value::Object(ref map)
+            if map.contains_key("intro_header")
+                && map.contains_key("tema")
+                && map.contains_key("ab") =>
+        {
+            serde_json::from_value(v).ok()
+        }
+        // Flat agent maps (`intro-header` / `tema-1` / `ab-1A`) — drop; host stamps.
+        _ => None,
+    }
 }
 
 impl AdultStudy {
@@ -250,4 +326,88 @@ pub fn tema_label(idx: usize) -> String {
     ];
     let r = ROMAN.get(idx).copied().unwrap_or("?");
     format!("TEMA {r}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn minimal_adult(extra: serde_json::Value) -> serde_json::Value {
+        let mut base = json!({
+            "numero": 6,
+            "titulo": "T",
+            "base_biblica": ["1 Samuel 24"],
+            "lectura_antifonal": [{"cita": "1 S 24", "versiculos": ["1 x"]}],
+            "objetivos": ["a", "b", "c"],
+            "pensamiento_central": "p",
+            "texto_aureo": {"texto": "q", "cita": "1 S 24:1"},
+            "ensenanza": "e",
+            "datos_generales": {
+                "autor": "a",
+                "personajes": "p",
+                "fecha": "f",
+                "lugar": "l"
+            },
+            "introduccion_slides": ["intro"],
+            "temas": [{
+                "titulo": "T1",
+                "rango": "1 S 24",
+                "definiciones": [],
+                "A": {
+                    "titulo": "A",
+                    "texto_slides": ["body"],
+                    "texto_biblico": {"cita": "1 S 24:1", "versiculos": ["1 x"]}
+                }
+            }],
+            "proximo": {"numero": 7, "titulo": "N", "base_biblica": ["x"]}
+        });
+        if let (Some(obj), Some(ext)) = (base.as_object_mut(), extra.as_object()) {
+            for (k, v) in ext {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
+        base
+    }
+
+    #[test]
+    fn definicion_images_accepts_index_map() {
+        let v = minimal_adult(json!({
+            "definicion_images": {"2": "b.png", "1": "a.png"}
+        }));
+        let s: AdultStudy = serde_json::from_value(v).expect("parse");
+        assert_eq!(
+            s.definicion_images.as_deref(),
+            Some(["a.png".to_string(), "b.png".to_string()].as_slice())
+        );
+    }
+
+    #[test]
+    fn scenic_images_flat_map_becomes_none() {
+        let v = minimal_adult(json!({
+            "scenic_images": {
+                "intro-header": "x.png",
+                "tema-1": "t.png",
+                "ab-1A": "a.png"
+            }
+        }));
+        let s: AdultStudy = serde_json::from_value(v).expect("parse");
+        assert!(s.scenic_images.is_none());
+    }
+
+    #[test]
+    fn scenic_images_canonical_ok() {
+        let v = minimal_adult(json!({
+            "scenic_images": {
+                "intro_header": "i.png",
+                "tema": ["t1.png"],
+                "ab": ["a.png"]
+            }
+        }));
+        let s: AdultStudy = serde_json::from_value(v).expect("parse");
+        let sc = s.scenic_images.expect("scenic");
+        assert_eq!(sc.intro_header, "i.png");
+        assert_eq!(sc.tema, vec!["t1.png"]);
+        assert_eq!(sc.ab, vec!["a.png"]);
+    }
 }

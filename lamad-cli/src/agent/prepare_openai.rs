@@ -395,7 +395,7 @@ introduccion_slides (array of paragraphs),
 temas (1+ until RESUMEN GENERAL): each {{titulo, rango, definiciones[], A/B/C… blocks
   or puntos[{{letra,titulo,texto_slides,texto_biblico}}]}},
 proximo (or null if last).
-Host stamps scenic_images / definicion_images — omit or leave empty.
+OMIT scenic_images and definicion_images entirely — host stamps canonical paths. Do not invent index maps or flat basename maps.
 
 ## Rules
 - Faithful Spanish from the scans; merge cross-page cuts; skip Ideas / Afianzamiento / Preguntas / RESUMEN body.
