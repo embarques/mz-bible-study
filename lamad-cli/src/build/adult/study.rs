@@ -11,7 +11,7 @@ use crate::build::adult::ooxml::{
     apply_scenic_image, convert_video_tema_to_image_layout, ensure_intro_body_logo,
     fit_intro_body_box, remove_orphan_videos, set_ab_body_slide, set_ab_title_header,
     set_definicion_image, set_ensenanza_datos, set_intro_body, set_tema_header_image,
-    set_title_or_proximo, AbRefShape,
+    set_title_or_proximo, AbRefShape, ADULT_BODY_LOGO_BUDGET,
 };
 use crate::build::ooxml::{self, VerseKind};
 use crate::build::ooxml::verses::expand_glued_verses;
@@ -192,16 +192,29 @@ pub fn apply_adult_study(build: &Path, study: &AdultStudy) -> Result<Vec<u32>> {
     if study.introduccion_slides.is_empty() {
         bail!("introduccion_slides must have at least one paragraph");
     }
-    let intro_nums =
-        allocate_body_slides(build, &INTRO_BODY_PROTOS, study.introduccion_slides.len())?;
-    for (&slide_num, text) in intro_nums.iter().zip(study.introduccion_slides.iter()) {
+    // Evenly redistribute so no intro slide clips under the logo top.
+    let intro_packs =
+        pack::rebalance_body_slides(&study.introduccion_slides, ADULT_BODY_LOGO_BUDGET);
+    if intro_packs.is_empty() {
+        bail!("introduccion_slides rebalance produced no packs");
+    }
+    if intro_packs.len() != study.introduccion_slides.len() {
+        crate::progress::info(format!(
+            "introducción: rebalanced {} → {} slides (logo-safe ≤{} chars)",
+            study.introduccion_slides.len(),
+            intro_packs.len(),
+            ADULT_BODY_LOGO_BUDGET
+        ));
+    }
+    let intro_nums = allocate_body_slides(build, &INTRO_BODY_PROTOS, intro_packs.len())?;
+    for (&slide_num, text) in intro_nums.iter().zip(intro_packs.iter()) {
         let path = ooxml::slide_path(build, slide_num);
         set_intro_body(&path, text)?;
         // Adult intro body prototypes lack the Mount Zion logo; youth has it.
         // Copy youth bottom-right logo onto intro body slides only.
         ensure_intro_body_logo(build, slide_num, &youth_intro_logo_path()?)?;
-        // After logo inject — shrink/centre short body boxes so text is not
-        // glued under the header with a full-page empty Marcador.
+        // After logo inject — expand Marcador to the band above the logo top
+        // and top-align text (never below the logo edge).
         fit_intro_body_box(&path, text)?;
     }
     order.extend(&intro_nums);
@@ -498,8 +511,21 @@ fn fill_ab_block(
     order.extend(&texto_nums);
 
     let body_title = format!("{label} - {}", block.titulo);
-    let body_nums = allocate_body_slides(build, body_slides, block.texto_slides.len())?;
-    for (&slide_n, text) in body_nums.iter().zip(block.texto_slides.iter()) {
+    // Even packs above the logo / navy-footer floor (same budget as intro).
+    let body_packs = pack::rebalance_body_slides(&block.texto_slides, ADULT_BODY_LOGO_BUDGET);
+    if body_packs.is_empty() {
+        bail!("{label} texto_slides rebalance produced no packs");
+    }
+    if body_packs.len() != block.texto_slides.len() {
+        crate::progress::info(format!(
+            "{label} body: rebalanced {} → {} slides (logo-safe ≤{} chars)",
+            block.texto_slides.len(),
+            body_packs.len(),
+            ADULT_BODY_LOGO_BUDGET
+        ));
+    }
+    let body_nums = allocate_body_slides(build, body_slides, body_packs.len())?;
+    for (&slide_n, text) in body_nums.iter().zip(body_packs.iter()) {
         set_ab_body_slide(&ooxml::slide_path(build, slide_n), &body_title, text)?;
         order.push(slide_n);
     }

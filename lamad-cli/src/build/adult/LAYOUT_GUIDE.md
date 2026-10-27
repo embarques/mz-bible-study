@@ -48,16 +48,22 @@ Every text-heavy slide has a **hard floor** where content stops. Nothing may sit
 
 | Slide type | Guard rail | Approx. safe height |
 |------------|------------|---------------------|
-| `intro_body` / `ab_body` | Navy footer bar at bottom of slide | Content ends **above** the footer (~bottom 8–10% of slide is chrome only) |
+| `intro_body` | **Top edge of Mount Zion logo** (bottom-right) | Content box floor ≈ `y=6.05M` EMU — **never** put text on/below the logo top |
+| `ab_body` | Navy footer bar **or** logo top when present | Same idea: stop above the chrome; pack ≤360 chars so lines never clip |
 | `lectura_antifonal` | Bottom of white/blue content panel | Pack whole verses; split slide before next verse crosses the floor |
 | `texto_biblico` | Empty black margin at bottom | Leave **~20–25%** of slide height below last verse line |
 | `tema_header` | Bottom gradient bar | Title + reference live **inside** the bar (~bottom 20–25% of slide) |
 
-**Packing budget (soft caps — split slide if exceeded):**
+**Packing (HARD — even distribute, logo floor):**
+
+1. Join the section’s body text (Introducción or one A/B point).  
+2. Compute how many slides are needed so each pack stays **≤380 chars** (logo top / footer floor).  
+3. Distribute **whole sentences** across those slides as evenly as possible (never mid-sentence; never below the logo top).  
+4. Builder does this automatically via `pack_sentences_even` / `rebalance_body_slides` — JSON may be uneven; rebuild rebalances.
 
 | Shape | ~chars per slide / paragraph |
 |-------|------------------------------|
-| `Marcador de contenido 2` (body) | **360–400** per paragraph; **≤430** hard warn |
+| `Marcador de contenido 2` (body) | **≤380** logo-safe pack; warn if still >400 |
 | `CuadroTexto 5` (lectura) | **250–300** verse chars |
 | `TextBox 4` (texto bíblico) | **250–300** verse chars; split at whole verses |
 | Teaching body | Split at `(1)`, `(2)`, `(3)` **and** at sentence ends before the floor |

@@ -20,7 +20,13 @@ use crate::Audience;
 /// Soft cap per body paragraph on adult `Marcador de contenido 2` shapes.
 /// See `LAYOUT_GUIDE.md` — navy footer bar is ~bottom 8–10% of slide;
 /// content must stop above it (~360–400 chars per paragraph at ~42pt).
+/// Soft warn / QC ceiling. Prefer packing at [`ADULT_BODY_LOGO_BUDGET`] so
+/// body text stays **above the Mount Zion logo top** (or navy footer).
 pub const ADULT_BODY_PARA_BUDGET: usize = 400;
+/// Logo-safe pack budget for intro / A-B bodies. ~380 chars at body size
+/// usually ends above the logo top (`y≈6.19M` EMU). Over ~420 often clips
+/// (Estudio 5 intro had 494 and cut through the logo).
+pub const ADULT_BODY_LOGO_BUDGET: usize = 380;
 
 #[derive(Debug, Clone, Copy)]
 pub enum AbRefShape {
