@@ -11,9 +11,12 @@
 //! 3 pages; adult title→title gaps may be longer (use next title page − 1).
 
 use anyhow::{bail, Context, Result};
+use image::imageops::FilterType;
+use image::GenericImageView;
 use indicatif::ProgressBar;
 use regex::Regex;
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -449,7 +452,9 @@ fn ocr_pages_parallel(
 }
 
 fn pdftotext_pages(pdf: &Path, page_count: usize) -> Result<Vec<String>> {
-    let bin = which("pdftotext").context("pdftotext not on PATH")?;
+    let bin = which("pdftotext").context(
+        "pdftotext not on PATH (install poppler; Apple Silicon: /opt/homebrew/bin/pdftotext)",
+    )?;
     let mut out = Vec::with_capacity(page_count);
     for p in 1..=page_count {
         let output = Command::new(&bin)
@@ -476,6 +481,85 @@ fn pdftotext_pages(pdf: &Path, page_count: usize) -> Result<Vec<String>> {
 }
 
 fn tesseract_ocr(bin: &Path, png: &Path) -> Result<String> {
+    // Try upright first; landscape scans (common adult phone/scanner dumps)
+    // need 90°/270° or Base bíblica / ESTUDIO never appear.
+    let mut paths: Vec<PathBuf> = vec![png.to_path_buf()];
+    if let Ok(extra) = landscape_ocr_variants(png) {
+        paths.extend(extra);
+    }
+    let mut best = String::new();
+    let mut best_score = i32::MIN;
+    for path in &paths {
+        let text = tesseract_ocr_one(bin, path)?;
+        let score = ocr_discover_score(&text);
+        if score > best_score {
+            best_score = score;
+            best = text;
+        }
+        // Good enough: title page markers + study number.
+        if score >= 250 {
+            break;
+        }
+    }
+    Ok(best)
+}
+
+/// When the raster is landscape (w > h), write 90° and 270° siblings for OCR.
+fn landscape_ocr_variants(png: &Path) -> Result<Vec<PathBuf>> {
+    let raw = fs::read(png).with_context(|| format!("read {}", png.display()))?;
+    let img = image::load_from_memory(&raw).context("decode discover PNG")?;
+    let (w, h) = img.dimensions();
+    if w <= h {
+        return Ok(Vec::new());
+    }
+    let parent = png.parent().unwrap_or(Path::new("."));
+    let stem = png
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("page");
+    let mut out = Vec::new();
+    for (deg, rotated) in [(90u32, img.rotate90()), (270, img.rotate270())] {
+        // Downscale huge pages slightly so OCR stays fast.
+        let (rw, rh) = rotated.dimensions();
+        let rotated = if rw > 2000 {
+            rotated.resize(2000, 2000 * rh / rw.max(1), FilterType::Triangle)
+        } else {
+            rotated
+        };
+        let dest = parent.join(format!("{stem}-rot{deg}.png"));
+        rotated
+            .save(&dest)
+            .with_context(|| format!("write {}", dest.display()))?;
+        out.push(dest);
+    }
+    Ok(out)
+}
+
+fn ocr_discover_score(t: &str) -> i32 {
+    if t.trim().len() < 20 {
+        return 0;
+    }
+    let mut s = (t.chars().count() as i32) / 40;
+    if extract_study_number(t).is_some() {
+        s += 100;
+    }
+    if is_title_page(t) {
+        s += 200;
+    }
+    let low = t.to_lowercase();
+    if low.contains("base b") {
+        s += 40;
+    }
+    if low.contains("pensamiento") || low.contains("texto") {
+        s += 20;
+    }
+    if low.contains("objetivo") {
+        s += 15;
+    }
+    s
+}
+
+fn tesseract_ocr_one(bin: &Path, png: &Path) -> Result<String> {
     // Adult stylized “ESTUDIO BÍBLICO N” badges often vanish under PSM 6
     // (column/block mode) while PSM 3/4 still see them. Prefer any pass that
     // yields an estudio number; otherwise keep the longest non-empty text.
@@ -552,9 +636,14 @@ fn is_title_page(t: &str) -> bool {
     // Adult title: Base bíblica + Pensamiento / Texto áureo (+ often Lectura Antifonal).
     let has_aureo = Regex::new(r"texto\s+[aá]ureo").unwrap().is_match(&low);
     let has_pensamiento = low.contains("pensamiento");
+    let has_objetivos = low.contains("objetivo");
+    let has_estudio_badge = Regex::new(r"\bestudio\b").unwrap().is_match(&low)
+        && extract_study_number(t).is_some();
     (has_base && has_idea)
         || (has_base && has_lectura && !has_maestro)
         || (has_base && has_aureo && has_pensamiento)
+        // Adult landscape OCR sometimes drops “Base bíblica” but keeps badge + box.
+        || (has_estudio_badge && has_pensamiento && has_aureo && has_objetivos)
 }
 
 /// Parse `Bible study 1-8.pdf`, `Estudio 23-26.pdf`, etc. when the span matches
@@ -738,24 +827,49 @@ fn fill_sequence(
     Ok(out)
 }
 
+/// Resolve a CLI tool, preferring Apple Silicon Homebrew (`/opt/homebrew/bin`)
+/// over Intel `/usr/local/bin` (which raises “Bad CPU type” / os error 86 on arm64).
 fn which(name: &str) -> Option<PathBuf> {
-    let output = Command::new("which").arg(name).output().ok()?;
-    if !output.status.success() {
-        return None;
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for prefix in [
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/opt/local/bin",
+    ] {
+        candidates.push(PathBuf::from(prefix).join(name));
     }
-    let p = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if p.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(p))
+    if let Ok(output) = Command::new("which").arg(name).output() {
+        if output.status.success() {
+            let p = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !p.is_empty() {
+                candidates.push(PathBuf::from(p));
+            }
+        }
     }
+    for p in candidates {
+        if !p.is_file() {
+            continue;
+        }
+        // Reject binaries that cannot exec on this CPU (Intel brew on arm64).
+        let probe = Command::new(&p).arg("--version").output();
+        match probe {
+            Ok(o) if o.status.success() || !o.stdout.is_empty() || !o.stderr.is_empty() => {
+                return Some(p);
+            }
+            Ok(_) => continue, // exited weirdly with empty IO — try next
+            Err(e) if e.raw_os_error() == Some(86) => continue, // Bad CPU type
+            Err(_) => continue,
+        }
+    }
+    None
 }
 
 /// Human-readable line for `lamad doctor`.
 pub fn doctor_line() -> String {
     match which("tesseract") {
         Some(p) => format!("tesseract: OK — {} (used for -n discover)", p.display()),
-        None => "tesseract: MISSING — needed for -n discover on scan PDFs (brew install tesseract)"
+        None => "tesseract: MISSING — needed for -n discover on scan PDFs \
+                 (`brew install tesseract tesseract-lang`; on Apple Silicon use /opt/homebrew)"
             .into(),
     }
 }
@@ -917,7 +1031,8 @@ LECTURA ANTIFONAL
             eprintln!("skip: {}", pdf.display());
             return;
         }
-        let found = discover_study_pages(&pdf, 4, Some(Path::new("/usr/local/bin/pdftoppm")))
+        let ppm = which("pdftoppm").unwrap_or_else(|| PathBuf::from("/opt/homebrew/bin/pdftoppm"));
+        let found = discover_study_pages(&pdf, 4, Some(ppm.as_path()))
             .expect("discover estudio 4");
         assert_eq!(found.study, 4);
         assert_eq!(found.pages.0, 1);
@@ -933,7 +1048,8 @@ LECTURA ANTIFONAL
             eprintln!("skip: sample PDF missing at {}", pdf.display());
             return;
         }
-        let found = discover_study_pages(&pdf, 25, Some(Path::new("/usr/local/bin/pdftoppm")))
+        let ppm = which("pdftoppm").unwrap_or_else(|| PathBuf::from("/opt/homebrew/bin/pdftoppm"));
+        let found = discover_study_pages(&pdf, 25, Some(ppm.as_path()))
             .expect("discover 25");
         assert_eq!(found.pages, (7, 9), "estudio 25 should be pages 7-9");
         assert_eq!(found.proximo_title_page, Some(10));
@@ -947,7 +1063,8 @@ LECTURA ANTIFONAL
             eprintln!("skip: {}", pdf.display());
             return;
         }
-        let found = discover_study_pages(&pdf, 5, Some(Path::new("/usr/local/bin/pdftoppm")))
+        let ppm = which("pdftoppm").unwrap_or_else(|| PathBuf::from("/opt/homebrew/bin/pdftoppm"));
+        let found = discover_study_pages(&pdf, 5, Some(ppm.as_path()))
             .expect("discover estudio 5");
         assert_eq!(found.study, 5);
         assert_eq!(found.pages.0, 1, "estudio 5 should start at page 1: {:?}", found);
