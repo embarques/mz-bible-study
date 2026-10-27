@@ -92,6 +92,7 @@ impl Model {
             prepare_only: false,
             force_prepare: false,
             gen_images: false,
+            gen_definicion: false,
             export_pdf: true,
             review: false,
             template: None,

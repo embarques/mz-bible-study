@@ -45,6 +45,8 @@ pub struct PrepareJob {
     pub force_prepare: bool,
     /// When true, (re)generate images from existing JSON via OpenAI (overwrite).
     pub gen_images: bool,
+    /// Adult: force-regenerate DEFINICIÓN cards only (locked gold reference edit).
+    pub gen_definicion: bool,
     pub export_pdf: bool,
     pub review: bool,
     pub template: Option<PathBuf>,
@@ -142,6 +144,10 @@ impl PrepareJob {
         println!("  Audience: {}", self.audience.as_str());
         if self.force_prepare {
             println!("  Resume:   off (--force-prepare — agent will re-create JSON + images)");
+        } else if self.gen_definicion {
+            println!(
+                "  Resume:   --gen-definicion — keep JSON + scenic; rebuild DEFINICIÓN cards from locked gold"
+            );
         } else if self.gen_images {
             println!(
                 "  Resume:   --gen-images — keep JSON, (re)generate images via OpenAI, then build"

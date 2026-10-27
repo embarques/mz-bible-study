@@ -396,6 +396,12 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
     if job.gen_images && job.force_prepare {
         bail!("use either --gen-images or --force-prepare, not both");
     }
+    if job.gen_definicion && (job.gen_images || job.force_prepare) {
+        bail!("use --gen-definicion alone (not with --gen-images / --force-prepare)");
+    }
+    if job.gen_definicion && job.audience != Audience::Adult {
+        bail!("--gen-definicion is adult-only");
+    }
 
     let make_req = |creds: crate::config::ProviderCreds| agent::prepare::PrepareRequest {
         study,
@@ -414,13 +420,35 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
         pdftoppm_path: cfg.pdftoppm_path.clone(),
     };
 
-    let resumed = if job.force_prepare || job.gen_images {
+    let resumed = if job.force_prepare || job.gen_images || job.gen_definicion {
         None
     } else {
         agent::prepare::try_resume_deliverables(study, job.audience, root)
     };
 
-    let deliverables = if job.gen_images {
+    let deliverables = if job.gen_definicion {
+        if !host_image_key {
+            bail!(
+                "--gen-definicion needs openai_api_key / OPENAI_API_KEY \
+                 (reference-edit of the locked DEFINICIÓN gold card)"
+            );
+        }
+        let json = agent::prepare::try_resume_json_only(study, job.audience, root)
+            .with_context(|| {
+                format!(
+                    "--gen-definicion needs studies/{}/{}.json first.",
+                    job.audience.as_str(),
+                    study
+                )
+            })?;
+        progress::ok(format!(
+            "--gen-definicion — using {} (force-rebuild DEFINICIÓN cards from gold)",
+            json.display()
+        ));
+        let creds = cfg.provider_creds()?;
+        agent::prepare_openai::regenerate_adult_definicion_cards(&make_req(creds)).await?;
+        agent::prepare::verify_deliverables(study, job.audience, root)?
+    } else if job.gen_images {
         // Keep JSON; always (re)generate images via OpenAI (overwrite if present).
         if !host_image_key {
             bail!(

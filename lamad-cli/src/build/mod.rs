@@ -12,7 +12,7 @@ pub(crate) use qc::{assert_unique_image_files, qc_deck};
 
 pub use proto::PROTO;
 pub use study::{apply_study, apply_study_value};
-pub use ooxml::resize_section_png;
+pub use ooxml::{resize_definicion_png, resize_section_png};
 
 use std::path::{Path, PathBuf};
 

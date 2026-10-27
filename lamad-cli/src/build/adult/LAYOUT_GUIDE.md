@@ -120,6 +120,11 @@ Match the reference deck’s paragraph breaks:
 
 - SmartArt / composite slides — keep template diagram layout; replace text only.
 - Objetivos: three cascading blue boxes on dark blue background.
+- **Objetivos order (HARD):** fill by SmartArt `srcOrd` (visual 1→2→3), **not** raw
+  `<a:t>` document order — those disagree on the adult template and scramble the cascade.
+  Print order from the study JSON must appear top→bottom. Shrink body font so text
+  stays inside each blue box (no overflow past the white border).
+- Rebuild with `lamad prepare -n N --audience adult` after JSON objetivos change.
 - **Pensamiento / Texto Áureo:** fill the three slots correctly (pensamiento, quote, cita) — do **not** use blind “longest N texts” replacement. Citation on its **own line** under the quote; no `()`; shrink body runs if long.
 
 ### Introducción
@@ -132,10 +137,19 @@ Match the reference deck’s paragraph breaks:
 
 **Visual authority (LOCKED — do not invent a new style):**
 [`reference/definicion-etimologia-design.png`](reference/definicion-etimologia-design.png)
-+ study-24 / estudio-4 card PNGs (white rows + coloured chevrons + icons on soft landscape).
++ [`reference/definicion-card-gold-estudio4-tema1.png`](reference/definicion-card-gold-estudio4-tema1.png)
++ [`reference/definicion-card-gold-user-reference.png`](reference/definicion-card-gold-user-reference.png).
 
-This design is **final**. Do **not** change it, “improve” it, or replace it with another motif
-(parchment page, centered serif essay, plain text dump, cream title-only slide, etc.).
+**HARD — layout is frozen forever.** Every study uses this **exact** card chrome.
+Generators may change **only**:
+1. `termino` / `referencia` text in the chevron  
+2. `texto` definition body  
+3. Left circular icon + small right icon (to match that definition)
+
+Do **not** change, “improve”, restyle, or replace the layout. Host generate uses
+**OpenAI image edits against the gold PNG** (`lamad prepare --gen-definicion`) so the
+structure cannot drift. Layout QC rejects invents (centered title pill, cartoon hills,
+play triangles, parchment essay, etc.).
 
 Do **not** dump definitions as a plain blue-header body slide. Each tema’s definición slide is a **composed 16:9 graphic** (full-bleed) matching this layout:
 
@@ -161,7 +175,9 @@ Do **not** dump definitions as a plain blue-header body slide. Each tema’s def
 - Parchment / paper texture with centered essay text
 - Plain serif paragraphs without white cards + chevrons
 - Title-only cream slide when the tema has real `definiciones`
-- Overwriting an existing good `definicion-N.png` on disk with a different design
+- Centered white title pill, cartoon flat green hills, play-button triangles, vertical book/tab chrome
+- Any new card chrome that is not the gold reference
+- Keeping a wrong invent on disk because it is “already large” — layout QC must pass; overwrite bad cards
 
 **Build path:** generate `definicion-{tema}.png` (≈1408×768+) with all of the above baked into the image (including title + body text — this is a composed slide, not chrome-over-photo). Swap onto the definición prototype slide’s picture fill / main image shape. Clear leftover text placeholders so they do not double-render. If a correct card PNG already exists for that tema, **keep it**.
 

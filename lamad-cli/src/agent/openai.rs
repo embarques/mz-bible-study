@@ -190,6 +190,60 @@ impl OpenAiClient {
             .context("decode image base64")?;
         resize_section_png(&raw)
     }
+
+    /// Edit a gold DEFINICIÓN reference PNG so layout stays locked (text + icons only).
+    pub async fn edit_definicion_card_png(
+        &self,
+        image_model: &str,
+        reference_png: &Path,
+        prompt: &str,
+    ) -> Result<Vec<u8>> {
+        let bytes = std::fs::read(reference_png)
+            .with_context(|| format!("read gold reference {}", reference_png.display()))?;
+        let file_name = reference_png
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("definicion-gold.png");
+        let part = reqwest::multipart::Part::bytes(bytes)
+            .file_name(file_name.to_string())
+            .mime_str("image/png")
+            .context("multipart image/png")?;
+        let form = reqwest::multipart::Form::new()
+            .text("model", image_model.to_string())
+            .text("prompt", prompt.to_string())
+            .text("n", "1")
+            .text("size", IMAGE_SIZE)
+            .text("quality", "high")
+            .part("image", part);
+
+        let resp = self
+            .http
+            .post(format!("{API_BASE}/images/edits"))
+            .header(AUTHORIZATION, self.auth())
+            .multipart(form)
+            .send()
+            .await
+            .context("POST /images/edits failed")?;
+
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            bail!("OpenAI images/edits HTTP {status}: {text}");
+        }
+
+        let parsed: ImageResponse =
+            serde_json::from_str(&text).with_context(|| format!("parse images/edits: {text}"))?;
+        let b64 = parsed
+            .data
+            .first()
+            .and_then(|d| d.b64_json.as_deref())
+            .context("images/edits response missing b64_json")?;
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .context("decode edited image base64")?;
+        // Definición cards must keep the header — use contain resize, not cover-crop.
+        crate::build::resize_definicion_png(&raw)
+    }
 }
 
 pub fn vision_image_from_path(path: &Path) -> Result<VisionImage> {

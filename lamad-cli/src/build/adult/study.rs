@@ -168,11 +168,12 @@ pub fn apply_adult_study(build: &Path, study: &AdultStudy) -> Result<Vec<u32>> {
     if study.objetivos.len() != 3 {
         bail!("objetivos must have 3 entries, got {}", study.objetivos.len());
     }
-    ooxml::replace_diagram_texts(
+    // Fill by SmartArt srcOrd (visual cascade), not document order — and shrink
+    // fonts so long Spanish objectives stay inside the blue boxes.
+    super::diagrams::set_objetivos(
         &diagrams.join("data1.xml"),
-        Some(&diagrams.join("drawing1.xml")),
+        &diagrams.join("drawing1.xml"),
         &study.objetivos,
-        None,
     )?;
 
     super::diagrams::set_pensamiento_aureo(
@@ -407,6 +408,7 @@ fn fill_tema(
         if let Some(imgs) = study.definicion_images.as_ref() {
             let img_path = resolve_study_path(&imgs[idx])?;
             if img_path.is_file() {
+                crate::build::adult::assert_locked_definicion_card(&img_path)?;
                 set_definicion_image(build, def_slide, &img_path)?;
             } else {
                 bail!(

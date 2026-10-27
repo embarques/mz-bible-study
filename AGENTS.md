@@ -1,6 +1,6 @@
 # AGENTS.md — Mount Zion Church Bible Study PowerPoint
 
-Agent playbook for building Spanish Bible study decks from scans. Match [`template/youth/master-template.pptx`](template/youth/master-template.pptx) (default `--audience youth`) and recent decks in [`bible-studies/`](bible-studies/). Adult uses the Rust builder (`--audience adult`) and [`lamad-cli/src/build/adult/LAYOUT_GUIDE.md`](lamad-cli/src/build/adult/LAYOUT_GUIDE.md) — follow that guide’s **HARD rules** (no citation parentheses on Texto/image chrome, no title highlight, shrink oversized text, scenic image visible, Texto Áureo citation on its own line, **Definición = locked white-card/chevron design only — never parchment/centered essay; never overwrite a good `definicion-N.png`**).
+Agent playbook for building Spanish Bible study decks from scans. Match [`template/youth/master-template.pptx`](template/youth/master-template.pptx) (default `--audience youth`) and recent decks in [`bible-studies/`](bible-studies/). Adult uses the Rust builder (`--audience adult`) and [`lamad-cli/src/build/adult/LAYOUT_GUIDE.md`](lamad-cli/src/build/adult/LAYOUT_GUIDE.md) — follow that guide’s **HARD rules** (no citation parentheses on Texto/image chrome, no title highlight, shrink oversized text, scenic image visible, Texto Áureo citation on its own line, **Definición = HARD-locked gold card layout — only term text, body text, and icons may change; never invent a new layout; layout QC must pass**).
 
 User-facing summary: [`README.md`](README.md). Template index: [`template/README.md`](template/README.md).
 
@@ -122,7 +122,14 @@ Typical Senda de Vida page map (3 consecutive study pages):
 10. Próximo estudio ← from title-page scan **2**
 
 **Cross-page merge:** join split paragraphs at cutoffs before packing.  
-**Transcription:** prefer readable scan text over noisy OCR; fix obvious OCR errors; keep wording faithful — don’t paraphrase theology.
+**Transcription (HARD — never paraphrase):** copy the printed Spanish **verbatim** into
+JSON (`introduccion_slides`, comentario / A–B / conclusión / adult `texto_slides`, etc.).
+Fix only obvious OCR garble (broken letters). **FORBIDDEN:** rewriting in “your own words,”
+summarizing long paragraphs into shorter ones, inventing transitions, or “improving”
+theology. This is a church Bible study — the author’s wording is sacred to the product.
+If a sentence is on the scan, that sentence (or a faithful OCR repair of it) must appear
+in the JSON. Skip only sections we explicitly exclude (Ideas para el maestro, Preguntas,
+Afianzamiento, RESUMEN body).
 
 ### 3. Start the deck file
 

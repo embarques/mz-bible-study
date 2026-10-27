@@ -73,7 +73,7 @@ pub async fn run_prepare_openai(req: &PrepareRequest) -> Result<Deliverables> {
 
     match req.audience {
         Audience::Youth => generate_youth_section_images(req, &client, &dest, &study_json).await?,
-        Audience::Adult => generate_adult_images(req, &client, &study_json).await?,
+        Audience::Adult => generate_adult_images(req, &client, &study_json, false).await?,
     }
 
     stamp_audience(&dest.json, req.audience)?;
@@ -115,7 +115,7 @@ pub async fn generate_host_images(req: &PrepareRequest) -> Result<()> {
             generate_youth_section_images(req, &client, &dest, &study_json).await?;
         }
         Audience::Adult => {
-            generate_adult_images(req, &client, &study_json).await?;
+            generate_adult_images(req, &client, &study_json, false).await?;
         }
     }
 
@@ -126,6 +126,33 @@ pub async fn generate_host_images(req: &PrepareRequest) -> Result<()> {
         stamp_youth_section_images(&dest)?;
     }
     crate::progress::ok("Step 3/4 done — host images ready");
+    Ok(())
+}
+
+/// Force-regenerate only DEFINICIÓN cards (layout-locked reference edits). Keeps scenic PNGs.
+pub async fn regenerate_adult_definicion_cards(req: &PrepareRequest) -> Result<()> {
+    let key = req
+        .image_api_key
+        .as_deref()
+        .filter(|k| !k.is_empty())
+        .context(
+            "--gen-definicion needs openai_api_key / OPENAI_API_KEY \
+             (reference-edit path for the locked card layout)",
+        )?;
+    let client = OpenAiClient::new(key)?;
+    let dest = expected_paths(req.study, req.audience, &req.root);
+    if req.audience != Audience::Adult {
+        bail!("--gen-definicion is adult-only");
+    }
+    let study_json: Value = serde_json::from_str(&std::fs::read_to_string(&dest.json)?)
+        .with_context(|| format!("parse {}", dest.json.display()))?;
+    crate::progress::phase(format!(
+        "Regenerating DEFINICIÓN cards from locked gold reference (estudio {})…",
+        req.study
+    ));
+    generate_adult_images(req, &client, &study_json, true).await?;
+    stamp_adult_image_paths(&dest.json, req.study, &req.root)?;
+    crate::progress::ok("DEFINICIÓN cards regenerated (layout locked)");
     Ok(())
 }
 
@@ -190,10 +217,12 @@ async fn generate_youth_section_images(
     Ok(())
 }
 
+/// `definicion_only`: skip scenic; force-regenerate every DEFINICIÓN card from gold reference.
 async fn generate_adult_images(
     req: &PrepareRequest,
     client: &OpenAiClient,
     study_json: &Value,
+    definicion_only: bool,
 ) -> Result<()> {
     use futures_util::stream::{self, StreamExt};
 
@@ -210,33 +239,47 @@ async fn generate_adult_images(
             names.len()
         );
     }
-    let img_bar =
-        crate::progress::bar(names.len() as u64, "Generating adult images (×4 parallel)");
+    let gold = crate::build::adult::primary_gold_reference()?;
+    let img_bar = crate::progress::bar(
+        if definicion_only {
+            names.iter().filter(|n| n.starts_with("definicion-")).count() as u64
+        } else {
+            names.len() as u64
+        },
+        if definicion_only {
+            "Regenerating DEFINICIÓN cards (locked layout)"
+        } else {
+            "Generating adult images (×4 parallel)"
+        },
+    );
     let model = req.image_model.clone();
-    let jobs: Vec<(usize, String, PathBuf)> = names
+    let jobs: Vec<(usize, String, PathBuf, bool)> = names
         .iter()
         .zip(prompts.into_iter())
         .enumerate()
-        .map(|(i, (name, prompt))| (i + 1, prompt, media.join(name)))
+        .map(|(i, (name, prompt))| {
+            let is_def = name.starts_with("definicion-");
+            (i + 1, prompt, media.join(name), is_def)
+        })
         .collect();
 
     let results: Vec<Result<()>> = stream::iter(jobs)
-        .map(|(n, prompt, path)| {
+        .map(|(n, prompt, path, is_def)| {
             let client = client;
             let model = model.clone();
+            let gold = gold.clone();
             let bar = img_bar.clone();
             async move {
-                let is_def = path
-                    .file_name()
-                    .and_then(|x| x.to_str())
-                    .map(|x| x.starts_with("definicion-"))
-                    .unwrap_or(false);
+                if definicion_only && !is_def {
+                    return Ok(());
+                }
                 if is_def
+                    && !definicion_only
                     && path.is_file()
-                    && std::fs::metadata(&path).map(|m| m.len() > 50_000).unwrap_or(false)
+                    && crate::build::adult::looks_like_locked_definicion_card(&path)
                 {
                     crate::progress::warn(format!(
-                        "keeping existing {} (locked definición card design)",
+                        "keeping existing {} (passed locked DEFINICIÓN layout QC)",
                         path.file_name()
                             .and_then(|x| x.to_str())
                             .unwrap_or("definicion.png")
@@ -244,9 +287,35 @@ async fn generate_adult_images(
                     bar.inc(1);
                     return Ok(());
                 }
-                let png = generate_png_with_retry(client, &model, &prompt, n).await?;
-                std::fs::write(&path, &png)
-                    .with_context(|| format!("write {}", path.display()))?;
+                if is_def
+                    && path.is_file()
+                    && !crate::build::adult::looks_like_locked_definicion_card(&path)
+                {
+                    crate::progress::warn(format!(
+                        "replacing {} — failed locked DEFINICIÓN layout QC",
+                        path.file_name()
+                            .and_then(|x| x.to_str())
+                            .unwrap_or("definicion.png")
+                    ));
+                }
+
+                let png = if is_def {
+                    generate_definicion_with_retry(client, &model, &gold, &prompt, n).await?
+                } else {
+                    generate_png_with_retry(client, &model, &prompt, n).await?
+                };
+                if is_def {
+                    // Write then verify — never leave a wrong invent on disk.
+                    std::fs::write(&path, &png)
+                        .with_context(|| format!("write {}", path.display()))?;
+                    if let Err(e) = crate::build::adult::assert_locked_definicion_card(&path) {
+                        let _ = std::fs::remove_file(&path);
+                        return Err(e);
+                    }
+                } else {
+                    std::fs::write(&path, &png)
+                        .with_context(|| format!("write {}", path.display()))?;
+                }
                 bar.inc(1);
                 Ok(())
             }
@@ -257,8 +326,36 @@ async fn generate_adult_images(
     for r in results {
         r?;
     }
-    img_bar.finish_with_message("Adult images ready");
+    img_bar.finish_with_message(if definicion_only {
+        "DEFINICIÓN cards ready"
+    } else {
+        "Adult images ready"
+    });
     Ok(())
+}
+
+async fn generate_definicion_with_retry(
+    client: &OpenAiClient,
+    model: &str,
+    gold: &Path,
+    prompt: &str,
+    n: usize,
+) -> Result<Vec<u8>> {
+    match client.edit_definicion_card_png(model, gold, prompt).await {
+        Ok(b) => Ok(b),
+        Err(e) => {
+            crate::progress::warn(format!(
+                "definición {n} reference-edit failed ({e:#}); retrying once…"
+            ));
+            let safer = format!(
+                "{prompt}\n\nKeep the same locked layout. Safer icons only — no graphic violence."
+            );
+            client
+                .edit_definicion_card_png(model, gold, &safer)
+                .await
+                .with_context(|| format!("definición image {n} failed after retry"))
+        }
+    }
 }
 
 async fn generate_png_with_retry(
@@ -344,7 +441,7 @@ Use these exact section_images paths:
 {style_block}
 
 ## Rules
-- Faithful Spanish from the scans; merge cross-page cuts; exclude Ideas para el maestro / Preguntas.
+- VERBATIM (HARD): copy printed Spanish word-for-word into JSON. Fix OCR only. Never paraphrase, summarize, or rewrite intro/A-B/comentario/conclusión. Merge cross-page cuts; exclude Ideas para el maestro / Preguntas.
 - Definiciones: ONLY from printed «Definiciones y etimología» boxes (verbatim). Empty [] if no box — never invent.
 - Prefer packed `*_slides` when helpful; otherwise provide full body text fields.
 - Inline scripture refs stay as printed.
@@ -398,7 +495,7 @@ proximo (or null if last).
 OMIT scenic_images and definicion_images entirely — host stamps canonical paths. Do not invent index maps or flat basename maps.
 
 ## Rules
-- Faithful Spanish from the scans; merge cross-page cuts; skip Ideas / Afianzamiento / Preguntas / RESUMEN body.
+- VERBATIM (HARD): copy printed Spanish word-for-word into JSON. Fix OCR only. Never paraphrase, summarize, or rewrite intro / temas[].texto_slides. Merge cross-page cuts; skip Ideas / Afianzamiento / Preguntas / RESUMEN body.
 - Definiciones: ONLY from printed «Definiciones y etimología» boxes (verbatim). Empty [] if no box — never invent.
 - Whole verses only in lectura/texto_biblico.
 - Do **not** force 3 temas or only A/B — follow the print (e.g. 2 temas with A–D then A–B is valid).
@@ -461,28 +558,13 @@ fn adult_image_prompts(study: u32, json: &Value) -> Result<Vec<String>> {
         for (n, d) in tema.definiciones.iter().enumerate() {
             let referencia = d.referencia.as_deref().unwrap_or("");
             rows.push_str(&format!(
-                "Row {}: termino=\"{}\" | texto=\"{}\" | referencia=\"{referencia}\". ",
+                "Row {}: termino=\"{}\" | texto=\"{}\" | referencia=\"{referencia}\"\n",
                 n + 1,
                 d.termino,
                 d.texto
             ));
         }
-        format!(
-            "Widescreen 16:9 DEFINICIÓN Y ETIMOLOGÍA LOCKED card design for adult Bible study \
-             (same house style every study — do NOT invent a new layout). \
-             Soft muted landscape/mist background. \
-             Header top-left: open-book icon + bold navy title 'DEFINICIÓN Y ETIMOLOGÍA' + thin navy rule. \
-             Stack one horizontal rounded WHITE card per term: left circular icon | coloured chevron \
-             with EXACT termino | grey vertical rule | definition body | right icon. \
-             Chevron colours rotate (teal / navy / purple). \
-             FORBIDDEN: parchment paper, centered serif essay, plain text dump, cream title-only slide, \
-             decorative double border without cards. \
-             Render EXACTLY these Spanish terms and texts — verbatim, no paraphrasing, \
-             no invented Hebrew/Greek roots, no extra Bible quotes, no 'Reina-Valera' footer, \
-             no terms not listed: {rows} \
-             No watermarks. Theme context: {}.",
-            tema.titulo
-        )
+        crate::build::adult::definicion_card::locked_layout_edit_prompt(&tema.titulo, &rows)
     };
 
     let mut out = Vec::new();

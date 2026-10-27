@@ -6,7 +6,11 @@
 //! full-bleed image rules follow the layout guide.
 
 mod diagrams;
+pub mod definicion_card;
 mod ooxml;
 pub mod study;
 
+pub use definicion_card::{
+    assert_locked_definicion_card, looks_like_locked_definicion_card, primary_gold_reference,
+};
 pub use study::{apply_adult_study, apply_adult_study_value, build_study as build_adult_study};

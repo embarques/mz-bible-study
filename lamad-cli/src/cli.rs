@@ -125,6 +125,12 @@ pub struct PrepareArgs {
     #[arg(long = "gen-images")]
     pub gen_images: bool,
 
+    /// Adult only: force-regenerate DEFINICIÓN Y ETIMOLOGÍA cards from the locked
+    /// gold reference (text + icons only). Keeps scenic images. Requires
+    /// openai_api_key and studies/adult/{N}.json.
+    #[arg(long = "gen-definicion")]
+    pub gen_definicion: bool,
+
     /// PDF export is on by default; pass --no-export-pdf to skip it
     #[arg(long = "export-pdf", default_value_t = true)]
     #[arg(long = "no-export-pdf", action = ArgAction::SetFalse)]

@@ -3,7 +3,7 @@
 //! Backends: Cursor Cloud Agents (default) or OpenAI ChatGPT
 //! ([`super::prepare_openai`]).
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -14,6 +14,16 @@ use crate::job::Audience;
 use crate::paths;
 use crate::section_styles::{section_style_for_study, style_prompt_block};
 use crate::{pdf_page_count, rasterize_pages};
+
+/// Injected into every prepare prompt — Bible-study wording must stay untouched.
+const VERBATIM_HARD: &str = "\
+**VERBATIM TEXT (HARD — non-negotiable):** Copy the printed Spanish **word-for-word** \
+into JSON (`introduccion_slides`, adult `temas[].A/B/…texto_slides`, youth comentario / \
+intro / A-B / conclusión, etc.). Fix only obvious OCR letter errors. \
+**FORBIDDEN:** paraphrasing, summarizing, shortening, rewriting “in your own words,” \
+inventing transitions, or improving theology. This is a Mount Zion Church Bible study — \
+the author’s sentences must appear in the JSON. Skip only explicitly excluded sections \
+(Ideas para el maestro, Preguntas, Afianzamiento, RESUMEN GENERAL body).";
 
 pub struct PrepareRequest {
     pub study: u32,
@@ -451,9 +461,17 @@ fn verify_adult_deliverables(study: u32, root: &Path) -> Result<Deliverables> {
             continue;
         }
         let name = format!("definicion-{}.png", i + 1);
-        if !media.join(&name).exists() {
+        let p = media.join(&name);
+        if !p.exists() {
             missing_def.push(name);
+            continue;
         }
+        crate::build::adult::assert_locked_definicion_card(&p).with_context(|| {
+            format!(
+                "adult estudio {study}: {name} failed locked DEFINICIÓN layout QC — \
+                 run `lamad prepare -n {study} --audience adult --gen-definicion`"
+            )
+        })?;
     }
     if !missing_def.is_empty() {
         crate::progress::warn(format!(
@@ -1028,35 +1046,44 @@ async fn download_resolved_artifacts(
                     if let Some(parent) = dest_path.parent() {
                         std::fs::create_dir_all(parent)?;
                     }
-                    // HARD: never overwrite a finished DEFINICIÓN card PNG.
-                    // Agents often emit parchment/centered-text junk; keep the
-                    // locked card design (white rows + chevron + icons) once on disk.
+                    // HARD: keep DEFINICIÓN only when layout QC passes the locked
+                    // house design. Size alone is NOT enough — agents invent wrong
+                    // chrome (centered title pills, cartoon hills, etc.).
                     let is_def = dest_path
                         .file_name()
                         .and_then(|n| n.to_str())
                         .map(|n| n.starts_with("definicion-") && n.ends_with(".png"))
                         .unwrap_or(false);
-                    if is_def && dest_path.is_file() {
-                        let keep = std::fs::metadata(&dest_path)
-                            .map(|m| m.len() > 50_000)
-                            .unwrap_or(false);
-                        if keep {
-                            crate::progress::warn(format!(
-                                "keeping existing {} (locked card design — not overwriting agent art)",
-                                dest_path
-                                    .file_name()
-                                    .and_then(|n| n.to_str())
-                                    .unwrap_or("definicion.png")
-                            ));
-                            bar.inc(1);
-                            return Ok(());
-                        }
+                    if is_def
+                        && dest_path.is_file()
+                        && crate::build::adult::looks_like_locked_definicion_card(&dest_path)
+                    {
+                        crate::progress::warn(format!(
+                            "keeping existing {} (passed locked DEFINICIÓN layout QC)",
+                            dest_path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("definicion.png")
+                        ));
+                        bar.inc(1);
+                        return Ok(());
                     }
                     client
                         .download_artifact_quiet(&agent_id, &art_path, &dest_path)
                         .await?;
                     if dest_path.extension().and_then(|e| e.to_str()) == Some("png") {
                         ensure_png_file(&dest_path)?;
+                    }
+                    if is_def {
+                        if let Err(e) =
+                            crate::build::adult::assert_locked_definicion_card(&dest_path)
+                        {
+                            let _ = std::fs::remove_file(&dest_path);
+                            return Err(e).context(
+                                "agent DEFINICIÓN art rejected — layout is HARD-locked; \
+                                 set openai_api_key so the host can reference-edit the gold card",
+                            );
+                        }
                     }
                     bar.inc(1);
                     Ok(())
@@ -1387,7 +1414,8 @@ You may omit `section_images` (host stamps paths). Include `section_style` from 
 {style_block}
 
 ## Rules
-- Faithful Spanish from the scans; merge cross-page cuts; exclude Ideas para el maestro / Preguntas.
+- {verbatim}
+- Merge cross-page cuts; exclude Ideas para el maestro / Preguntas.
 - End as soon as `artifacts/{study}.json` exists. Speed matters — JSON only.
 
 ---
@@ -1404,6 +1432,7 @@ You may omit `section_images` (host stamps paths). Include `section_style` from 
             p1 = req.pages.1,
             prepare = PREPARE_STUDY_MD,
             agents = AGENTS_MD,
+            verbatim = VERBATIM_HARD,
         ));
     }
 
@@ -1440,7 +1469,8 @@ illustrations** (same design family, different subjects). Never copy one PNG to 
 Generate the three PNGs with the image tool (or equivalent) and save them to the paths above.
 
 ## Rules
-- Faithful Spanish from the scans; merge cross-page cuts; exclude Ideas para el maestro / Preguntas.
+- {verbatim}
+- Merge cross-page cuts; exclude Ideas para el maestro / Preguntas.
 - Pack body ~360–400 chars; Lectura/Texto = whole verses only.
 - End only after artifact list would show `{study}.json` plus three section PNGs.
 
@@ -1460,6 +1490,7 @@ When finished, confirm the four artifact paths and `section_style.id`.
         p1 = req.pages.1,
         prepare = PREPARE_STUDY_MD,
         agents = AGENTS_MD,
+        verbatim = VERBATIM_HARD,
     ))
 }
 
@@ -1516,10 +1547,12 @@ that box must have a non-empty `definiciones` array** — do not leave TEMA II+ 
 paraphrase, expand with Hebrew/Greek roots, or pull phrases from the body prose.
 - If a tema section has **no** such box → `\"definiciones\": []` (empty array). \
 Do **not** invent Rebelión / Anatema / Unción / etc. from the commentary.
-- Definición **card images** MUST use the **locked house card design** (white rounded \
-rows + coloured chevron + left/right icons + soft landscape + header \
-`DEFINICIÓN Y ETIMOLOGÍA`). **FORBIDDEN:** parchment page, centered essay text, \
-plain serif dump, cream title-only. Never invent a new definición visual style.
+- Definición **card images** MUST match the **HARD-locked gold layout** exactly \
+(open-book header + white rows + coloured chevron + left circular icon + right icon \
+on soft lake/mountain). Change **ONLY** term text, definition text, and icons. \
+**FORBIDDEN invents:** parchment essay, centered white title pill, cartoon green hills, \
+play-button triangles, vertical book/tab chrome, cream title-only, any new card style. \
+Prefer omitting card PNGs when the host will generate them via OpenAI reference-edit.
 - Card images must render **only** those verbatim terms — never add quotes, extra \
 verses, or footer disclaimers not in the box."
     );
@@ -1545,7 +1578,8 @@ Use Write/Shell to create:
 {schema}
 
 ## Rules
-- Faithful Spanish from the scans; merge cross-page cuts; skip Ideas para el maestro / Preguntas / Afianzamiento / RESUMEN GENERAL body.
+- {verbatim}
+- Merge cross-page cuts; skip Ideas para el maestro / Preguntas / Afianzamiento / RESUMEN GENERAL body.
 - Lectura/Texto = whole verses.
 - End as soon as `artifacts/{study}.json` exists. Speed matters — JSON only, no images.
 
@@ -1557,6 +1591,7 @@ Use Write/Shell to create:
             p0 = req.pages.0,
             p1 = req.pages.1,
             agents = AGENTS_MD,
+            verbatim = VERBATIM_HARD,
         ));
     }
 
@@ -1596,9 +1631,10 @@ image for multiple sections. Same design family OK; identical photos FAIL host Q
   **FORBIDDEN:** parchment / centered essay / plain text dump. One card per TEMA that has the box.
 
 ## Rules
-- Faithful Spanish from the scans; merge cross-page cuts; skip Ideas / Afianzamiento / Preguntas / RESUMEN body.
+- {verbatim}
+- Merge cross-page cuts; skip Ideas / Afianzamiento / Preguntas / RESUMEN body.
 - **Definiciones y etimología:** copy ONLY from that printed box; empty array if the tema has no box — never invent terms or etymologies.
-- Lectura/Texto = whole verses; body slides ~360–400 chars when packing.
+- Lectura/Texto = whole verses; body slides ~360–400 chars when packing **verbatim** print text (do not shorten by rewriting).
 - End only after `{study}.json` + all required scenic PNGs exist under `artifacts/`.
 
 ---
@@ -1609,6 +1645,7 @@ image for multiple sections. Same design family OK; identical photos FAIL host Q
         p0 = req.pages.0,
         p1 = req.pages.1,
         agents = AGENTS_MD,
+        verbatim = VERBATIM_HARD,
     ))
 }
 
