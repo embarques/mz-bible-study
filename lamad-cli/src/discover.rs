@@ -3,12 +3,22 @@
 //! Strategy:
 //! 1. Prefer `pdftotext` when the PDF has a text layer.
 //! 2. Else rasterize pages + `tesseract` OCR.
-//! 3. Detect title pages (`Base bíblica` + `Idea principal`).
+//! 3. Detect title pages (`Base bíblica` + `Idea principal` / adult Pensamiento).
 //! 4. Read study numbers (`ESTUDIO N`, `N LECTURA BÍBLICA`, …).
 //! 5. Fill gaps along the ordered title-page sequence from any anchors.
 //!
-//! Returns absolute 1-based PDF page ranges. Youth Senda de Vida is usually
-//! 3 pages; adult title→title gaps may be longer (use next title page − 1).
+//! Returns absolute 1-based PDF page ranges.
+//!
+//! **Youth:** usually 3 pages (title → next title − 1, else start+2).
+//!
+//! **Adult (HARD — not page-count math):**
+//! - **Start** = title page with `ESTUDIO BÍBLICO N` (Base bíblica / Objetivos / …).
+//! - **End** = PDF page that contains **`RESUMEN GENERAL`** (fence after
+//!   DESARROLLO DEL ESTUDIO). We do **not** extract RESUMEN body; the marker
+//!   only closes the content window. A PDF page may be 1-up or a 2-up book
+//!   spread — page count is irrelevant.
+//! - **Próximo** = next study’s title page when present; if none, omit
+//!   (never invent a próximo page).
 
 use anyhow::{bail, Context, Result};
 use image::imageops::FilterType;
@@ -20,14 +30,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::job::Audience;
 use crate::pdf_page_count;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StudyPages {
     pub study: u32,
-    /// Inclusive content pages (always 3 for Senda de Vida).
+    /// Inclusive content PDF pages (1-based). Youth ≈3; adult = title→RESUMEN page.
     pub pages: (u32, u32),
     /// First page of the next study’s title block, when present in the PDF.
+    /// Adult: only a real next title — never invented from page math.
     pub proximo_title_page: Option<u32>,
 }
 
@@ -35,6 +47,7 @@ pub struct StudyPages {
 pub fn discover_study_pages(
     pdf: &Path,
     study: u32,
+    audience: Audience,
     pdftoppm_path: Option<&Path>,
 ) -> Result<StudyPages> {
     let page_count = pdf_page_count(pdf)?;
@@ -42,13 +55,14 @@ pub fn discover_study_pages(
         bail!("PDF has no pages: {}", pdf.display());
     }
     let texts = page_texts(pdf, page_count, pdftoppm_path)?;
-    study_pages_from_texts(pdf, study, &texts, page_count)
+    study_pages_from_texts(pdf, study, audience, &texts, page_count)
 }
 
 /// OCR/text-extract once, then resolve many estudios (batch `--from`/`--to` with discover).
 pub fn discover_study_pages_batch(
     pdf: &Path,
     studies: &[u32],
+    audience: Audience,
     pdftoppm_path: Option<&Path>,
 ) -> Result<Vec<StudyPages>> {
     let page_count = pdf_page_count(pdf)?;
@@ -61,7 +75,13 @@ pub fn discover_study_pages_batch(
     let texts = page_texts(pdf, page_count, pdftoppm_path)?;
     let mut out = Vec::with_capacity(studies.len());
     for &study in studies {
-        out.push(study_pages_from_texts(pdf, study, &texts, page_count)?);
+        out.push(study_pages_from_texts(
+            pdf,
+            study,
+            audience,
+            &texts,
+            page_count,
+        )?);
     }
     Ok(out)
 }
@@ -72,6 +92,7 @@ pub fn discover_study_pages_batch(
 /// can drop a multi-study scan and prepare the whole file.
 pub fn discover_all_study_pages(
     pdf: &Path,
+    audience: Audience,
     pdftoppm_path: Option<&Path>,
 ) -> Result<Vec<StudyPages>> {
     let page_count = pdf_page_count(pdf)?;
@@ -84,7 +105,8 @@ pub fn discover_all_study_pages(
     if filled.is_empty() {
         bail!(
             "Could not find any estudios in {}. \
-             Title pages usually contain “Base bíblica” and “Idea principal”. \
+             Title pages usually contain “Base bíblica” and “Idea principal” \
+             (adult: Pensamiento central / Texto áureo). \
              Pass --from F --to T if you know the range.",
             pdf.display()
         );
@@ -109,30 +131,24 @@ pub fn discover_all_study_pages(
 
     let mut out = Vec::with_capacity(ordered.len());
     for (i, &(start, study)) in ordered.iter().enumerate() {
-        let next_title = ordered.get(i + 1).map(|(p, _)| *p).or_else(|| {
-            // After truncating to one study, still use the next PDF title page
-            // (if any) as Próximo — re-scan title pages beyond `ordered`.
-            if single.is_some() && i == 0 {
-                find_title_pages(&texts)
-                    .into_iter()
-                    .find(|p| *p > start)
-            } else {
-                let guess = start + 3;
-                if (guess as usize) <= page_count {
-                    Some(guess)
-                } else {
-                    None
-                }
-            }
-        });
-        let end = match next_title {
-            Some(n) if n > start => n - 1,
-            _ => (start + 2).min(page_count as u32),
-        };
+        let next_title = real_next_title_page(
+            audience,
+            start,
+            ordered.get(i + 1).map(|(p, _)| *p),
+            &texts,
+            page_count,
+            single.is_some() && i == 0,
+        );
+        let end = content_end_page(audience, start, next_title, &texts, page_count);
         if end < start {
             bail!("Estudio {study}: invalid page range {start}–{end}");
         }
-        let proximo_title_page = next_title.filter(|p| (*p as usize) <= page_count);
+        // Adult: only attach próximo when a real next title page exists.
+        // Youth: keep prior behaviour (may use start+3 guess).
+        let proximo_title_page = match audience {
+            Audience::Adult => next_title.filter(|p| (*p as usize) <= page_count),
+            Audience::Youth => next_title.filter(|p| (*p as usize) <= page_count),
+        };
         println!(
             "  Discovered estudio {study} at PDF pages {start}–{end}{}",
             match proximo_title_page {
@@ -152,14 +168,101 @@ pub fn discover_all_study_pages(
     renumber_discovered_estudios(pdf, &mut out);
 
     crate::progress::ok(format!(
-        "Discovered {} estudio{} in {}",
+        "Discovered {} estudio{} in {} ({})",
         out.len(),
         if out.len() == 1 { "" } else { "s" },
         pdf.file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or("PDF")
+            .unwrap_or("PDF"),
+        audience.as_str()
     ));
     Ok(out)
+}
+
+/// Next study title page — adult never invents from `start+3`.
+fn real_next_title_page(
+    audience: Audience,
+    start: u32,
+    ordered_next: Option<u32>,
+    texts: &[String],
+    page_count: usize,
+    allow_scan_after_single: bool,
+) -> Option<u32> {
+    if let Some(p) = ordered_next {
+        return Some(p);
+    }
+    // Real OCR title after `start` (Próximo-only trailing title, etc.).
+    if let Some(p) = find_title_pages(texts).into_iter().find(|p| *p > start) {
+        return Some(p);
+    }
+    match audience {
+        Audience::Adult => None, // never invent
+        Audience::Youth => {
+            if allow_scan_after_single {
+                return None;
+            }
+            let guess = start + 3;
+            if (guess as usize) <= page_count {
+                Some(guess)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Inclusive last content PDF page for one estudio.
+///
+/// Adult: prefer the page that carries **`RESUMEN GENERAL`** (DESARROLLO fence).
+/// Fall back to day-before next title, else last PDF page. Never assume 3 pages.
+fn content_end_page(
+    audience: Audience,
+    start: u32,
+    next_title: Option<u32>,
+    texts: &[String],
+    page_count: usize,
+) -> u32 {
+    let last = page_count as u32;
+    match audience {
+        Audience::Adult => {
+            let search_until = next_title.unwrap_or(last + 1);
+            if let Some(resumen) = find_resumen_page_after(texts, start, search_until) {
+                return resumen;
+            }
+            match next_title {
+                Some(n) if n > start => n - 1,
+                _ => last.max(start),
+            }
+        }
+        Audience::Youth => match next_title {
+            Some(n) if n > start => n - 1,
+            _ => (start + 2).min(last),
+        },
+    }
+}
+
+/// First PDF page after `start` (and before `search_until`) whose OCR/text
+/// contains **RESUMEN GENERAL**.
+fn find_resumen_page_after(texts: &[String], start: u32, search_until: u32) -> Option<u32> {
+    for (i, t) in texts.iter().enumerate() {
+        let p = (i as u32) + 1;
+        if p <= start {
+            continue;
+        }
+        if p >= search_until {
+            break;
+        }
+        if has_resumen_general(t) {
+            return Some(p);
+        }
+    }
+    None
+}
+
+fn has_resumen_general(t: &str) -> bool {
+    Regex::new(r"(?is)resumen\s+general")
+        .map(|re| re.is_match(t))
+        .unwrap_or(false)
 }
 
 /// Build page→estudio map from title pages (shared by single + all discover).
@@ -229,6 +332,7 @@ fn build_filled_title_map(
 fn study_pages_from_texts(
     pdf: &Path,
     study: u32,
+    audience: Audience,
     texts: &[String],
     page_count: usize,
 ) -> Result<StudyPages> {
@@ -283,24 +387,16 @@ fn study_pages_from_texts(
         }
     };
 
-    // Prefer real next title page (adult studies are often >3 pages). Fall
-    // back to the youth 3-page block when titles are unknown/missing.
-    let next_title = filled
-        .keys()
-        .copied()
-        .find(|p| *p > start)
-        .or_else(|| {
-            let guess = start + 3;
-            if (guess as usize) <= page_count {
-                Some(guess)
-            } else {
-                None
-            }
-        });
-    let end = match next_title {
-        Some(n) if n > start => n - 1,
-        _ => (start + 2).min(page_count as u32),
-    };
+    let ordered_next = filled.keys().copied().find(|p| *p > start);
+    let next_title = real_next_title_page(
+        audience,
+        start,
+        ordered_next,
+        texts,
+        page_count,
+        false,
+    );
+    let end = content_end_page(audience, start, next_title, texts, page_count);
     if end < start {
         bail!("Estudio {study}: invalid page range {start}–{end}");
     }
@@ -313,7 +409,8 @@ fn study_pages_from_texts(
     let proximo_title_page = next_title.filter(|p| (*p as usize) <= page_count);
 
     println!(
-        "  Discovered estudio {study} at PDF pages {start}–{end}{}",
+        "  Discovered estudio {study} ({}) at PDF pages {start}–{end}{}",
+        audience.as_str(),
         match proximo_title_page {
             Some(p) => format!(" (próximo title page {p})"),
             None => " (no Próximo in PDF)".into(),
@@ -1023,6 +1120,54 @@ LECTURA ANTIFONAL
     }
 
     #[test]
+    fn adult_content_ends_at_resumen_general_not_page_math() {
+        // Simulates Canon-style adult scan: title @1, body, RESUMEN @8, next title @9.
+        // PDF page count is irrelevant — a page may be 1-up or 2-up.
+        let mut texts = vec![String::new(); 9];
+        texts[0] = "ESTUDIO BÍBLICO 12\nBase bíblica\n2 Crónicas 6 y 7\n\
+            Pensamiento central\nTexto áureo\nLECTURA ANTIFONAL"
+            .into();
+        texts[1] = "DATOS GENERALES ACERCA DEL TEMA\nINTRODUCCIÓN".into();
+        texts[2] = "DESARROLLO DEL ESTUDIO\nI. LA HISTORIA".into();
+        texts[3] = "A. Historia\nB. Adoración".into();
+        texts[4] = "II. LA ADORACIÓN".into();
+        texts[5] = "Definiciones y etimología\nIII. PODER".into();
+        texts[6] = "Afianzamiento y aplicación\nB. Un Dios".into();
+        texts[7] = "RESUMEN GENERAL\nPreguntas y respuestas".into();
+        texts[8] = "ESTUDIO BÍBLICO 13\nBase bíblica\n1 Reyes 9-11\n\
+            Pensamiento central\nTexto áureo\nLECTURA ANTIFONAL"
+            .into();
+
+        let end = content_end_page(Audience::Adult, 1, Some(9), &texts, 9);
+        assert_eq!(end, 8, "adult end must be RESUMEN page, not next_title-1 only");
+
+        let next = real_next_title_page(Audience::Adult, 1, Some(9), &texts, 9, false);
+        assert_eq!(next, Some(9));
+
+        // Last study in PDF — no próximo invented.
+        let mut last_only = texts.clone();
+        last_only.truncate(8);
+        let next_none = real_next_title_page(Audience::Adult, 1, None, &last_only, 8, false);
+        assert_eq!(next_none, None);
+        let end_last = content_end_page(Audience::Adult, 1, None, &last_only, 8);
+        assert_eq!(end_last, 8);
+
+        assert!(has_resumen_general(&texts[7]));
+        assert!(!has_resumen_general(&texts[2]));
+    }
+
+    #[test]
+    fn youth_still_uses_three_page_fallback() {
+        let texts = vec!["ESTUDIO 20\nBase bíblica\nIdea principal\nLECTURA BÍBLICA".into()];
+        let end = content_end_page(Audience::Youth, 1, None, &texts, 10);
+        assert_eq!(end, 3);
+        let guess = real_next_title_page(Audience::Youth, 1, None, &texts, 10, false);
+        assert_eq!(guess, Some(4));
+        let adult_no_guess = real_next_title_page(Audience::Adult, 1, None, &texts, 10, false);
+        assert_eq!(adult_no_guess, None);
+    }
+
+    #[test]
     #[ignore = "needs adult scan PDF + tesseract; run with --ignored"]
     fn discovers_adult_estudio_4_in_scan_pdf() {
         let pdf = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1032,12 +1177,11 @@ LECTURA ANTIFONAL
             return;
         }
         let ppm = which("pdftoppm").unwrap_or_else(|| PathBuf::from("/opt/homebrew/bin/pdftoppm"));
-        let found = discover_study_pages(&pdf, 4, Some(ppm.as_path()))
+        let found = discover_study_pages(&pdf, 4, Audience::Adult, Some(ppm.as_path()))
             .expect("discover estudio 4");
         assert_eq!(found.study, 4);
         assert_eq!(found.pages.0, 1);
         assert!(found.pages.1 >= 3, "adult study should span past 3 pages: {:?}", found.pages);
-        assert_eq!(found.proximo_title_page, Some(found.pages.1 + 1));
     }
 
     #[test]
@@ -1049,7 +1193,7 @@ LECTURA ANTIFONAL
             return;
         }
         let ppm = which("pdftoppm").unwrap_or_else(|| PathBuf::from("/opt/homebrew/bin/pdftoppm"));
-        let found = discover_study_pages(&pdf, 25, Some(ppm.as_path()))
+        let found = discover_study_pages(&pdf, 25, Audience::Youth, Some(ppm.as_path()))
             .expect("discover 25");
         assert_eq!(found.pages, (7, 9), "estudio 25 should be pages 7-9");
         assert_eq!(found.proximo_title_page, Some(10));
@@ -1064,11 +1208,10 @@ LECTURA ANTIFONAL
             return;
         }
         let ppm = which("pdftoppm").unwrap_or_else(|| PathBuf::from("/opt/homebrew/bin/pdftoppm"));
-        let found = discover_study_pages(&pdf, 5, Some(ppm.as_path()))
+        let found = discover_study_pages(&pdf, 5, Audience::Adult, Some(ppm.as_path()))
             .expect("discover estudio 5");
         assert_eq!(found.study, 5);
         assert_eq!(found.pages.0, 1, "estudio 5 should start at page 1: {:?}", found);
         assert!(found.pages.1 >= 3, "should span content pages: {:?}", found.pages);
-        assert_eq!(found.proximo_title_page, Some(found.pages.1 + 1));
     }
 }

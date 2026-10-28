@@ -763,15 +763,18 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
     let pages_dir = paths::generated_dir()?.join("pages").join(format!("study{}", req.study));
     std::fs::create_dir_all(&pages_dir)?;
 
-    // Rasterize content pages (+ próximo title page when needed), max 5 images.
+    // Rasterize content pages (+ próximo title page when present).
+    // Adult: full title→RESUMEN window (PDF page count / 2-up spreads vary) —
+    // never the old youth 5-image cap. Youth keeps a soft cap for API size.
     let mut page_nums: Vec<u32> = (req.pages.0..=req.pages.1).collect();
     if let Some((na, _)) = req.next_pages {
-        if !page_nums.contains(&na) && page_nums.len() < 5 {
+        if !page_nums.contains(&na) {
             page_nums.push(na);
         }
     }
-    // Cap at 5
-    page_nums.truncate(5);
+    if req.audience == Audience::Youth && page_nums.len() > 5 {
+        page_nums.truncate(5);
+    }
 
     crate::progress::now_step(
         2,
@@ -1529,7 +1532,12 @@ fn build_adult_cloud_prepare_prompt(req: &PrepareRequest, host_images: bool) -> 
 - `temas`: **1+** (not fixed to 3). One object per printed `I.` / `II.` / … until **RESUMEN GENERAL** (RESUMEN body is **not** in the deck — stop there).
 - Each tema: lettered points **A…N** as keys `A`,`B`,`C`,… (or a `puntos` array with `letra`). Count varies — stop at **Afianzamiento y aplicación** (skip that section and Ideas/Preguntas).
 - Every lettered point needs **non-empty** `texto_slides` (~360–400 chars each).
-- Scans may be **1-up or 2-up** — treat each half of a two-up spread as its own printed page when reading order.
+- Scans may be **1-up or 2-up** — treat each half of a two-up spread as its own printed page when reading order. **Do not** assume 3 PDF pages per estudio.
+- **Content window:** start at this estudio’s title page (`ESTUDIO BÍBLICO N`); \
+read through **DESARROLLO DEL ESTUDIO**; use **`RESUMEN GENERAL`** only as the \
+end fence (do not copy RESUMEN / Preguntas / Afianzamiento bodies).
+- **Próximo:** only from the **next** estudio’s title page when attached; if no \
+next title page is present → omit `proximo` (do not invent).
 - **OMIT** `scenic_images` and `definicion_images` entirely — the host CLI stamps \
 canonical paths after images land. Do **not** invent path arrays, index maps \
 (`{\"1\":\"…\"}`), or flat basename maps (`intro-header` / `ab-1A`)."#;

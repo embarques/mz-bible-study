@@ -130,10 +130,16 @@ impl PrepareJob {
             println!(
                 "  Studies: discover ALL in PDF via OCR (then prepare each)"
             );
-        } else if self.discover {
+        } else if self.audience == Audience::Adult || self.discover {
             println!(
-                "  Studies: {}–{} (discover pages via OCR)",
-                self.from, self.to
+                "  Studies: {}–{} (discover by section markers{}; adult: title→RESUMEN)",
+                self.from,
+                self.to,
+                if self.audience == Audience::Adult {
+                    "; page count ignored"
+                } else {
+                    " via OCR"
+                }
             );
         } else {
             println!(

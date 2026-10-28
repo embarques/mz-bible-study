@@ -22,11 +22,14 @@ pub async fn run_prepare_openai(req: &PrepareRequest) -> Result<Deliverables> {
 
     let mut page_nums: Vec<u32> = (req.pages.0..=req.pages.1).collect();
     if let Some((na, _)) = req.next_pages {
-        if !page_nums.contains(&na) && page_nums.len() < 5 {
+        if !page_nums.contains(&na) {
             page_nums.push(na);
         }
     }
-    page_nums.truncate(5);
+    // Youth soft cap; adult keeps the full title→RESUMEN (+ próximo) window.
+    if req.audience == Audience::Youth && page_nums.len() > 5 {
+        page_nums.truncate(5);
+    }
 
     let rasters = rasterize_pages(
         &req.pdf,
@@ -471,7 +474,9 @@ fn build_openai_adult_prompts(req: &PrepareRequest) -> Result<(String, String)> 
     let system = r#"You extract Mount Zion Church Spanish **adult** Bible-study content from scan images into JSON.
 Adult schema (not youth): lectura_antifonal, objetivos, pensamiento_central, texto_aureo,
 ensenanza, datos_generales, introduccion_slides, temas[1+] with lettered points A…N
-(stop at Afianzamiento; end temas at RESUMEN GENERAL). Scans may be 1-up or 2-up.
+(stop at Afianzamiento; end temas at RESUMEN GENERAL). Scans may be 1-up or 2-up —
+never assume 3 PDF pages. Content window: title page → DESARROLLO; RESUMEN GENERAL is
+the end fence only (do not copy it). Próximo only from next title page when present.
 Reply with a single JSON object only (no markdown). Do NOT generate images. Do NOT build a .pptx."#
         .to_string();
 
@@ -491,7 +496,7 @@ ensenanza, datos_generales {{autor, personajes, fecha, lugar}},
 introduccion_slides (array of paragraphs),
 temas (1+ until RESUMEN GENERAL): each {{titulo, rango, definiciones[], A/B/C… blocks
   or puntos[{{letra,titulo,texto_slides,texto_biblico}}]}},
-proximo (or null if last).
+proximo (or null if last — omit when no next title page is attached).
 OMIT scenic_images and definicion_images entirely — host stamps canonical paths. Do not invent index maps or flat basename maps.
 
 ## Rules
@@ -499,6 +504,7 @@ OMIT scenic_images and definicion_images entirely — host stamps canonical path
 - Definiciones: ONLY from printed «Definiciones y etimología» boxes (verbatim). Empty [] if no box — never invent.
 - Whole verses only in lectura/texto_biblico.
 - Do **not** force 3 temas or only A/B — follow the print (e.g. 2 temas with A–D then A–B is valid).
+- Do **not** invent próximo metadata when the next study title page is missing.
 
 ---
 # AGENTS.md (rules)

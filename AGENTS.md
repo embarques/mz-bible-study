@@ -17,7 +17,8 @@ Do **not** commit or land day-to-day work on `main`. Before editing: create `fea
 | Mode | What you provide |
 |------|------------------|
 | **Single study** | **1.** Three content scans of the current study (any order — sort by printed page #). **2.** Title page of the **next** study (for Próximo), unless this is the last study |
-| **Batch PDF (new)** | **One PDF** with **all studies in order**. Each study = **3 consecutive content pages**. Next study starts immediately after the previous ends. Build **every** study into `bible-studies/` |
+| **Batch PDF (youth)** | **One PDF** with **all studies in order**. Each study = **3 consecutive content pages**. Next study starts immediately after the previous ends. Build **every** study into `bible-studies/` |
+| **Batch PDF (adult)** | **One PDF** in study order. **Do not** use page-count math (a PDF page may be 1-up or a 2-up book spread). Per estudio: **start** = title page (`ESTUDIO BÍBLICO N`); **end** = page with **`RESUMEN GENERAL`** (fence after DESARROLLO — do not extract RESUMEN). **Próximo** = next estudio’s title page when present; else omit |
 
 ### Single-study details
 
@@ -33,9 +34,11 @@ Do **not** commit or land day-to-day work on `main`. Before editing: create `fea
 After OK:
 
 1. Rasterize/extract **every** page from the PDF (in order).
-2. Segment into studies: **3 pages per study**, sequential (page groups 1–3, 4–6, …). Confirm boundaries with printed `ESTUDIO N` / titles when available.
-3. For each study **except the last:** Próximo = metadata from the **next** study’s title page (first page of the next 3-page block — the title layout with number/title/base bíblica).
-4. For the **last** study: only 3 pages, no following study → **omit the Próximo estudio slide** (do not ask, do not invent).
+2. Segment into studies:
+   - **Youth:** **3 pages per study**, sequential (page groups 1–3, 4–6, …). Confirm with printed `ESTUDIO N` / titles.
+   - **Adult:** title page → page containing **`RESUMEN GENERAL`** (content window; RESUMEN / Preguntas / Afianzamiento bodies are not deck content). Ignore raw PDF page count.
+3. For each study **except the last:** Próximo = metadata from the **next** study’s title page (youth: first page of the next 3-page block; adult: next `ESTUDIO BÍBLICO` title layout).
+4. For the **last** study: no following title page → **omit the Próximo estudio slide** (do not ask, do not invent).
 5. Produce one `bible-studies/{N} - {TITLE}.pptx` (+ `.pdf`) **per** study in the document.
 
 **If the user does not provide image 2** on a *single* non-final study: **stop and ask** for próximo number / title / base bíblica before the closing slide. Do not invent próximo metadata.

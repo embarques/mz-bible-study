@@ -53,8 +53,11 @@ pub async fn run(mut job: PrepareJob, cfg: &Config) -> Result<()> {
             "Find pages (OCR)",
             "Discovering every estudio in the PDF (one pass)…",
         );
-        let found =
-            discover::discover_all_study_pages(&pdf, cfg.pdftoppm_path.as_deref())?;
+        let found = discover::discover_all_study_pages(
+            &pdf,
+            job.audience,
+            cfg.pdftoppm_path.as_deref(),
+        )?;
         if found.is_empty() {
             bail!("No estudios discovered in {}", pdf.display());
         }
@@ -152,7 +155,12 @@ pub async fn run(mut job: PrepareJob, cfg: &Config) -> Result<()> {
         let n = slice.study;
         let pages = slice.pages;
         let omit_proximo = slice.proximo_title_page.is_none();
-        let next_pages = slice.proximo_title_page.map(|p| (p, p + 2));
+        // Adult próximo is a single title page. Youth kept the old 3-page window
+        // for the next block's first page only (agent still uses `na`).
+        let next_pages = slice.proximo_title_page.map(|p| match job.audience {
+            Audience::Adult => (p, p),
+            Audience::Youth => (p, p + 2),
+        });
         let can_resume = !job.force_prepare
             && !job.gen_images
             && agent::prepare::try_resume_deliverables(n, job.audience, &root).is_some();
@@ -293,10 +301,25 @@ fn resolve_study_slices(
     page_count: usize,
     pdftoppm_path: Option<&Path>,
 ) -> Result<Vec<StudySlice>> {
-    if job.discover {
+    // Adult: never use youth ×3 page math. Boundaries are title → RESUMEN
+    // GENERAL (+ optional next title for Próximo). Always OCR/text discover.
+    let use_discover = job.discover || job.audience == Audience::Adult;
+    if job.audience == Audience::Adult && !job.discover {
+        crate::progress::info(
+            "adult audience — discovering pages by section markers \
+             (title → RESUMEN GENERAL; page count ignored)",
+        );
+    }
+
+    if use_discover {
         let studies: Vec<u32> = (job.from..=job.to).collect();
         // One OCR/raster pass for the whole PDF — never re-OCR per estudio.
-        let found = discover::discover_study_pages_batch(pdf, &studies, pdftoppm_path)?;
+        let found = discover::discover_study_pages_batch(
+            pdf,
+            &studies,
+            job.audience,
+            pdftoppm_path,
+        )?;
         return Ok(found
             .into_iter()
             .map(|s| StudySlice {

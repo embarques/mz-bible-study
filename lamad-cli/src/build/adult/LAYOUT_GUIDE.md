@@ -207,6 +207,8 @@ ab_body              → blue header + white body + navy footer (N slides)
 
 **Temas and points are variable:** print may have 1–N temas (stop at RESUMEN GENERAL) and A…N points per tema (stop at Afianzamiento). Study 02: tema II has three points (A/B/C); others have two. Estudio 4: TEMA I has A–D, TEMA II has A–B. Builder clones prototype slides — never invent layouts.
 
+**Scan boundaries (prepare / discover — HARD):** do **not** use youth `×3` page math. A PDF page may be **1-up or 2-up** (book spread). Content window = this estudio’s **title page** (`ESTUDIO BÍBLICO N`) through the PDF page that carries **`RESUMEN GENERAL`** (fence after DESARROLLO — do not extract RESUMEN body). **Próximo** = next estudio’s title page when present; if none, omit (never invent).
+
 ### Texto Bíblico
 
 - Same pipeline as youth **Texto Bíblico**: `expand_glued_verses` → `pack_verses(VERSE_BUDGET=280)` → `set_verses(VerseKind::Texto)`.

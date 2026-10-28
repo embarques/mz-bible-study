@@ -112,9 +112,11 @@ Study numbers come **only** from `--from`/`--to`/`-n` or the TUI — never from 
 
 While prepare runs you’ll see rustup-style progress on stderr: `info:` / `[1/4]` steps, spinning waits for the cloud agent (with elapsed time), and bars for rasterize / OCR / section images / artifact downloads. Agent narration is **off by default** (it was noisy); pass `--stream` only if you want the raw log.
 
-Page math (`--from` / `--to`): study `n` with PDF start `F` uses pages `((n-F)*3+1)` … `+2`. The PDF must be long enough for the last prepared study; longer PDFs are fine.
+Page math (`--from` / `--to`, **youth**): study `n` with PDF start `F` uses pages `((n-F)*3+1)` … `+2`. The PDF must be long enough for the last prepared study; longer PDFs are fine.
 
-OCR discover (`-n N` alone): rasterizes pages, finds title pages (`Base bíblica` + `Idea principal`), reads estudio numbers (with sequence fill from any clear anchor), then prepares that 3-page slice. Needs `tesseract` on PATH for image-only scans. Fallback if OCR fails: `--from F -n N`.
+**Adult** (`--audience adult`): never uses ×3 page math. Discover finds the estudio **title page**, ends content on the PDF page with **`RESUMEN GENERAL`** (DESARROLLO fence — body not extracted). PDF page count is irrelevant (pages may be 1-up or 2-up book spreads). **Próximo** = next estudio’s title page when present; otherwise omit.
+
+OCR discover (`-n N` alone, or always for adult): rasterizes pages, finds title pages (`Base bíblica` + `Idea principal` / adult Pensamiento), reads estudio numbers, then slices by audience rules. Needs `tesseract` on PATH for image-only scans. Youth fallback if OCR fails: `--from F -n N`.
 
 ### Scans tray
 

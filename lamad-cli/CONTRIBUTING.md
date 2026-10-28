@@ -16,6 +16,7 @@ Welcome. This guide is for **junior and first-time contributors**. You do **not*
 | Finding `template/`, `studies/`, `bible-studies/` | [`src/paths.rs`](src/paths.rs) |
 | Resolving bundled / config `pdftoppm` | [`src/pdftoppm.rs`](src/pdftoppm.rs) |
 | `-n` OCR discover (find estudio in PDF) | [`src/discover.rs`](src/discover.rs) |
+| Adult scan window (title → `RESUMEN GENERAL`, optional próximo) | [`src/discover.rs`](src/discover.rs) (`content_end_page`) — not page-count math |
 | Sentence / verse packing budgets | [`src/pack.rs`](src/pack.rs) + helpers on [`src/model/study.rs`](src/model/study.rs) |
 | Study JSON shape (fields) | [`src/model/study.rs`](src/model/study.rs) |
 | Slide **order** / which PROTO slide gets content | [`src/build/study.rs`](src/build/study.rs) |
