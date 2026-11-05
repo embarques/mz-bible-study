@@ -26,10 +26,8 @@ pub async fn run_prepare_openai(req: &PrepareRequest) -> Result<Deliverables> {
             page_nums.push(na);
         }
     }
-    // Youth soft cap; adult keeps the full title→RESUMEN (+ próximo) window.
-    if req.audience == Audience::Youth && page_nums.len() > 5 {
-        page_nums.truncate(5);
-    }
+    // Send every content page (+ próximo). No truncate — ChatGPT vision accepts
+    // the full adult title→RESUMEN window.
 
     let rasters = rasterize_pages(
         &req.pdf,

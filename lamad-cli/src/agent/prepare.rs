@@ -1,6 +1,6 @@
 //! Cloud prepare: rasterize pages → agent backend → study JSON + section PNGs.
 //!
-//! Backends: Cursor Cloud Agents (default) or OpenAI ChatGPT
+//! Backends: OpenAI ChatGPT (default) or Cursor Cloud Agents
 //! ([`super::prepare_openai`]).
 
 use anyhow::{bail, Context, Result};
@@ -25,6 +25,7 @@ inventing transitions, or improving theology. This is a Mount Zion Church Bible 
 the author’s sentences must appear in the JSON. Skip only explicitly excluded sections \
 (Ideas para el maestro, Preguntas, Afianzamiento, RESUMEN GENERAL body).";
 
+#[derive(Clone)]
 pub struct PrepareRequest {
     pub study: u32,
     pub pdf: PathBuf,
@@ -34,6 +35,8 @@ pub struct PrepareRequest {
     pub audience: Audience,
     pub provider: AgentProvider,
     pub model: String,
+    /// ChatGPT model used when Cursor fails and we fall back (also primary for `--provider chatgpt`).
+    pub openai_model: String,
     /// OpenAI Images model for host-side parallel generation.
     pub image_model: String,
     pub api_key: String,
@@ -753,8 +756,50 @@ fn ensure_png_file(path: &Path) -> Result<()> {
 
 pub async fn run_prepare_agent(req: PrepareRequest) -> Result<Deliverables> {
     match req.provider {
-        AgentProvider::Cursor => run_prepare_cursor(req).await,
-        AgentProvider::ChatGpt => crate::agent::prepare_openai::run_prepare_openai(&req).await,
+        AgentProvider::ChatGpt => {
+            crate::agent::prepare_openai::run_prepare_openai(&req).await
+        }
+        AgentProvider::Cursor => match run_prepare_cursor(req.clone()).await {
+            Ok(d) => Ok(d),
+            Err(cursor_err) => {
+                let Some(openai_key) = req
+                    .image_api_key
+                    .as_ref()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                else {
+                    return Err(cursor_err).context(
+                        "Cursor prepare failed and no openai_api_key is set for ChatGPT fallback",
+                    );
+                };
+                crate::progress::warn(format!(
+                    "Cursor prepare failed — falling back to ChatGPT ({})",
+                    short_err(&cursor_err)
+                ));
+                let mut fb = req;
+                fb.provider = AgentProvider::ChatGpt;
+                fb.api_key = openai_key.clone();
+                fb.image_api_key = Some(openai_key);
+                fb.model = fb.openai_model.clone();
+                crate::agent::prepare_openai::run_prepare_openai(&fb)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "ChatGPT fallback also failed (after Cursor: {})",
+                            short_err(&cursor_err)
+                        )
+                    })
+            }
+        },
+    }
+}
+
+fn short_err(e: &anyhow::Error) -> String {
+    let s = format!("{e:#}");
+    if s.len() <= 160 {
+        s
+    } else {
+        format!("{}…", &s[..157])
     }
 }
 
@@ -763,17 +808,14 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
     let pages_dir = paths::generated_dir()?.join("pages").join(format!("study{}", req.study));
     std::fs::create_dir_all(&pages_dir)?;
 
-    // Rasterize content pages (+ próximo title page when present).
-    // Adult: full title→RESUMEN window (PDF page count / 2-up spreads vary) —
-    // never the old youth 5-image cap. Youth keeps a soft cap for API size.
+    // Rasterize **every** content page (+ próximo title page when present).
+    // Never drop pages for size — Cursor’s HTTP API allows ≤5 attachments, so
+    // we pack extras into vertical composites (see `page_pack`).
     let mut page_nums: Vec<u32> = (req.pages.0..=req.pages.1).collect();
     if let Some((na, _)) = req.next_pages {
         if !page_nums.contains(&na) {
             page_nums.push(na);
         }
-    }
-    if req.audience == Audience::Youth && page_nums.len() > 5 {
-        page_nums.truncate(5);
     }
 
     crate::progress::now_step(
@@ -788,9 +830,23 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
         &pages_dir,
         req.pdftoppm_path.as_deref(),
     )?;
+    let pack_dir = pages_dir.join("cursor-packs");
+    let packed = super::page_pack::pack_pages_for_api_limit(
+        &rasters,
+        &pack_dir,
+        super::page_pack::CURSOR_MAX_IMAGES,
+    )?;
+    if packed.len() < rasters.len() {
+        crate::progress::phase(format!(
+            "Cursor API max {} images — packed {} pages into {} composites (no pages dropped)",
+            super::page_pack::CURSOR_MAX_IMAGES,
+            rasters.len(),
+            packed.len()
+        ));
+    }
     crate::progress::phase("encoding page images for the agent…");
     let mut images = Vec::new();
-    for r in &rasters {
+    for r in &packed {
         images.push(client::image_from_path(r)?);
     }
 
@@ -1404,6 +1460,7 @@ Do **NOT** generate images — the host CLI generates section PNGs after you fin
 ## Inputs
 - Estudio **{study}** (audience={aud})
 - Content pages **{p0}–{p1}** are attached as images (in order).
+- Some attachments may be **vertical multi-page composites** (top→bottom = reading order; yellow tick marks the page band). Read **every** band — do not skip stacked pages.
 - {proximo_block}
 
 ## Deliverable — ONE file only
@@ -1447,6 +1504,7 @@ Follow PREPARE_STUDY.md and AGENTS.md (full text below). Do **NOT** build a .ppt
 ## Inputs
 - Estudio **{study}** (audience={aud})
 - Content pages **{p0}–{p1}** are attached as images (in order).
+- Some attachments may be **vertical multi-page composites** (top→bottom = reading order; yellow tick marks the page band). Read **every** band — do not skip stacked pages.
 - {proximo_block}
 
 ## Deliverables — write under `artifacts/` (mandatory)
@@ -1577,6 +1635,7 @@ Adult JSON is **not** the youth schema (youth uses top-level `puntos` 1/2/3; adu
 ## Inputs
 - Estudio **{study}** (audience=adult)
 - Content pages **{p0}–{p1}** are attached as images (in order).
+- Some attachments may be **vertical multi-page composites** (top→bottom = reading order; yellow tick marks the page band). Read **every** band — do not skip stacked pages.
 - {proximo_block}
 
 ## Deliverable — ONE file only
@@ -1613,6 +1672,7 @@ Adult JSON is **not** the youth schema (youth uses top-level `puntos` 1/2/3; adu
 ## Inputs
 - Estudio **{study}** (audience=adult)
 - Content pages **{p0}–{p1}** are attached as images (in order).
+- Some attachments may be **vertical multi-page composites** (top→bottom = reading order; yellow tick marks the page band). Read **every** band — do not skip stacked pages.
 - {proximo_block}
 
 ## Deliverables — write under `artifacts/` (mandatory)

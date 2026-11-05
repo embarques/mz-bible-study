@@ -53,7 +53,7 @@ fn default_true() -> bool {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            agent_provider: AgentProvider::Cursor,
+            agent_provider: AgentProvider::ChatGpt,
             cursor_api_key: None,
             cursor_model: default_cursor_model(),
             openai_api_key: None,

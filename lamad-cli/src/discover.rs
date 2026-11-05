@@ -73,6 +73,17 @@ pub fn discover_study_pages_batch(
         return Ok(Vec::new());
     }
     let texts = page_texts(pdf, page_count, pdftoppm_path)?;
+
+    // Stylized adult badges often OCR as the wrong digit (7→4, 8→5, …). When the
+    // user passed an explicit consecutive `--from`/`--to` (or the filename span
+    // matches), trust title-page **order** + that range — never remap missing
+    // estudios onto page 1 of another study.
+    if let Some(aligned) =
+        align_batch_to_requested(pdf, studies, audience, &texts, page_count)?
+    {
+        return Ok(aligned);
+    }
+
     let mut out = Vec::with_capacity(studies.len());
     for &study in studies {
         out.push(study_pages_from_texts(
@@ -84,6 +95,98 @@ pub fn discover_study_pages_batch(
         )?);
     }
     Ok(out)
+}
+
+/// Map title pages in order onto `studies` when OCR badges disagree with the
+/// requested range (or filename span). Returns `None` when OCR already matches.
+fn align_batch_to_requested(
+    pdf: &Path,
+    studies: &[u32],
+    audience: Audience,
+    texts: &[String],
+    page_count: usize,
+) -> Result<Option<Vec<StudyPages>>> {
+    if studies.len() < 2 {
+        return Ok(None);
+    }
+    let consecutive = studies.windows(2).all(|w| w[1] == w[0] + 1);
+    if !consecutive {
+        return Ok(None);
+    }
+    let from = studies[0];
+    let to = *studies.last().unwrap();
+
+    let filled = build_filled_title_map(texts, page_count, Some(from))?;
+    let title_pages: Vec<u32> = filled.keys().copied().collect();
+    if title_pages.len() < studies.len() {
+        return Ok(None);
+    }
+
+    let ocr_matches = studies
+        .iter()
+        .all(|s| filled.values().any(|n| n == s));
+    let filename_span = estudio_range_from_filename(pdf, studies.len())
+        .filter(|(s, e)| *s == from && *e == to);
+    // Also accept filename span when discovered title count equals the span
+    // length even if OCR digits are wrong (Study 7-11 Adult.pdf → 5 titles).
+    let filename_hint = estudio_range_from_filename(pdf, title_pages.len())
+        .filter(|(s, e)| *s == from && *e == to);
+
+    if ocr_matches && filename_span.is_none() && filename_hint.is_none() {
+        return Ok(None);
+    }
+    if !ocr_matches || filename_span.is_some() || filename_hint.is_some() {
+        let ocr_nums: Vec<u32> = title_pages
+            .iter()
+            .take(studies.len())
+            .filter_map(|p| filled.get(p).copied())
+            .collect();
+        eprintln!(
+            "  warn: OCR badges {:?} disagree with requested estudios {}–{} — \
+             aligning {} title pages in order to {}–{} \
+             (filename / --from/--to win over stylized badge OCR)",
+            ocr_nums,
+            from,
+            to,
+            studies.len(),
+            from,
+            to
+        );
+
+        let mut out = Vec::with_capacity(studies.len());
+        for (i, &study) in studies.iter().enumerate() {
+            let start = title_pages[i];
+            let ordered_next = title_pages.get(i + 1).copied();
+            let next_title = real_next_title_page(
+                audience,
+                start,
+                ordered_next,
+                texts,
+                page_count,
+                false,
+            );
+            let end = content_end_page(audience, start, next_title, texts, page_count);
+            if end < start {
+                bail!("Estudio {study}: invalid page range {start}–{end}");
+            }
+            let proximo_title_page =
+                next_title.filter(|p| (*p as usize) <= page_count);
+            println!(
+                "  Discovered estudio {study} (adult) at PDF pages {start}–{end}{}",
+                match proximo_title_page {
+                    Some(p) => format!(" (próximo title page {p})"),
+                    None => " (no Próximo in PDF)".into(),
+                }
+            );
+            out.push(StudyPages {
+                study,
+                pages: (start, end),
+                proximo_title_page,
+            });
+        }
+        return Ok(Some(out));
+    }
+    Ok(None)
 }
 
 /// Discover **every** estudio in the PDF (one OCR/text pass).
@@ -347,15 +450,18 @@ fn study_pages_from_texts(
     let start = match filled.iter().find(|(_, n)| **n == study).map(|(p, _)| *p) {
         Some(p) => p,
         None => {
-            // Adult badges are often stylized — OCR may read "4" as "1".
-            // When the user asked for study N and page 1 is a title page,
-            // treat the title-page sequence as N, N+1, … (single-study scans).
+            // Adult badges are often stylized — OCR may misread a *single* study.
+            // Never invent estudio N when OCR already found a clear multi-study map
+            // that does not include N (that remapped 10/11 onto estudio 4's pages).
             let known: Vec<String> = filled
                 .iter()
                 .map(|(p, n)| format!("estudio {n} @ page {p}"))
                 .collect();
+            let detected: std::collections::BTreeSet<u32> =
+                filled.values().copied().collect();
             let title_pages: Vec<u32> = filled.keys().copied().collect();
-            if title_pages.first() == Some(&1) {
+            let single_misread = detected.len() == 1 && title_pages.len() <= 2;
+            if title_pages.first() == Some(&1) && (detected.is_empty() || single_misread) {
                 eprintln!(
                     "  warn: OCR did not see estudio {study} (saw: {}). \
                      Using title-page sequence starting at PDF page 1 as \
@@ -375,13 +481,17 @@ fn study_pages_from_texts(
             } else {
                 bail!(
                     "Estudio {study} not found in {}. Detected: {}. \
-                     Pass --from F -n {study} if page math is known.",
+                     This PDF does not appear to contain estudio {study} — \
+                     prepare the studies that OCR found (e.g. --from {} --to {}), \
+                     or pass --from F -n {study} only if you know page math.",
                     pdf.display(),
                     if known.is_empty() {
                         "(none)".into()
                     } else {
                         known.join(", ")
-                    }
+                    },
+                    detected.iter().next().copied().unwrap_or(study),
+                    detected.iter().next_back().copied().unwrap_or(study),
                 );
             }
         }
@@ -1023,6 +1133,37 @@ LECTURA ANTIFONAL
         let pdf2 = PathBuf::from("Estudio 23-26.pdf");
         assert_eq!(estudio_range_from_filename(&pdf2, 4), Some((23, 26)));
         assert_eq!(estudio_range_from_filename(&pdf, 4), None);
+        // Adult multi-scan name the volunteer used for estudios 7–11.
+        let pdf3 = PathBuf::from("Study 7-11 Adult.pdf");
+        assert_eq!(estudio_range_from_filename(&pdf3, 5), Some((7, 11)));
+    }
+
+    #[test]
+    fn align_batch_prefers_from_to_over_wrong_ocr_badges() {
+        // Five adult title pages; OCR wrongly read 4…8 instead of 7…11.
+        let mut texts = vec![String::new(); 41];
+        for (page, ocr_n) in [(1u32, 4u32), (9, 5), (17, 6), (25, 7), (33, 8)] {
+            texts[(page - 1) as usize] = format!(
+                "ESTUDIO BÍBLICO {ocr_n}\nBase bíblica\n2 Samuel 1:1\n\
+                 Pensamiento central\nTexto áureo\nLECTURA ANTIFONAL"
+            );
+        }
+        // Put RESUMEN near end of each window so content_end works.
+        for page in [8u32, 16, 24, 32, 40] {
+            texts[(page - 1) as usize] = "RESUMEN GENERAL\nalgo".into();
+        }
+        let pdf = PathBuf::from("Study 7-11 Adult.pdf");
+        let studies = [7u32, 8, 9, 10, 11];
+        let aligned =
+            align_batch_to_requested(&pdf, &studies, Audience::Adult, &texts, 41)
+                .unwrap()
+                .expect("should align");
+        assert_eq!(aligned.len(), 5);
+        assert_eq!(aligned[0].study, 7);
+        assert_eq!(aligned[0].pages.0, 1);
+        assert_eq!(aligned[4].study, 11);
+        assert_eq!(aligned[1].study, 8);
+        assert_eq!(aligned[1].pages.0, 9);
     }
 
     #[test]

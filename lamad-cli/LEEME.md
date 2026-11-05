@@ -7,7 +7,7 @@ Herramienta para voluntarios: un solo binario. **No necesita Python.** `lamad --
 ## Tres pasos (zip de voluntarios)
 
 1. Edite `config.toml`:
-   - Elija motor: `agent_provider = "cursor"` (por defecto) o `"chatgpt"`.
+   - Elija motor: `agent_provider = "chatgpt"` (por defecto) o `"cursor"`.
    - Pegue la API key correspondiente:
      - Cursor → `cursor_api_key` ([API Keys](https://cursor.com/dashboard/api))
      - ChatGPT → `openai_api_key` (OpenAI platform)

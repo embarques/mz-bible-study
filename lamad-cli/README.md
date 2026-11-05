@@ -133,15 +133,15 @@ Load order: `--config PATH` → `./config.toml` → `config.toml` beside the bin
 Env overrides: `CURSOR_API_KEY`, `OPENAI_API_KEY`, `LAMAD_AGENT_PROVIDER`. Never commit `config.toml` with secrets (see `.gitignore`).
 
 ```toml
-# Backend: "cursor" (default) or "chatgpt" (alias: "openai")
-agent_provider = "cursor"
-
-cursor_api_key = "crsr_…"
-cursor_model = "composer-2.5"
+# Backend: "chatgpt" (default) or "cursor" (alias: "openai" for chatgpt)
+agent_provider = "chatgpt"
 
 openai_api_key = "sk-…"
 openai_model = "gpt-4o"
 openai_image_model = "gpt-image-1"
+
+cursor_api_key = "crsr_…"
+cursor_model = "composer-2.5"
 
 audience = "youth"
 export_pdf = true
@@ -153,8 +153,8 @@ pdftoppm_path = "tools/pdftoppm"
 
 | Provider | Prepare | Review | Keys |
 |----------|---------|--------|------|
-| **cursor** (default) | Cursor Cloud Agents → artifacts | Cursor agent → REVIEW.md | `cursor_api_key` / `CURSOR_API_KEY` |
-| **chatgpt** | Vision JSON + Images API (3 PNGs) | Local checks + chat QA → REVIEW.md | `openai_api_key` / `OPENAI_API_KEY` |
+| **chatgpt** (default) | Vision JSON + Images API | Local checks + chat QA → REVIEW.md | `openai_api_key` / `OPENAI_API_KEY` |
+| **cursor** | Cursor Cloud Agents → artifacts | Cursor agent → REVIEW.md | `cursor_api_key` / `CURSOR_API_KEY` |
 
 ## Architecture
 

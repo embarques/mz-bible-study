@@ -435,6 +435,7 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
         audience: job.audience,
         provider: creds.provider,
         model: creds.model,
+        openai_model: cfg.openai_model.clone(),
         image_model: creds.image_model,
         api_key: creds.api_key,
         image_api_key: creds.image_api_key,
