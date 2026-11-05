@@ -154,7 +154,7 @@ pub struct PrepareArgs {
     #[arg(long)]
     pub model: Option<String>,
 
-    /// Cloud backend: chatgpt (default) or cursor
+    /// Cloud backend: cursor (default) or chatgpt
     #[arg(long, value_enum)]
     pub provider: Option<ProviderCli>,
 
@@ -216,7 +216,7 @@ pub struct ReviewArgs {
     #[arg(long)]
     pub model: Option<String>,
 
-    /// Cloud backend: chatgpt (default) or cursor
+    /// Cloud backend: cursor (default) or chatgpt
     #[arg(long, value_enum)]
     pub provider: Option<ProviderCli>,
 

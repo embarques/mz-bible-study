@@ -1,6 +1,6 @@
 //! Cloud prepare: rasterize pages → agent backend → study JSON + section PNGs.
 //!
-//! Backends: OpenAI ChatGPT (default) or Cursor Cloud Agents
+//! Backends: Cursor Cloud Agents (default) or OpenAI ChatGPT (secondary / fallback)
 //! ([`super::prepare_openai`]).
 
 use anyhow::{bail, Context, Result};

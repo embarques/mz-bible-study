@@ -2,19 +2,21 @@
 # Load order: --config PATH → ./config.toml → beside the binary → ~/.config/lamad/config.toml
 # Env overrides: CURSOR_API_KEY, OPENAI_API_KEY, LAMAD_AGENT_PROVIDER
 
-# Backend for prepare / review: "chatgpt" (default) or "cursor" (alias: "openai" for chatgpt)
-agent_provider = "chatgpt"
+# Backend for prepare / review: "cursor" (default) or "chatgpt" (alias: "openai")
+agent_provider = "cursor"
 
-# --- ChatGPT / OpenAI (default) ---
+# --- Cursor Cloud Agents (default) ---
+cursor_api_key = ""
+cursor_model = "composer-2.5"
+
+# --- ChatGPT / OpenAI (secondary; also used for host images + Cursor fallback) ---
+# Even with agent_provider = "cursor", set openai_api_key (or OPENAI_API_KEY)
+# to enable the FAST path: Cursor writes JSON only; this machine generates
+# scenic/definición images in parallel via the Images API (~2–3× faster).
+# If Cursor fails with no artifacts, prepare falls back to ChatGPT when this key is set.
 openai_api_key = ""
 openai_model = "gpt-4o"
 openai_image_model = "gpt-image-1"
-
-# --- Cursor Cloud Agents (optional) ---
-# If agent_provider = "cursor", Cursor writes JSON; with openai_api_key set the
-# host still generates scenic/definición images in parallel (fast path).
-cursor_api_key = ""
-cursor_model = "composer-2.5"
 
 audience = "youth"
 export_pdf = true

@@ -1,4 +1,4 @@
-//! Cloud agent backends: ChatGPT / OpenAI (default) or Cursor.
+//! Cloud agent backends: Cursor (default) or ChatGPT / OpenAI (secondary / fallback).
 
 pub mod client;
 pub mod openai;

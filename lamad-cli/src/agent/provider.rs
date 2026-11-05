@@ -4,14 +4,14 @@ use serde::Deserialize;
 use std::fmt;
 use std::str::FromStr;
 
-/// Cloud engine for prepare + review. ChatGPT is the default (more reliable JSON).
+/// Cloud engine for prepare + review. Cursor is the default; ChatGPT is fallback/secondary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AgentProvider {
+    #[default]
     Cursor,
     /// OpenAI ChatGPT API (vision + Images). Accepts aliases `openai` / `chatgpt`.
     #[serde(alias = "openai", alias = "chatgpt")]
-    #[default]
     ChatGpt,
 }
 
