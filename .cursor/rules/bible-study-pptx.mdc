@@ -34,16 +34,18 @@ If **2** is missing on a single non-final study, **ask** for próximo: number, t
 
 ## Adult (`--audience adult`) — HARD
 
-Full guide: `lamad-cli/src/build/adult/LAYOUT_GUIDE.md`. Builder: `lamad-cli` adult path.
+**Gold bar = estudio 7** (`bible-studies/adult/7/` — `EL TIEMPO DE DIOS SIEMPRE ES MEJOR`). Every adult deck must match that care: full verbatim section tree, real unique scenic art (not stubs), Mount Zion logo on intro + A/B bodies, scan-coverage gate, validate + PDF. Church teaching — professional, not “good enough.” Full playbook: **`AGENTS.md` → Adult gold bar**. Layout: `lamad-cli/src/build/adult/LAYOUT_GUIDE.md`.
 
+- **Printed page #s** from the scan (e.g. estudio 7 @ p.59) — not invented PDF-sheet storytelling. Title → `RESUMEN GENERAL`.
 - **No `()`** on Texto Bíblico citations or TEMA/A-B image verse lines (`MATEO 6:1-4`, not `(MATEO 6:1-4)`). Body inline refs may keep `(Libro …)`.
 - **Title/próximo:** strip `<a:highlight>` — no cyan chip behind the title (match youth).
 - **Text overflow:** if text is too big, **decrease the font** (long TEMA/A-B image titles → 18–20pt; A/B body headers → next smaller size, top-anchored). Title must never overlap the verse under the gray line or climb off the top of the slide.
-- **Image slides:** clone youth chrome at bottom-left; **remove** black `!!Rectangle`; force full-bleed `<a:stretch><a:fillRect/></a:stretch>`; scenic pic must be visible. Each TEMA/A-B scenic is its own media part (never share one image file across duplicated slides).
+- **Image slides:** clone youth chrome at bottom-left; **remove** black `!!Rectangle`; force full-bleed `<a:stretch><a:fillRect/></a:stretch>`; scenic pic must be visible. Each TEMA/A-B scenic is its own media part (never share one image file across duplicated slides). **Never deliver placeholder/stub scenics.**
+- **Logo:** every intro body and A/B body slide must show Mount Zion (`Imagen 8`); text above logo top.
 - **Definición y etimología (LOCKED HARD):** exact gold layout only (`reference/definicion-etimologia-design.png` / estudio-4 gold). Change **only** term text, definition text, and left/right icons. **Never** invent a new layout (centered title pill, cartoon hills, play triangles, parchment essay). Host: `lamad prepare --gen-definicion` (OpenAI edits against gold). Layout QC must pass; bad invents are deleted/replaced. Every TEMA with a printed box gets its own card slide.
 - **Pensamiento / Texto Áureo:** correct SmartArt slots; citation on the **next line** under the quote; no `()`; shrink long diagram text.
 - **Texto box:** clamp verse box below “Texto Bíblico” header; no overlap.
-- Output only to repo-root `bible-studies/`. Run QC + validate; no PowerPoint Repair.
+- Output: `bible-studies/adult/{N}/powerpoint/` + `pdf/`. Scan coverage OK + validate; no PowerPoint Repair.
 
 ## Font & bold (HARD — every deck)
 

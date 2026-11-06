@@ -93,6 +93,11 @@ Do not reuse PNGs from another estudio in the same batch.
 
 ## HARD rules
 
+**Quality bar:** match finished **estudio 7** (`EL TIEMPO DE DIOS SIEMPRE ES MEJOR`) —
+precise folder structure, complete verbatim text, and beautiful unique scenic art.
+This is church teaching material: work with care and professionalism. Do not ship
+stub/cartoon placeholders or truncated bodies. See `AGENTS.md` → **Adult gold bar**.
+
 1. **Verbatim Spanish** — copy the print exactly. Fix OCR letter garble only.
    Never paraphrase, summarize, shorten, or “improve” theology.
 2. **Skip** “Ideas para el maestro”, “Preguntas de reflexión”, Afianzamiento,
@@ -106,7 +111,10 @@ Do not reuse PNGs from another estudio in the same batch.
    parentheses (`2 Samuel 5:1`, not `(2 Samuel 5:1)`). Body inline refs may keep
    `(Libro …)` as printed.
 6. **Deliverable** — zip file(s). Do not ask the human to assemble files by hand.
-7. **Segment correctly** — title → RESUMEN per estudio; never page-count math.
+7. **Segment correctly** — title → RESUMEN per estudio using the **printed page
+   number on the scan**; never page-count math / invented sheet indices.
+8. **Scenic images** — real finished art (≈1408×768), unique scene per file,
+   left text-safe treatment, one design family per estudio. No slate stubs.
 
 ---
 

@@ -6,6 +6,23 @@ User-facing summary: [`README.md`](README.md). Template index: [`template/README
 
 **Deliverables every study:** after the `.pptx` is complete and validates, also export a **PDF** beside it (same name, `.pdf`). Do this automatically — do not ask.
 
+### Adult gold bar (HARD — match estudio 7)
+
+**Reference deck:** `bible-studies/adult/7/` (`EL TIEMPO DE DIOS SIEMPRE ES MEJOR`). Every adult estudio must feel like that one: precise structure, full verbatim Spanish, real scenic art, Mount Zion logo on body slides, clean validate + PDF. This is church teaching material — handle it with care and professionalism. Do **not** ship stub cartoons, missing logos, truncated extracts, or “good enough” decks.
+
+| Gate | Required |
+|------|----------|
+| **Printed pages** | Bound by the **page number printed on the scan** (e.g. estudio 7 starts at **p.59**), not invented PDF sheet talk. Discover: title `ESTUDIO BÍBLICO N` → **`RESUMEN GENERAL`**. |
+| **Verbatim folders** | Working source = `studies/adult/{N}/` section tree. Copy print Spanish **word-for-word**. Fix OCR only. Never paraphrase. |
+| **Scan coverage** | After expand/build, `lamad` scan-coverage must pass (section text covers the scan body). If it fails, fill gaps from the scan — do not deliver. |
+| **Real scenic art** | `intro-header`, each `tema-N`, each `ab-N{Letter}` = **unique** finished scenes (~1408×768), left text-safe treatment, one design family per study. **Forbidden to deliver:** slate/cartoon placeholders, ~40KB stubs, identical PNGs. Prefer Cursor (`cursor_api_key`) for images when `openai_api_key` is empty; OpenAI host path only when that key is set. |
+| **Definición cards** | Locked gold layout only (estudio-4 / reference). Verbatim terms from the printed box. |
+| **Mount Zion logo** | Inject on **intro body and every A/B body** slide (`Imagen 8`). Text stays **above** the logo top. |
+| **CLI path** | Prefer `lamad prepare -n N --audience adult -g` (or build from a complete section tree). Output: `bible-studies/adult/{N}/powerpoint/` + `pdf/`. |
+| **Done means** | `lamad validate` **OK** + PDF exported + spot-check one scenic slide, one A/B body (logo present), one Definición card in the PDF. |
+
+If any gate fails, **fix before telling the user it is ready**. Estudios 8+ should match this bar by default — not as a special favor.
+
 ### Git / PR (HARD — protect `main`)
 
 Do **not** commit or land day-to-day work on `main`. Before editing: create `feat/<topic>` (or `fix/…` / `chore/…`), commit there, push, open a **PR into `main`**. Merge only when the user asks. Rule file: [`.cursor/rules/git-branch-pr.mdc`](.cursor/rules/git-branch-pr.mdc).
@@ -351,12 +368,13 @@ Do **not** call a helper that strips `b="1"` from every run with `bold=False` as
 
 These habits are why batch builds stay fast and clean — follow them; don’t reinvent:
 
-1. **Batch PDF workflow** — preview the whole PDF (counts, titles, last study / no Próximo) → wait for OK → build all decks with one reusable builder script (clone known-good → fill text → section images → validate → export PDF). Do not hand-craft each deck from scratch.
-2. **Clone, don’t invent layouts** — copy slide XML from `template/youth/master-template.pptx` or a recent good deck; only swap text/media.
-3. **Hard gates before “done”** — `mzbs validate` OK + `mzbs export-pdf` + spot-check **Propósitos**, **Conclusión font**, **logo floor**, and **one section title/verse** in the PDF.
-4. **Lock lessons into this file + `.cursor/rules/bible-study-pptx.mdc`** when a QA bug is fixed (like Propósitos 36pt). Future sessions read those first.
-5. **One design family per study for section art; change it next study** — generate all three images up front; strip retired `Arc` chrome.
-6. **Surgical fixes only** — when the user says “everything else is good,” patch only the broken slide/part (don’t regenerate the whole deck unless asked).
+1. **Adult = estudio 7 bar** — see **Adult gold bar** above. Precise structure + real images + logos + coverage gate every time.
+2. **Batch PDF workflow** — preview the whole PDF (printed page #s, titles, last study / no Próximo) → wait for OK → build all decks with the CLI (section tree → scenic art → validate → export PDF). Do not hand-craft each deck from scratch.
+3. **Clone, don’t invent layouts** — copy slide XML from `template/youth/master-template.pptx` / adult master / a recent good deck; only swap text/media.
+4. **Hard gates before “done”** — scan coverage OK (adult) + `lamad validate` / `mzbs validate` OK + export PDF + spot-check **logo on A/B body**, **scenic uniqueness**, **Definición gold**, **Propósitos 36pt** (youth), **Conclusión font**.
+5. **Lock lessons into this file + `.cursor/rules/`** when a QA bug is fixed. Future sessions read those first.
+6. **One design family per study for section art; change it next study** — generate all scenic images up front; strip retired `Arc` chrome.
+7. **Surgical fixes only** — when the user says “everything else is good,” patch only the broken slide/part (don’t regenerate the whole deck unless asked).
 ## Implementation notes
 
 - Prefer Python + `xml.etree` for batch OOXML edits.  
