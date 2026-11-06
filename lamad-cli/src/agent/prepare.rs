@@ -871,8 +871,19 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
         images.push(client::image_from_path(r)?);
     }
 
-    let host_images = req.host_images();
-    if host_images {
+    // Adult always JSON-only from Cursor (never wait on Cursor for 10+ PNGs).
+    let host_images = req.host_images() || req.audience == Audience::Adult;
+    if req.audience == Audience::Adult {
+        crate::progress::phase(
+            "adult: Cursor writes JSON only — images = host OpenAI or placeholders",
+        );
+        if !req.host_images() {
+            crate::progress::warn(
+                "openai_api_key not set — will build with PLACEHOLDER images; \
+                 fill art later with --gen-images or drop PNGs into images/",
+            );
+        }
+    } else if host_images {
         crate::progress::phase(
             "fast path ON — agent writes JSON only; host will generate images in parallel (OpenAI)",
         );
@@ -993,30 +1004,30 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
         std::fs::create_dir_all(p)?;
     }
 
-    let resolved = if host_images {
+    let can_host = req
+        .image_api_key
+        .as_ref()
+        .map(|k| !k.trim().is_empty())
+        .unwrap_or(false);
+
+    // Adult (and youth when host_images): JSON only from the agent.
+    // Never hard-fail on missing Cursor image artifacts when the host can fill them.
+    let resolved = if host_images || req.audience == Audience::Adult {
         vec![resolve_json_artifact(req.study, &artifacts, &dest)?]
     } else {
-        match req.audience {
-            Audience::Youth => match resolve_artifacts(req.study, &artifacts, &dest) {
-                Ok(r) => r,
-                Err(e) => {
-                    let can_host = req
-                        .image_api_key
-                        .as_ref()
-                        .map(|k| !k.trim().is_empty())
-                        .unwrap_or(false);
-                    if can_host && artifact_list_has_study_json(req.study, &artifacts) {
-                        crate::progress::warn(format!(
-                            "agent section images incomplete ({e:#}); \
-                             downloading JSON and generating images via OpenAI…"
-                        ));
-                        vec![resolve_json_artifact(req.study, &artifacts, &dest)?]
-                    } else {
-                        return Err(e);
-                    }
+        match resolve_artifacts(req.study, &artifacts, &dest) {
+            Ok(r) => r,
+            Err(e) => {
+                if can_host && artifact_list_has_study_json(req.study, &artifacts) {
+                    crate::progress::warn(format!(
+                        "agent section images incomplete ({e:#}); \
+                         downloading JSON and generating images via OpenAI…"
+                    ));
+                    vec![resolve_json_artifact(req.study, &artifacts, &dest)?]
+                } else {
+                    return Err(e);
                 }
-            },
-            Audience::Adult => resolve_adult_artifacts(req.study, &artifacts, &req.root)?,
+            }
         }
     };
 
@@ -1041,21 +1052,31 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
     if req.audience == Audience::Adult {
         let _ = normalize_adult_agent_json(&dest.json)?;
         stamp_adult_image_paths(&dest.json, req.study, &req.root)?;
+        // Placeholders first → deck can build immediately; host art optional.
+        let text = std::fs::read_to_string(&dest.json)?;
+        let model: crate::model::adult_study::AdultStudy = serde_json::from_str(&text)
+            .with_context(|| format!("parse {} for placeholders", dest.json.display()))?;
+        crate::content::ensure_adult_placeholders(req.study, &model, &req.root)?;
     }
 
-    let can_host = req
-        .image_api_key
-        .as_ref()
-        .map(|k| !k.trim().is_empty())
-        .unwrap_or(false);
-    let need_host_images = host_images
-        || (can_host
-            && req.audience == Audience::Youth
-            && !required_images_present(req.study, req.audience, &req.root));
-
-    if need_host_images {
-        verify_json_only(req.study, req.audience, &req.root)?;
-        crate::agent::prepare_openai::generate_host_images(&req).await?;
+    // Youth: host images here when configured.
+    // Adult: placeholders only — `lib` builds the deck immediately, then refreshes
+    // art in parallel (OpenAI) so a 15‑min Cursor image wait never blocks text→PPTX.
+    if req.audience == Audience::Youth
+        && (host_images
+            || (can_host && !required_images_present(req.study, req.audience, &req.root)))
+    {
+        if can_host {
+            verify_json_only(req.study, req.audience, &req.root)?;
+            match crate::agent::prepare_openai::generate_host_images(&req).await {
+                Ok(()) => {}
+                Err(e) => {
+                    crate::progress::warn(format!(
+                        "host image generation failed ({e:#}) — continuing"
+                    ));
+                }
+            }
+        }
     }
 
     let _ = pdf_page_count;

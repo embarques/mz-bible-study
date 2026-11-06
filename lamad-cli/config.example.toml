@@ -10,11 +10,11 @@ agent_provider = "cursor"
 cursor_api_key = ""
 cursor_model = "composer-2.5"
 
-# --- ChatGPT / OpenAI (secondary; also used for host images + Cursor fallback) ---
-# Even with agent_provider = "cursor", set openai_api_key (or OPENAI_API_KEY)
-# to enable the FAST path: Cursor writes JSON only; this machine generates
-# scenic/definición images in parallel via the Images API (~2–3× faster).
-# If Cursor fails with no artifacts, prepare falls back to ChatGPT when this key is set.
+# --- ChatGPT / OpenAI ---
+# Strongly recommended for adult prepare: Cursor writes JSON only; this machine
+# generates scenic + definición PNGs via the Images API (parallel with the deck
+# build). Without this key, adult still builds using PLACEHOLDER images you can
+# replace later (--gen-images or drop PNGs into studies/adult/{N}/images/).
 openai_api_key = ""
 openai_model = "gpt-4o"
 openai_image_model = "gpt-image-1"

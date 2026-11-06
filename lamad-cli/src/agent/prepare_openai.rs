@@ -277,6 +277,7 @@ async fn generate_adult_images(
                 if is_def
                     && !definicion_only
                     && path.is_file()
+                    && !crate::content::is_placeholder(&path)
                     && crate::build::adult::looks_like_locked_definicion_card(&path)
                 {
                     crate::progress::warn(format!(
@@ -317,6 +318,7 @@ async fn generate_adult_images(
                     std::fs::write(&path, &png)
                         .with_context(|| format!("write {}", path.display()))?;
                 }
+                crate::content::note_real_image(&path);
                 bar.inc(1);
                 Ok(())
             }

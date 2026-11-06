@@ -39,6 +39,16 @@ pub async fn run(mut job: PrepareJob, cfg: &Config) -> Result<()> {
         .unwrap_or(false);
     job.echo_plan(host_images);
 
+    if job.audience == Audience::Adult
+        && (job.generate || job.force_prepare)
+        && !host_images
+    {
+        progress::warn(
+            "openai_api_key not set — adult will use PLACEHOLDER images so the \
+             deck still builds; set the key for real art (or --gen-images later)",
+        );
+    }
+
     let pdf = scans::normalize_pending_inbox(&job.resolve_pdf()?)?;
     let page_count = pdf_page_count(&pdf)?;
 
@@ -445,8 +455,7 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
         pdftoppm_path: cfg.pdftoppm_path.clone(),
     };
 
-    // Adult without --generate: section folder is the source of truth.
-    // Assemble build-cache JSON from disk and skip the cloud agent.
+    // Adult without --generate: section folder on disk → build. No JSON file.
     if job.audience == Audience::Adult
         && !job.generate
         && !job.force_prepare
@@ -455,29 +464,22 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
     {
         if content::has_adult_sections(study) {
             progress::ok(format!(
-                "Section content on disk (studies/adult/{study}/) — skipping extract agent"
+                "Section content on disk (studies/adult/{study}/) — building from folder"
             ));
             let model = content::load_adult_sections(study)?;
-            let json = content::write_adult_build_json(&model, root)?;
-            let _ = agent::prepare::stamp_adult_image_paths(&json, study, root);
+            let _ = content::ensure_adult_placeholders(study, &model, root)?;
+            content::verify_adult_section_images(study, &model, root)?;
+            let study_dir = content::adult_study_folder(study)?;
             if job.prepare_only {
-                progress::ok("prepare-only — section tree → JSON (no PowerPoint)");
+                progress::ok("prepare-only — section tree OK (no PowerPoint)");
                 return Ok(StudyOutput {
                     study,
-                    json,
+                    json: study_dir,
                     pptx: None,
                     pdf: None,
                 });
             }
-            let deliverables = agent::prepare::verify_deliverables(study, job.audience, root)?;
-            let json_path = deliverables.json.clone();
-            let data: serde_json::Value =
-                serde_json::from_str(&std::fs::read_to_string(&json_path)?)?;
-            let title = data
-                .get("titulo")
-                .and_then(|v| v.as_str())
-                .unwrap_or("TITLE");
-            let out = paths::study_pptx_path(job.audience, study, title)?;
+            let out = paths::study_pptx_path(job.audience, study, &model.titulo)?;
             let build_spin = progress::Spinner::start(format!(
                 "Step 4/4 — Building PPTX{}… usually ~1–2 min",
                 if job.export_pdf {
@@ -490,12 +492,11 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
                 paths::master_template(job.audience).expect("template")
             });
             let build_result = tokio::task::spawn_blocking({
-                let json_path = json_path.clone();
+                let model = model.clone();
                 let out = out.clone();
                 let template = template.clone();
                 let export_pdf = job.export_pdf;
-                let audience = job.audience;
-                move || build::build_study(&json_path, &out, Some(&template), audience, export_pdf)
+                move || build::build_adult_from_model(&model, &out, Some(&template), export_pdf)
             })
             .await?;
             match build_result {
@@ -507,6 +508,12 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
                     build_spin.fail("build failed");
                     return Err(e);
                 }
+            }
+            if content::any_placeholders(study, &model, root) {
+                progress::warn(format!(
+                    "deck has PLACEHOLDER images — replace under studies/adult/{study}/images/ \
+                     or run with openai_api_key: lamad prepare -n {study} --audience adult --gen-images"
+                ));
             }
             let pdf = if job.export_pdf {
                 let p = export::default_pdf_path(&out);
@@ -524,7 +531,7 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
             }
             return Ok(StudyOutput {
                 study,
-                json: json_path,
+                json: study_dir,
                 pptx: Some(out),
                 pdf,
             });
@@ -654,32 +661,170 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
         deliverables
     };
 
+    // After generate: expand adult agent JSON into the section folder tree.
+    // Keep `{N}.json` until host images finish (image prompts read it).
+    let mut content_dir = deliverables.json.clone();
+    if job.audience == Audience::Adult && (job.generate || job.force_prepare) {
+        match content::expand_json_to_sections(&deliverables.json, study) {
+            Ok(dir) => {
+                progress::ok(format!(
+                    "Wrote section tree → {}",
+                    rel_from_root(root, &dir)
+                ));
+                content::print_section_inventory(&dir)?;
+                content_dir = dir;
+            }
+            Err(e) => progress::info(format!(
+                "note: could not expand section tree ({e:#}) — keeping agent JSON"
+            )),
+        }
+    }
+
     if job.prepare_only {
+        // Best-effort images in background of prepare-only when key present.
+        if job.audience == Audience::Adult && host_image_key {
+            let creds = cfg.provider_creds()?;
+            let req = make_req(creds);
+            progress::phase("prepare-only: generating host images (best-effort)…");
+            if let Err(e) = agent::prepare_openai::generate_host_images(&req).await {
+                progress::warn(format!(
+                    "images not ready ({e:#}) — section text is saved; run --gen-images later"
+                ));
+            }
+        }
         progress::ok(
-            "prepare-only — JSON + images saved (no PowerPoint). \
-             Re-run without --prepare-only to build the deck.",
+            "prepare-only — content saved (no PowerPoint). \
+             Re-run without --prepare-only to build the deck from the folder.",
         );
         return Ok(StudyOutput {
             study,
-            json: deliverables.json,
+            json: content_dir,
             pptx: None,
             pdf: None,
         });
     }
 
-    // After a generate run, expand adult JSON into the section folder tree
-    // so the next prepare (without -g) can rebuild from disk.
-    if job.audience == Audience::Adult && (job.generate || job.force_prepare) {
-        match content::expand_json_to_sections(&deliverables.json, study) {
-            Ok(dir) => progress::ok(format!(
-                "Wrote section tree → {}",
-                rel_from_root(root, &dir)
+    // Adult: build NOW (placeholders OK), refresh art in parallel, rebuild if art lands.
+    if job.audience == Audience::Adult && content::has_adult_sections(study) {
+        let model = content::load_adult_sections(study)?;
+        let _ = content::ensure_adult_placeholders(study, &model, root)?;
+        content::verify_adult_section_images(study, &model, root)?;
+
+        let out = paths::study_pptx_path(job.audience, study, &model.titulo)?;
+        let template = job
+            .template
+            .clone()
+            .unwrap_or_else(|| paths::master_template(job.audience).expect("template"));
+
+        // Kick off host images while we build the first deck.
+        let image_join = if host_image_key && content::any_placeholders(study, &model, root)
+        {
+            let creds = cfg.provider_creds()?;
+            let req = make_req(creds);
+            progress::phase(
+                "building deck with placeholders while host images generate in parallel…",
+            );
+            Some(tokio::spawn(async move {
+                agent::prepare_openai::generate_host_images(&req).await
+            }))
+        } else {
+            None
+        };
+
+        let build_spin = progress::Spinner::start(format!(
+            "Building PPTX{} (text ready; art may refresh next)…",
+            if job.export_pdf {
+                " + PDF"
+            } else {
+                ""
+            }
+        ));
+        let build_result = tokio::task::spawn_blocking({
+            let model = model.clone();
+            let out = out.clone();
+            let template = template.clone();
+            let export_pdf = job.export_pdf;
+            move || build::build_adult_from_model(&model, &out, Some(&template), export_pdf)
+        })
+        .await?;
+        match build_result {
+            Ok(_) => build_spin.succeed(format!(
+                "built {}",
+                out.file_name().unwrap_or_default().to_string_lossy()
             )),
-            Err(e) => progress::info(format!(
-                "note: could not expand section tree ({e:#}) — JSON build cache still used"
-            )),
+            Err(e) => {
+                build_spin.fail("build failed");
+                return Err(e);
+            }
         }
-        let _ = agent::prepare::stamp_adult_image_paths(&deliverables.json, study, root);
+
+        if let Some(join) = image_join {
+            match join.await {
+                Ok(Ok(())) => {
+                    if !content::any_placeholders(study, &model, root) {
+                        progress::phase("real images ready — rebuilding deck…");
+                        let rebuild = tokio::task::spawn_blocking({
+                            let model = model.clone();
+                            let out = out.clone();
+                            let template = template.clone();
+                            let export_pdf = job.export_pdf;
+                            move || {
+                                build::build_adult_from_model(
+                                    &model,
+                                    &out,
+                                    Some(&template),
+                                    export_pdf,
+                                )
+                            }
+                        })
+                        .await?;
+                        match rebuild {
+                            Ok(_) => progress::ok("deck refreshed with real images"),
+                            Err(e) => progress::warn(format!(
+                                "rebuild after images failed ({e:#}) — first deck kept"
+                            )),
+                        }
+                    } else {
+                        progress::warn(
+                            "some placeholders remain — drop PNGs into images/ or --gen-images",
+                        );
+                    }
+                }
+                Ok(Err(e)) => progress::warn(format!(
+                    "host images failed ({e:#}) — deck kept with placeholders"
+                )),
+                Err(e) => progress::warn(format!(
+                    "image task join failed ({e}) — deck kept with placeholders"
+                )),
+            }
+        } else if content::any_placeholders(study, &model, root) {
+            progress::warn(
+                "deck uses PLACEHOLDER images — set openai_api_key and run \
+                 `lamad prepare -n {study} --audience adult --gen-images`, \
+                 or replace files under studies/adult/{study}/images/",
+            );
+        }
+
+        let pdf = if job.export_pdf {
+            let p = export::default_pdf_path(&out);
+            if p.exists() {
+                Some(p)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        progress::info(format!("  PPTX → {}", rel_from_root(root, &out)));
+        if let Some(ref pdf_path) = pdf {
+            progress::info(format!("  PDF  → {}", rel_from_root(root, pdf_path)));
+        }
+        return Ok(StudyOutput {
+            study,
+            json: content_dir,
+            pptx: Some(out),
+            pdf,
+        });
     }
 
     let json_path = &deliverables.json;

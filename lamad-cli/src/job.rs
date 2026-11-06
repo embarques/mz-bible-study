@@ -152,48 +152,69 @@ impl PrepareJob {
         }
         println!("  Audience: {}", self.audience.as_str());
         if self.generate {
+            let why = if self.prepare_only {
+                "--prepare-only"
+            } else {
+                "-g"
+            };
             println!(
-                "  Generate: on (-g) — extract scan → studies/{}/{{N}}/ then build",
+                "  Generate: on ({why}) — extract scan → studies/{}/{{N}}/",
                 self.audience.as_str()
             );
+            if self.audience == Audience::Adult {
+                println!("  Will write per estudio:");
+                println!("    studies/adult/{{N}}/manifest.toml");
+                println!("    studies/adult/{{N}}/images/");
+                println!("      intro-header.png, tema-{{k}}.png, ab-{{k}}{{L}}.png,");
+                println!("      definicion-{{k}}.png (only when that tema has a def box)");
+                println!("    studies/adult/{{N}}/01-title/ … 08-introduccion/");
+                println!("    studies/adult/{{N}}/NN-tema-{{k}}/ + NN-tema-{{k}}-{{A|B|…}}/");
+                println!("    studies/adult/{{N}}/NN-proximo/  (omit on last estudio)");
+            } else {
+                println!(
+                    "    studies/youth/{{N}}.json + studies/youth/media/{{N}}-section{{1,2,3}}.png"
+                );
+            }
         } else if self.audience == Audience::Adult {
             println!(
-                "  Generate: off — expect studies/adult/{{N}}/ section files \
+                "  Generate: off — build from studies/adult/{{N}}/ section files \
                  (GENERATE_STUDY_AGENT.md)"
             );
         }
         if self.force_prepare {
-            println!("  Resume:   off (--force-prepare — agent will re-create JSON + images)");
+            println!("  Resume:   off (--force-prepare — agent will re-create content)");
         } else if self.gen_definicion {
             println!(
-                "  Resume:   --gen-definicion — keep JSON + scenic; rebuild DEFINICIÓN cards from locked gold"
+                "  Resume:   --gen-definicion — rebuild DEFINICIÓN cards from locked gold"
             );
         } else if self.gen_images {
             println!(
-                "  Resume:   --gen-images — keep JSON, (re)generate images via OpenAI, then build"
+                "  Resume:   --gen-images — (re)generate images via OpenAI, then build"
             );
-        } else {
+        } else if !self.generate {
             println!(
-                "  Resume:   on — if studies/{}/{{N}} already has complete JSON + images, \
-                 skip the agent and rebuild",
+                "  Resume:   on — if studies/{}/{{N}}/ is already complete, rebuild only",
                 self.audience.as_str()
             );
         }
-        if host_images {
-            println!("  Images:   host parallel (OpenAI) — fast path ON");
-        } else {
-            println!(
-                "  Images:   cloud agent (slow) — set openai_api_key / OPENAI_API_KEY for fast path"
-            );
+        if self.generate || self.force_prepare || self.gen_images {
+            if host_images {
+                println!("  Images:   host parallel (OpenAI) — fast path ON");
+            } else {
+                println!(
+                    "  Images:   cloud agent (slow) — set openai_api_key / OPENAI_API_KEY for fast path"
+                );
+            }
         }
         if self.prepare_only {
-            println!("  Deliver:  JSON + images only (--prepare-only — no PowerPoint)");
+            println!(
+                "  Deliver:  content only (--prepare-only) — section files + images; NO PowerPoint"
+            );
         } else {
             println!(
-                "  Deliver:  PowerPoint +{} in bible-studies/",
+                "  Deliver:  content + PowerPoint +{} under {{output_dir}}/{{audience}}/{{N}}/",
                 if self.export_pdf { " PDF" } else { "" }
             );
-            println!("            (JSON + images in studies/{}/)", self.audience.as_str());
         }
         println!(
             "  Review:   {}",

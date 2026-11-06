@@ -91,7 +91,11 @@ pub fn build_study(
                 )),
                 Err(e) => {
                     spin.fail("PDF export failed");
-                    return Err(e);
+                    crate::progress::warn(format!(
+                        "PPTX is ready; PDF export failed ({e:#}). \
+                         Re-run: lamad export-pdf \"{}\"",
+                        output.display()
+                    ));
                 }
             }
         } else {

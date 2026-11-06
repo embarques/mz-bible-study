@@ -170,7 +170,8 @@ async fn real_main() -> Result<()> {
                                 audience: args.audience.into(),
                                 prepare_only: args.prepare_only,
                                 force_prepare: args.force_prepare,
-                                generate: args.generate,
+                                // --prepare-only = extract from PDF only (implies generate)
+                                generate: args.generate || args.prepare_only,
                                 gen_images: args.gen_images,
                                 gen_definicion: args.gen_definicion,
                                 export_pdf: args.export_pdf,
@@ -200,7 +201,8 @@ async fn real_main() -> Result<()> {
                         audience: args.audience.into(),
                         prepare_only: args.prepare_only,
                         force_prepare: args.force_prepare,
-                        generate: args.generate,
+                        // --prepare-only = extract from PDF only (implies generate)
+                        generate: args.generate || args.prepare_only,
                         gen_images: args.gen_images,
                         gen_definicion: args.gen_definicion,
                         export_pdf: args.export_pdf,

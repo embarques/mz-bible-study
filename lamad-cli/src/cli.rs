@@ -110,8 +110,9 @@ pub struct PrepareArgs {
     #[arg(short = 'n', long = "study")]
     pub study: Option<u32>,
 
-    /// JSON + section images only — skips PowerPoint and PDF (power-user / debug)
-    #[arg(long)]
+    /// Extract content from the scan PDF into `studies/…` and **stop** —
+    /// no PowerPoint / PDF. Implies generate (you do **not** need `-g`).
+    #[arg(long = "prepare-only")]
     pub prepare_only: bool,
 
     /// Re-run the cloud agent even when JSON + images already exist locally
@@ -119,10 +120,9 @@ pub struct PrepareArgs {
     #[arg(long = "force-prepare")]
     pub force_prepare: bool,
 
-    /// Extract study content from the scan into `studies/{audience}/{N}/`
-    /// (section folders + images). Without this flag, prepare expects those
-    /// files to already exist (e.g. written by an external agent using
-    /// `GENERATE_STUDY_AGENT.md`).
+    /// Extract from the scan into `studies/{audience}/{N}/` **and** build the
+    /// deck. Without `-g` / `--prepare-only`, prepare expects section files
+    /// already on disk (e.g. from GENERATE_STUDY_AGENT.md).
     #[arg(short = 'g', long = "generate")]
     pub generate: bool,
 

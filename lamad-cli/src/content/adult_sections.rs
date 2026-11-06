@@ -423,20 +423,82 @@ pub fn load_adult_sections(study: u32) -> Result<AdultStudy> {
     })
 }
 
-/// Serialize AdultStudy to `studies/adult/{N}.json` (build cache for existing builder).
-pub fn write_adult_build_json(study: &AdultStudy, _root: &Path) -> Result<PathBuf> {
-    let n = match &study.numero {
-        Numero::Int(n) => *n as u32,
-        Numero::Text(s) => s
-            .chars()
-            .take_while(|c| c.is_ascii_digit())
-            .collect::<String>()
-            .parse()
-            .unwrap_or(0),
-    };
-    let path = paths::studies_dir(crate::job::Audience::Adult)?.join(format!("{n}.json"));
-    fs::write(&path, serde_json::to_string_pretty(study)?)?;
-    Ok(path)
+/// Print a short inventory of what lives under a study section folder.
+pub fn print_section_inventory(study_dir: &Path) -> Result<()> {
+    println!("  Content written:");
+    let mut entries: Vec<String> = Vec::new();
+    if study_dir.join("manifest.toml").is_file() {
+        entries.push("manifest.toml".into());
+    }
+    let images = adult_images_dir(study_dir);
+    if images.is_dir() {
+        let mut pngs: Vec<_> = fs::read_dir(&images)?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("png"))
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        pngs.sort();
+        entries.push(format!("images/ ({} png)", pngs.len()));
+        for p in pngs.iter().take(12) {
+            entries.push(format!("  {p}"));
+        }
+        if pngs.len() > 12 {
+            entries.push(format!("  … +{} more", pngs.len() - 12));
+        }
+    }
+    let mut sections = list_section_dirs(study_dir)?;
+    sections.sort_by_key(|(ord, _, _)| *ord);
+    for (_ord, kind, path) in sections {
+        let name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or(kind);
+        entries.push(format!("{name}/"));
+    }
+    for line in entries {
+        println!("    {line}");
+    }
+    Ok(())
+}
+
+/// Ensure scenic (+ definición when needed) images exist under `{N}/images/`.
+pub fn verify_adult_section_images(study: u32, model: &AdultStudy, root: &Path) -> Result<()> {
+    let media = crate::agent::prepare::adult_media_dir(study, root);
+    let scenic = crate::agent::prepare::adult_scenic_basenames_for(model);
+    let mut missing = Vec::new();
+    for name in &scenic {
+        if !media.join(name).is_file() {
+            missing.push(format!("{}/{}", media.display(), name));
+        }
+    }
+    if !missing.is_empty() {
+        bail!(
+            "adult estudio {study} missing scenic images under {}:\n  {}",
+            media.display(),
+            missing.join("\n  ")
+        );
+    }
+    for (i, tema) in model.temas.iter().enumerate() {
+        if tema.definiciones.is_empty() {
+            continue;
+        }
+        let name = format!("definicion-{}.png", i + 1);
+        let p = media.join(&name);
+        if !p.is_file() {
+            bail!(
+                "adult estudio {study}: missing {name} (tema {} has definición text). \
+                 Put it in {}",
+                i + 1,
+                media.display()
+            );
+        }
+        crate::build::adult::assert_locked_definicion_card(&p).with_context(|| {
+            format!(
+                "adult estudio {study}: {name} failed locked DEFINICIÓN layout QC"
+            )
+        })?;
+    }
+    Ok(())
 }
 
 /// Expand an existing adult JSON (+ optional flat media dir) into the section tree.

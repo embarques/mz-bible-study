@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use crate::job::Audience;
+use crate::model::adult_study::AdultStudy;
 
 /// Build a study deck for the requested audience.
 pub fn build_study(
@@ -32,4 +33,14 @@ pub fn build_study(
         Audience::Youth => study::build_study(study_path, output, template, export_pdf),
         Audience::Adult => adult::study::build_study(study_path, output, template, export_pdf),
     }
+}
+
+/// Adult: build from an in-memory study (section folders → model → PPTX).
+pub fn build_adult_from_model(
+    study: &AdultStudy,
+    output: &Path,
+    template: Option<&Path>,
+    export_pdf: bool,
+) -> Result<PathBuf> {
+    adult::study::build_from_model(study, output, template, export_pdf)
 }

@@ -55,16 +55,25 @@ pub fn build_study(
     let study_path = study_path
         .canonicalize()
         .with_context(|| format!("study JSON not found: {}", study_path.display()))?;
+    let text = std::fs::read_to_string(&study_path)
+        .with_context(|| format!("read {}", study_path.display()))?;
+    let study: AdultStudy = serde_json::from_str(&text)
+        .with_context(|| format!("parse adult study JSON: {}", study_path.display()))?;
+    build_from_model(&study, output, template, export_pdf)
+}
+
+/// Build an adult deck from an in-memory [`AdultStudy`] (section-folder path).
+pub fn build_from_model(
+    study: &AdultStudy,
+    output: &Path,
+    template: Option<&Path>,
+    export_pdf: bool,
+) -> Result<PathBuf> {
     let output = if output.is_absolute() {
         output.to_path_buf()
     } else {
         std::env::current_dir()?.join(output)
     };
-
-    let text = std::fs::read_to_string(&study_path)
-        .with_context(|| format!("read {}", study_path.display()))?;
-    let study: AdultStudy = serde_json::from_str(&text)
-        .with_context(|| format!("parse adult study JSON: {}", study_path.display()))?;
 
     let root = paths::project_root()?;
     let base_pptx = if let Some(t) = template {
@@ -89,7 +98,7 @@ pub fn build_study(
     ooxml::unzip_pptx(&base_pptx, &work)?;
     ooxml::fix_package_ns0(&work)?;
     ooxml::fix_notes_slide_rels(&work)?;
-    let order = apply_adult_study(&work, &study)?;
+    let order = apply_adult_study(&work, study)?;
     ooxml::set_active_order(&work, &order)?;
     ooxml::fix_package_ns_prefixes(&work)?;
 
@@ -118,7 +127,11 @@ pub fn build_study(
                 )),
                 Err(e) => {
                     spin.fail("PDF export failed");
-                    return Err(e);
+                    crate::progress::warn(format!(
+                        "PPTX is ready; PDF export failed ({e:#}). \
+                         Re-run: lamad export-pdf \"{}\"",
+                        output.display()
+                    ));
                 }
             }
         } else {
