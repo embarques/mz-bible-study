@@ -77,7 +77,7 @@ impl CloudAgentProgress {
         eprintln!("      What the agent is doing now:");
         eprintln!("        1. Read the PDF page images (already uploaded)");
         eprintln!(
-            "        2. Write artifacts/{}.json",
+            "        2. Extract study text → artifacts/{}.json (temp; then expands to folders)",
             self.study
         );
         if self.json_only {
@@ -162,14 +162,14 @@ impl CloudAgentProgress {
         let s = status.to_uppercase();
         let sub = if self.json_only {
             if !self.json_done {
-                format!("writing {}.json", self.study)
+                format!("extracting text → {}.json", self.study)
             } else {
                 "closing run (host images next)".to_string()
             }
         } else if !self.json_done {
-            format!("3a writing {}.json", self.study)
+            format!("3a extracting text → {}.json", self.study)
         } else if self.images_done < self.images_total {
-            format!("3b images {}/{}", self.images_done, self.images_total)
+            format!("3b Cursor images {}/{}", self.images_done, self.images_total)
         } else {
             "3c closing run".to_string()
         };

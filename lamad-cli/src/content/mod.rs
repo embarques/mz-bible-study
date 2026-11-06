@@ -6,6 +6,7 @@
 
 pub mod adult_sections;
 pub mod placeholders;
+pub mod scan_coverage;
 
 pub use adult_sections::{
     adult_study_folder, expand_json_to_sections, has_adult_sections, load_adult_sections,
@@ -14,3 +15,4 @@ pub use adult_sections::{
 pub use placeholders::{
     any_placeholders, ensure_adult_placeholders, is_placeholder, note_real_image,
 };
+pub use scan_coverage::{assert_adult_scan_coverage, verify_adult_scan_coverage};

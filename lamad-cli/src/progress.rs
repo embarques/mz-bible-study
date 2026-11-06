@@ -149,8 +149,9 @@ pub fn print_prepare_eta(
     if host_images {
         eprintln!("    Fast path: OPENAI_API_KEY set — Rust generates images in parallel.");
     } else {
-        eprintln!("    Tip: set openai_api_key / OPENAI_API_KEY (even with Cursor) for the");
-        eprintln!("    fast path — agent JSON only + host parallel images (~2–3× faster).");
+        eprintln!("    Images: Cursor cloud agent (cursor_api_key) generates scenic art.");
+        eprintln!("    Optional: openai_api_key / OPENAI_API_KEY enables the host fast path");
+        eprintln!("    (agent JSON only + host parallel images, ~2–3× faster).");
     }
     eprintln!("    Note: Rust build is ~10s; wait is cloud/API image work, not the CLI.");
     eprintln!("    Resume skips work when JSON+images already exist. Watch >>> NOW Step N/4.");

@@ -171,13 +171,7 @@ fn align_batch_to_requested(
             }
             let proximo_title_page =
                 next_title.filter(|p| (*p as usize) <= page_count);
-            println!(
-                "  Discovered estudio {study} (adult) at PDF pages {start}–{end}{}",
-                match proximo_title_page {
-                    Some(p) => format!(" (próximo title page {p})"),
-                    None => " (no Próximo in PDF)".into(),
-                }
-            );
+            print_discovered(study, audience, start, end, proximo_title_page, texts);
             out.push(StudyPages {
                 study,
                 pages: (start, end),
@@ -252,13 +246,6 @@ pub fn discover_all_study_pages(
             Audience::Adult => next_title.filter(|p| (*p as usize) <= page_count),
             Audience::Youth => next_title.filter(|p| (*p as usize) <= page_count),
         };
-        println!(
-            "  Discovered estudio {study} at PDF pages {start}–{end}{}",
-            match proximo_title_page {
-                Some(p) => format!(" (próximo title page {p})"),
-                None => " (no Próximo in PDF)".into(),
-            }
-        );
         out.push(StudyPages {
             study,
             pages: (start, end),
@@ -269,6 +256,16 @@ pub fn discover_all_study_pages(
     // Title-page order (not OCR badge digits — tesseract often misreads “1” as “57”, etc.).
     out.sort_by_key(|s| s.pages.0);
     renumber_discovered_estudios(pdf, &mut out);
+    for s in out.iter() {
+        print_discovered(
+            s.study,
+            audience,
+            s.pages.0,
+            s.pages.1,
+            s.proximo_title_page,
+            &texts,
+        );
+    }
 
     crate::progress::ok(format!(
         "Discovered {} estudio{} in {} ({})",
@@ -447,6 +444,33 @@ fn study_pages_from_texts(
         )
     })?;
 
+    // Filename span wins over misread OCR badges: `Study 7-11 Adult.pdf` + `-n 7`
+    // → 1st title page (printed p.59), never a later sheet whose badge OCR said "7".
+    if let Some((from, to)) = estudio_span_from_filename(pdf) {
+        if (from..=to).contains(&study) {
+            let title_pages: Vec<u32> = filled.keys().copied().collect();
+            let idx = (study - from) as usize;
+            if idx < title_pages.len() {
+                let aligned = title_pages[idx];
+                let ocr_at = filled.iter().find(|(_, n)| **n == study).map(|(p, _)| *p);
+                if ocr_at != Some(aligned) {
+                    eprintln!(
+                        "  warn: aligning estudio {study} to title page order from \
+                         filename span {from}–{to} → PDF sheet {aligned} \
+                         (OCR badge had mapped it elsewhere: {ocr_at:?})"
+                    );
+                    filled.clear();
+                    for (i, &p) in title_pages.iter().enumerate() {
+                        let n = from + i as u32;
+                        if n <= to {
+                            filled.insert(p, n);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let start = match filled.iter().find(|(_, n)| **n == study).map(|(p, _)| *p) {
         Some(p) => p,
         None => {
@@ -455,7 +479,7 @@ fn study_pages_from_texts(
             // that does not include N (that remapped 10/11 onto estudio 4's pages).
             let known: Vec<String> = filled
                 .iter()
-                .map(|(p, n)| format!("estudio {n} @ page {p}"))
+                .map(|(p, n)| format!("estudio {n} @ PDF sheet {p}"))
                 .collect();
             let detected: std::collections::BTreeSet<u32> =
                 filled.values().copied().collect();
@@ -464,20 +488,19 @@ fn study_pages_from_texts(
             if title_pages.first() == Some(&1) && (detected.is_empty() || single_misread) {
                 eprintln!(
                     "  warn: OCR did not see estudio {study} (saw: {}). \
-                     Using title-page sequence starting at PDF page 1 as \
-                     estudio {study}, {}…",
+                     Using first title page in the PDF as estudio {study} \
+                     (check the printed page # on that scan — e.g. 59 for estudio 7)",
                     if known.is_empty() {
                         "none".into()
                     } else {
                         known.join(", ")
                     },
-                    study + 1
                 );
                 filled.clear();
                 for (i, &p) in title_pages.iter().enumerate() {
                     filled.insert(p, study + i as u32);
                 }
-                1
+                title_pages[0]
             } else {
                 bail!(
                     "Estudio {study} not found in {}. Detected: {}. \
@@ -518,20 +541,78 @@ fn study_pages_from_texts(
 
     let proximo_title_page = next_title.filter(|p| (*p as usize) <= page_count);
 
-    println!(
-        "  Discovered estudio {study} ({}) at PDF pages {start}–{end}{}",
-        audience.as_str(),
-        match proximo_title_page {
-            Some(p) => format!(" (próximo title page {p})"),
-            None => " (no Próximo in PDF)".into(),
-        }
-    );
+    print_discovered(study, audience, start, end, proximo_title_page, texts);
 
     Ok(StudyPages {
         study,
         pages: (start, end),
         proximo_title_page,
     })
+}
+
+/// Printed footer page # from scan OCR (book page, e.g. 59) — not the PDF sheet index.
+fn printed_page_number(text: &str) -> Option<u32> {
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    // Footer page is usually a lone 2–3 digit number near the bottom.
+    let start = lines.len().saturating_sub(20);
+    for ln in lines[start..].iter().rev() {
+        if let Ok(n) = ln.parse::<u32>() {
+            if (10..=999).contains(&n) {
+                return Some(n);
+            }
+        }
+    }
+    None
+}
+
+fn print_discovered(
+    study: u32,
+    audience: Audience,
+    start: u32,
+    end: u32,
+    proximo_title_page: Option<u32>,
+    texts: &[String],
+) {
+    let printed_start = texts
+        .get(start.saturating_sub(1) as usize)
+        .and_then(|t| printed_page_number(t));
+    let printed_end = texts
+        .get(end.saturating_sub(1) as usize)
+        .and_then(|t| printed_page_number(t));
+    let prox = match proximo_title_page {
+        Some(p) => {
+            let pp = texts
+                .get(p.saturating_sub(1) as usize)
+                .and_then(|t| printed_page_number(t));
+            match pp {
+                Some(n) => format!(" (próximo title ≈ printed p.{n})"),
+                None => format!(" (próximo title PDF sheet {p})"),
+            }
+        }
+        None => " (no Próximo in PDF)".into(),
+    };
+    match (printed_start, printed_end) {
+        (Some(a), Some(b)) => println!(
+            "  Discovered estudio {study} ({}) at printed pages {a}–{b} \
+             (PDF sheets {start}–{end}){prox}",
+            audience.as_str()
+        ),
+        (Some(a), None) => println!(
+            "  Discovered estudio {study} ({}) at printed page {a}→… \
+             (PDF sheets {start}–{end}){prox}",
+            audience.as_str()
+        ),
+        _ => println!(
+            "  Discovered estudio {study} ({}) at PDF sheets {start}–{end}{prox} \
+             — could not read printed footer page #s; use the page number printed \
+             on the scan (not the PDF sheet index)",
+            audience.as_str()
+        ),
+    }
 }
 
 fn page_texts(
@@ -853,15 +934,21 @@ fn is_title_page(t: &str) -> bool {
         || (has_estudio_badge && has_pensamiento && has_aureo && has_objetivos)
 }
 
-/// Parse `Bible study 1-8.pdf`, `Estudio 23-26.pdf`, etc. when the span matches
-/// how many title pages OCR found.
-fn estudio_range_from_filename(pdf: &Path, discovered_count: usize) -> Option<(u32, u32)> {
+/// Parse `Study 7-11 Adult.pdf` → `(7, 11)` regardless of how many titles OCR found.
+fn estudio_span_from_filename(pdf: &Path) -> Option<(u32, u32)> {
     let name = pdf.file_name()?.to_str()?;
     let re = Regex::new(r"(?i)(?:estudio|study|bible\s+study)?\s*(\d+)\s*[-–]\s*(\d+)").ok()?;
     let caps = re.captures(name)?;
     let start: u32 = caps.get(1)?.as_str().parse().ok()?;
     let end: u32 = caps.get(2)?.as_str().parse().ok()?;
-    if end >= start && (end - start + 1) as usize == discovered_count {
+    (end >= start).then_some((start, end))
+}
+
+/// Parse `Bible study 1-8.pdf`, `Estudio 23-26.pdf`, etc. when the span matches
+/// how many title pages OCR found.
+fn estudio_range_from_filename(pdf: &Path, discovered_count: usize) -> Option<(u32, u32)> {
+    let (start, end) = estudio_span_from_filename(pdf)?;
+    if (end - start + 1) as usize == discovered_count {
         Some((start, end))
     } else {
         None
@@ -916,18 +1003,6 @@ fn renumber_discovered_estudios(pdf: &Path, out: &mut [StudyPages]) {
             start,
             start + out.len() as u32 - 1
         );
-        for s in out.iter() {
-            println!(
-                "  Discovered estudio {} at PDF pages {}–{}{}",
-                s.study,
-                s.pages.0,
-                s.pages.1,
-                match s.proximo_title_page {
-                    Some(p) => format!(" (próximo title page {p})"),
-                    None => " (no Próximo in PDF)".into(),
-                }
-            );
-        }
     }
 }
 
@@ -1036,6 +1111,11 @@ fn fill_sequence(
 
 /// Resolve a CLI tool, preferring Apple Silicon Homebrew (`/opt/homebrew/bin`)
 /// over Intel `/usr/local/bin` (which raises “Bad CPU type” / os error 86 on arm64).
+/// Resolve `tesseract` on PATH (prefer Apple Silicon Homebrew over Intel).
+pub fn tesseract_bin() -> Option<PathBuf> {
+    which("tesseract")
+}
+
 fn which(name: &str) -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     for prefix in [
@@ -1073,9 +1153,9 @@ fn which(name: &str) -> Option<PathBuf> {
 
 /// Human-readable line for `lamad doctor`.
 pub fn doctor_line() -> String {
-    match which("tesseract") {
-        Some(p) => format!("tesseract: OK — {} (used for -n discover)", p.display()),
-        None => "tesseract: MISSING — needed for -n discover on scan PDFs \
+    match tesseract_bin() {
+        Some(p) => format!("tesseract: OK — {} (used for -n discover + scan coverage)", p.display()),
+        None => "tesseract: MISSING — needed for -n discover / scan coverage \
                  (`brew install tesseract tesseract-lang`; on Apple Silicon use /opt/homebrew)"
             .into(),
     }
@@ -1164,6 +1244,33 @@ LECTURA ANTIFONAL
         assert_eq!(aligned[4].study, 11);
         assert_eq!(aligned[1].study, 8);
         assert_eq!(aligned[1].pages.0, 9);
+    }
+
+    #[test]
+    fn single_n_on_span_pdf_uses_title_order_not_misread_badge() {
+        // Same wrong OCR as above: badge "7" lands on PDF sheet 25.
+        // `-n 7` alone must still start at the first title (printed ~59), not 25.
+        let mut texts = vec![String::new(); 41];
+        for (page, ocr_n) in [(1u32, 4u32), (9, 5), (17, 6), (25, 7), (33, 8)] {
+            let mut body = format!(
+                "ESTUDIO BÍBLICO {ocr_n}\nBase bíblica\n2 Samuel 1:1\n\
+                 Pensamiento central\nTexto áureo\nLECTURA ANTIFONAL\n"
+            );
+            // Footer printed page roughly: sheet 1 → 59, sheet 25 → 83.
+            let printed = 58 + page;
+            body.push_str(&format!("\n{printed}\n"));
+            texts[(page - 1) as usize] = body;
+        }
+        for page in [8u32, 16, 24, 32, 40] {
+            texts[(page - 1) as usize] = format!("RESUMEN GENERAL\n{}\n", 58 + page);
+        }
+        let pdf = PathBuf::from("Study 7-11 Adult.pdf");
+        let got = study_pages_from_texts(&pdf, 7, Audience::Adult, &texts, 41).unwrap();
+        assert_eq!(got.study, 7);
+        assert_eq!(got.pages.0, 1, "estudio 7 must start at first title page");
+        assert_ne!(got.pages.0, 25);
+        assert_eq!(estudio_span_from_filename(&pdf), Some((7, 11)));
+        assert_eq!(printed_page_number("foo\n59\n"), Some(59));
     }
 
     #[test]

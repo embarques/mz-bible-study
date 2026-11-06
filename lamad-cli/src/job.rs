@@ -202,7 +202,8 @@ impl PrepareJob {
                 println!("  Images:   host parallel (OpenAI) — fast path ON");
             } else {
                 println!(
-                    "  Images:   cloud agent (slow) — set openai_api_key / OPENAI_API_KEY for fast path"
+                    "  Images:   Cursor cloud agent (cursor_api_key) — \
+                     optional openai_api_key for host-parallel fast path"
                 );
             }
         }

@@ -790,7 +790,8 @@ pub async fn run_prepare_agent(req: PrepareRequest) -> Result<Deliverables> {
                     .filter(|s| !s.is_empty())
                 else {
                     return Err(cursor_err).context(
-                        "Cursor prepare failed and no openai_api_key is set for ChatGPT fallback",
+                        "Cursor prepare failed (transient API errors were already retried) — \
+                         re-run the same command to resume",
                     );
                 };
                 crate::progress::warn(format!(
@@ -871,26 +872,20 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
         images.push(client::image_from_path(r)?);
     }
 
-    // Adult always JSON-only from Cursor (never wait on Cursor for 10+ PNGs).
-    let host_images = req.host_images() || req.audience == Audience::Adult;
-    if req.audience == Audience::Adult {
+    // Fast path: openai_api_key set → Cursor = JSON only, host OpenAI = images.
+    // Otherwise Cursor generates images with the Cursor cloud agent (same as before).
+    let host_images = req.host_images();
+    if host_images {
         crate::progress::phase(
-            "adult: Cursor writes JSON only — images = host OpenAI or placeholders",
+            "fast path ON — Cursor writes JSON only; host OpenAI generates images in parallel",
         );
-        if !req.host_images() {
-            crate::progress::warn(
-                "openai_api_key not set — will build with PLACEHOLDER images; \
-                 fill art later with --gen-images or drop PNGs into images/",
-            );
-        }
-    } else if host_images {
+    } else if req.audience == Audience::Adult {
         crate::progress::phase(
-            "fast path ON — agent writes JSON only; host will generate images in parallel (OpenAI)",
+            "Cursor will generate adult scenic + definición images (via Cursor agent / your Cursor key)",
         );
     } else {
-        crate::progress::warn(
-            "openai_api_key not set — Cursor will also generate images (slow). \
-             Set openai_api_key / OPENAI_API_KEY for the fast path.",
+        crate::progress::phase(
+            "Cursor will generate section images (set openai_api_key for host-parallel fast path)",
         );
     }
 
@@ -1010,24 +1005,33 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
         .map(|k| !k.trim().is_empty())
         .unwrap_or(false);
 
-    // Adult (and youth when host_images): JSON only from the agent.
-    // Never hard-fail on missing Cursor image artifacts when the host can fill them.
-    let resolved = if host_images || req.audience == Audience::Adult {
+    let resolved = if host_images {
+        // OpenAI host path: never wait on Cursor for image files.
         vec![resolve_json_artifact(req.study, &artifacts, &dest)?]
     } else {
-        match resolve_artifacts(req.study, &artifacts, &dest) {
-            Ok(r) => r,
-            Err(e) => {
-                if can_host && artifact_list_has_study_json(req.study, &artifacts) {
-                    crate::progress::warn(format!(
-                        "agent section images incomplete ({e:#}); \
-                         downloading JSON and generating images via OpenAI…"
-                    ));
-                    vec![resolve_json_artifact(req.study, &artifacts, &dest)?]
-                } else {
-                    return Err(e);
+        match req.audience {
+            Audience::Youth => match resolve_artifacts(req.study, &artifacts, &dest) {
+                Ok(r) => r,
+                Err(e) => {
+                    if can_host && artifact_list_has_study_json(req.study, &artifacts) {
+                        crate::progress::warn(format!(
+                            "agent section images incomplete ({e:#}); \
+                             downloading JSON and generating images via OpenAI…"
+                        ));
+                        vec![resolve_json_artifact(req.study, &artifacts, &dest)?]
+                    } else if artifact_list_has_study_json(req.study, &artifacts) {
+                        crate::progress::warn(format!(
+                            "agent section images incomplete ({e:#}); \
+                             downloading JSON — placeholders will fill gaps"
+                        ));
+                        vec![resolve_json_artifact(req.study, &artifacts, &dest)?]
+                    } else {
+                        return Err(e);
+                    }
                 }
-            }
+            },
+            // Cursor image path: take whatever art Cursor returned; placeholders fill gaps.
+            Audience::Adult => resolve_adult_artifacts(req.study, &artifacts, &req.root)?,
         }
     };
 
@@ -1046,7 +1050,13 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
         resolved.len(),
         if resolved.len() == 1 { "" } else { "s" }
     ));
-    download_resolved_artifacts(&client, &created.agent.id, resolved).await?;
+    download_resolved_artifacts(
+        &client,
+        &created.agent.id,
+        resolved,
+        req.audience == Audience::Adult,
+    )
+    .await?;
 
     stamp_audience(&dest.json, req.audience)?;
     if req.audience == Audience::Adult {
@@ -1060,8 +1070,8 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
     }
 
     // Youth: host images here when configured.
-    // Adult: placeholders only — `lib` builds the deck immediately, then refreshes
-    // art in parallel (OpenAI) so a 15‑min Cursor image wait never blocks text→PPTX.
+    // Adult: Cursor art (when not host_images) is already downloaded; placeholders
+    // fill gaps and `lib` refreshes them via host OpenAI when that key is set.
     if req.audience == Audience::Youth
         && (host_images
             || (can_host && !required_images_present(req.study, req.audience, &req.root)))
@@ -1134,6 +1144,7 @@ async fn download_resolved_artifacts(
     client: &CursorClient,
     agent_id: &str,
     resolved: Vec<(String, PathBuf)>,
+    placeholders_fill_gaps: bool,
 ) -> Result<()> {
     let dl_bar = crate::progress::bar(resolved.len() as u64, "Downloading artifacts");
     {
@@ -1169,22 +1180,51 @@ async fn download_resolved_artifacts(
                         bar.inc(1);
                         return Ok(());
                     }
-                    client
-                        .download_artifact_quiet(&agent_id, &art_path, &dest_path)
-                        .await?;
-                    if dest_path.extension().and_then(|e| e.to_str()) == Some("png") {
-                        ensure_png_file(&dest_path)?;
+                    let is_image = dest_path.extension().and_then(|e| e.to_str()) == Some("png");
+                    let fetched: Result<()> = async {
+                        client
+                            .download_artifact_quiet(&agent_id, &art_path, &dest_path)
+                            .await?;
+                        if is_image {
+                            ensure_png_file(&dest_path)?;
+                        }
+                        Ok(())
+                    }
+                    .await;
+                    if let Err(e) = fetched {
+                        if !is_image || !placeholders_fill_gaps {
+                            return Err(e);
+                        }
+                        let _ = std::fs::remove_file(&dest_path);
+                        crate::progress::warn(format!(
+                            "could not download {art_path} ({}) — placeholder will fill it",
+                            short_err(&e)
+                        ));
+                        bar.inc(1);
+                        return Ok(());
                     }
                     if is_def {
                         if let Err(e) =
                             crate::build::adult::assert_locked_definicion_card(&dest_path)
                         {
                             let _ = std::fs::remove_file(&dest_path);
-                            return Err(e).context(
-                                "agent DEFINICIÓN art rejected — layout is HARD-locked; \
-                                 set openai_api_key so the host can reference-edit the gold card",
-                            );
+                            if !placeholders_fill_gaps {
+                                return Err(e).context(
+                                    "agent DEFINICIÓN art rejected — layout is HARD-locked",
+                                );
+                            }
+                            crate::progress::warn(format!(
+                                "Cursor DEFINICIÓN art rejected by locked-layout QC ({}) — \
+                                 gold-card placeholder will fill it; refine later with \
+                                 --gen-definicion (needs openai_api_key)",
+                                short_err(&e)
+                            ));
+                            bar.inc(1);
+                            return Ok(());
                         }
+                    }
+                    if is_image {
+                        crate::content::note_real_image(&dest_path);
                     }
                     bar.inc(1);
                     Ok(())
@@ -1208,8 +1248,8 @@ async fn download_resolved_artifacts(
 ///
 /// Required scenic count is **variable** (temas × points). We accept any
 /// `intro-header` / `tema-N` / `ab-N{Letter}` / `definicion-N` stems present;
-/// hard-fail only when `intro-header` or all tema/ab slots are missing.
-/// [`verify_adult_deliverables`] checks completeness against the JSON after download.
+/// hard-fail only when `{N}.json` is missing. Missing image slots get placeholders
+/// after download ([`crate::content::ensure_adult_placeholders`]).
 fn resolve_adult_artifacts(
     study: u32,
     artifacts: &[Artifact],
@@ -1273,20 +1313,15 @@ fn resolve_adult_artifacts(
 
     if !got_intro || tema_n == 0 || ab_n == 0 {
         let found: Vec<&str> = artifacts.iter().map(|a| a.path.as_str()).collect();
-        bail!(
-            "adult prepare missing required scenic images for estudio {study} \
-             (need intro-header + ≥1 tema-N + ≥1 ab-N{{Letter}}; \
-             got intro={got_intro} tema={tema_n} ab={ab_n}). \
-             Artifacts found ({}): {:?}. \
-             Tip: JPG under artifacts/assets/ is OK (converted to PNG).",
-            found.len(),
-            found
-        );
+        crate::progress::warn(format!(
+            "adult prepare: Cursor returned incomplete scenic art for estudio {study} \
+             (intro={got_intro} tema={tema_n} ab={ab_n}; artifacts={found:?}). \
+             Downloading what we have — placeholders fill the rest."
+        ));
     }
     if def_n == 0 {
         crate::progress::warn(format!(
-            "adult prepare: no definición cards in artifacts — continuing; \
-             generate definicion-N.png when a tema has a printed «Definiciones» box"
+            "adult prepare: no definición cards in artifacts — placeholders / host will fill"
         ));
     }
     Ok(out)
@@ -1800,6 +1835,25 @@ mod tests {
         assert_eq!(resolved.len(), 1 + 10); // json + intro + 3 tema + 6 ab
         assert!(resolved.iter().any(|(_, d)| d.ends_with("ab-1A.png")));
         assert!(resolved.iter().any(|(src, _)| src.ends_with("ab-1A.jpg")));
+    }
+
+    #[test]
+    fn adult_incomplete_scenic_art_still_resolves() {
+        let root = PathBuf::from("/repo");
+        let arts = vec![
+            art("artifacts/7.json"),
+            art("artifacts/assets/intro-header.jpg"),
+        ];
+        let resolved = resolve_adult_artifacts(7, &arts, &root).expect("lenient");
+        assert_eq!(resolved.len(), 2);
+        assert!(resolved.iter().any(|(_, d)| d.ends_with("intro-header.png")));
+    }
+
+    #[test]
+    fn adult_without_json_still_errors() {
+        let root = PathBuf::from("/repo");
+        let arts = vec![art("artifacts/assets/intro-header.jpg")];
+        assert!(resolve_adult_artifacts(7, &arts, &root).is_err());
     }
 
     #[test]

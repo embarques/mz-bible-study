@@ -12,6 +12,17 @@ use std::time::Duration;
 
 const API_BASE: &str = "https://api.cursor.com";
 
+/// Retries for idempotent GETs on transient failures (5xx / 429 / network).
+const TRANSIENT_RETRIES: u32 = 5;
+
+fn is_transient_status(status: reqwest::StatusCode) -> bool {
+    status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+}
+
+fn retry_backoff(attempt: u32) -> Duration {
+    Duration::from_secs((2u64 << attempt.min(4)).min(30))
+}
+
 #[derive(Debug, Clone)]
 pub struct CursorClient {
     http: reqwest::Client,
@@ -94,6 +105,44 @@ impl CursorClient {
         format!("Basic {token}")
     }
 
+    /// Send an idempotent request, retrying transient HTTP 5xx / 429 / network
+    /// errors with backoff. Returns the final status + body (success or not).
+    async fn send_with_retry(
+        &self,
+        what: &str,
+        build: impl Fn() -> reqwest::RequestBuilder,
+    ) -> Result<(reqwest::StatusCode, String)> {
+        let mut attempt = 0u32;
+        loop {
+            let outcome = match build().send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    let text = resp.text().await.unwrap_or_default();
+                    if !is_transient_status(status) || attempt >= TRANSIENT_RETRIES {
+                        return Ok((status, text));
+                    }
+                    format!("HTTP {status}")
+                }
+                Err(e) => {
+                    if attempt >= TRANSIENT_RETRIES {
+                        return Err(e).with_context(|| {
+                            format!("{what} failed after {TRANSIENT_RETRIES} retries")
+                        });
+                    }
+                    format!("{e}")
+                }
+            };
+            let wait = retry_backoff(attempt);
+            attempt += 1;
+            crate::progress::warn(format!(
+                "{what}: transient Cursor API error ({outcome}) — retry \
+                 {attempt}/{TRANSIENT_RETRIES} in {}s…",
+                wait.as_secs()
+            ));
+            tokio::time::sleep(wait).await;
+        }
+    }
+
     /// Create a no-repo cloud agent with initial run.
     pub async fn create_agent(
         &self,
@@ -161,17 +210,19 @@ impl CursorClient {
     }
 
     pub async fn get_run(&self, agent_id: &str, run_id: &str) -> Result<RunStatus> {
-        let resp = self
-            .http
-            .get(format!("{API_BASE}/v1/agents/{agent_id}/runs/{run_id}"))
-            .header(AUTHORIZATION, self.auth_header())
-            .send()
-            .await
-            .context("GET run failed")?;
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
+        let url = format!("{API_BASE}/v1/agents/{agent_id}/runs/{run_id}");
+        let (status, text) = self
+            .send_with_retry("get run", || {
+                self.http.get(&url).header(AUTHORIZATION, self.auth_header())
+            })
+            .await?;
         if !status.is_success() {
-            bail!("get run HTTP {status}: {text}");
+            let retried = if is_transient_status(status) {
+                format!(" (after {TRANSIENT_RETRIES} retries)")
+            } else {
+                String::new()
+            };
+            bail!("get run HTTP {status}{retried}: {text}");
         }
         serde_json::from_str(&text).context("parse run status")
     }
@@ -343,15 +394,12 @@ impl CursorClient {
     }
 
     pub async fn list_artifacts(&self, agent_id: &str) -> Result<Vec<Artifact>> {
-        let resp = self
-            .http
-            .get(format!("{API_BASE}/v1/agents/{agent_id}/artifacts"))
-            .header(AUTHORIZATION, self.auth_header())
-            .send()
-            .await
-            .context("list artifacts")?;
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
+        let url = format!("{API_BASE}/v1/agents/{agent_id}/artifacts");
+        let (status, text) = self
+            .send_with_retry("list artifacts", || {
+                self.http.get(&url).header(AUTHORIZATION, self.auth_header())
+            })
+            .await?;
         if !status.is_success() {
             bail!("list artifacts HTTP {status}: {text}");
         }
@@ -397,16 +445,15 @@ impl CursorClient {
         use crate::progress;
 
         let spin = show_spinner.then(|| progress::Spinner::start(format!("Downloading {path}…")));
-        let resp = self
-            .http
-            .get(format!("{API_BASE}/v1/agents/{agent_id}/artifacts/download"))
-            .query(&[("path", path)])
-            .header(AUTHORIZATION, self.auth_header())
-            .send()
-            .await
-            .context("artifact download URL")?;
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
+        let url = format!("{API_BASE}/v1/agents/{agent_id}/artifacts/download");
+        let (status, text) = self
+            .send_with_retry("artifact download URL", || {
+                self.http
+                    .get(&url)
+                    .query(&[("path", path)])
+                    .header(AUTHORIZATION, self.auth_header())
+            })
+            .await?;
         if !status.is_success() {
             if let Some(spin) = spin {
                 spin.fail(format!("download failed HTTP {status}"));
@@ -425,14 +472,35 @@ impl CursorClient {
         if let Some(spin) = &spin {
             spin.set_message(format!("Fetching bytes for {path}…"));
         }
-        let bytes = self
-            .http
-            .get(&url.url)
-            .send()
-            .await
-            .context("fetch artifact bytes")?
-            .bytes()
-            .await?;
+        let mut attempt = 0u32;
+        let bytes = loop {
+            let res = match self.http.get(&url.url).send().await {
+                Ok(r) if is_transient_status(r.status()) => Err(anyhow::anyhow!("HTTP {}", r.status())),
+                Ok(r) if !r.status().is_success() => {
+                    bail!("fetch artifact bytes HTTP {} for {path}", r.status())
+                }
+                Ok(r) => r.bytes().await.map_err(anyhow::Error::from),
+                Err(e) => Err(anyhow::Error::from(e)),
+            };
+            match res {
+                Ok(b) => break b,
+                Err(e) if attempt < TRANSIENT_RETRIES => {
+                    let wait = retry_backoff(attempt);
+                    attempt += 1;
+                    crate::progress::warn(format!(
+                        "fetch {path}: transient error ({e}) — retry \
+                         {attempt}/{TRANSIENT_RETRIES} in {}s…",
+                        wait.as_secs()
+                    ));
+                    tokio::time::sleep(wait).await;
+                }
+                Err(e) => {
+                    return Err(e).with_context(|| {
+                        format!("fetch artifact bytes for {path} (after {TRANSIENT_RETRIES} retries)")
+                    })
+                }
+            }
+        };
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)?;
         }

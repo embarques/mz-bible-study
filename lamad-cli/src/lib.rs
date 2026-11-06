@@ -39,14 +39,17 @@ pub async fn run(mut job: PrepareJob, cfg: &Config) -> Result<()> {
         .unwrap_or(false);
     job.echo_plan(host_images);
 
-    if job.audience == Audience::Adult
-        && (job.generate || job.force_prepare)
-        && !host_images
-    {
-        progress::warn(
-            "openai_api_key not set — adult will use PLACEHOLDER images so the \
-             deck still builds; set the key for real art (or --gen-images later)",
-        );
+    if job.audience == Audience::Adult && (job.generate || job.force_prepare) {
+        if host_images {
+            progress::phase(
+                "images: host OpenAI (fast path) after Cursor JSON — runs in parallel with build",
+            );
+        } else {
+            progress::phase(
+                "images: Cursor cloud agent (your cursor_api_key) — \
+                 missing slots get placeholders so the deck still builds",
+            );
+        }
     }
 
     let pdf = scans::normalize_pending_inbox(&job.resolve_pdf()?)?;
@@ -466,6 +469,14 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
             progress::ok(format!(
                 "Section content on disk (studies/adult/{study}/) — building from folder"
             ));
+            // Folder builds also gate on scan coverage so truncated extracts
+            // cannot ship silently.
+            content::assert_adult_scan_coverage(
+                study,
+                pdf,
+                pages,
+                cfg.pdftoppm_path.as_deref(),
+            )?;
             let model = content::load_adult_sections(study)?;
             let _ = content::ensure_adult_placeholders(study, &model, root)?;
             content::verify_adult_section_images(study, &model, root)?;
@@ -512,7 +523,8 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
             if content::any_placeholders(study, &model, root) {
                 progress::warn(format!(
                     "deck has PLACEHOLDER images — replace under studies/adult/{study}/images/ \
-                     or run with openai_api_key: lamad prepare -n {study} --audience adult --gen-images"
+                     or re-run -g (Cursor/cursor_api_key generates art; optional \
+                     openai_api_key + --gen-images for host fast path)"
                 ));
             }
             let pdf = if job.export_pdf {
@@ -673,6 +685,13 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
                 ));
                 content::print_section_inventory(&dir)?;
                 content_dir = dir;
+                // HARD: extracted folders must cover the printed scan body.
+                content::assert_adult_scan_coverage(
+                    study,
+                    pdf,
+                    pages,
+                    cfg.pdftoppm_path.as_deref(),
+                )?;
             }
             Err(e) => progress::info(format!(
                 "note: could not expand section tree ({e:#}) — keeping agent JSON"
@@ -798,11 +817,11 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
                 )),
             }
         } else if content::any_placeholders(study, &model, root) {
-            progress::warn(
-                "deck uses PLACEHOLDER images — set openai_api_key and run \
-                 `lamad prepare -n {study} --audience adult --gen-images`, \
-                 or replace files under studies/adult/{study}/images/",
-            );
+            progress::warn(format!(
+                "deck uses PLACEHOLDER images — re-run with -g so Cursor \
+                 (cursor_api_key) regenerates scenic art, or drop PNGs under \
+                 studies/adult/{study}/images/ (optional: openai_api_key + --gen-images)"
+            ));
         }
 
         let pdf = if job.export_pdf {
