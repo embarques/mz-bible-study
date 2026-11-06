@@ -105,15 +105,21 @@ stub/cartoon placeholders or truncated bodies. See `AGENTS.md` → **Adult gold 
 3. **Variable structure** — create one `tema-N` folder per printed TEMA and one
    `tema-N-{A|B|C|…}` folder per lettered point. Do not invent missing points;
    do not drop printed ones.
-4. **No mid-sentence invention** — join text that was split across scan pages
-   **inside** one estudio only.
-5. **Citation style** — Texto Áureo / image chrome citations have **no**
+4. **Two-column + cross-page joins (HARD)** — Senda pages are 2-up columns.
+   A sentence that ends at the bottom of the left column and continues at the
+   top of the right is **one sentence** — join it. Same for page turns.
+   Never stop mid-thought at a column edge (estudio 7 lesson: 2.A ends with
+   `…hora de Dios para actuar.`, not cut before `para actuar.`).
+5. **Lectura chapter jumps (HARD)** — when the print starts a new chapter in
+   the same Lectura block, keep `capítulo:versículo` as printed (`5:1`, not
+   bare `1`). Same-chapter verses stay `7`, `3`, …
+6. **Citation style** — Texto Áureo / image chrome citations have **no**
    parentheses (`2 Samuel 5:1`, not `(2 Samuel 5:1)`). Body inline refs may keep
    `(Libro …)` as printed.
-6. **Deliverable** — zip file(s). Do not ask the human to assemble files by hand.
-7. **Segment correctly** — title → RESUMEN per estudio using the **printed page
+7. **Deliverable** — zip file(s). Do not ask the human to assemble files by hand.
+8. **Segment correctly** — title → RESUMEN per estudio using the **printed page
    number on the scan**; never page-count math / invented sheet indices.
-8. **Scenic images** — real finished art (≈1408×768), unique scene per file,
+9. **Scenic images** — real finished art (≈1408×768), unique scene per file,
    left text-safe treatment, one design family per estudio. No slate stubs.
 
 ---

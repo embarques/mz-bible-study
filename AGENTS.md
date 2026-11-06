@@ -13,7 +13,7 @@ User-facing summary: [`README.md`](README.md). Template index: [`template/README
 | Gate | Required |
 |------|----------|
 | **Printed pages** | Bound by the **page number printed on the scan** (e.g. estudio 7 starts at **p.59**), not invented PDF sheet talk. Discover: title `ESTUDIO BÍBLICO N` → **`RESUMEN GENERAL`**. |
-| **Verbatim folders** | Working source = `studies/adult/{N}/` section tree. Copy print Spanish **word-for-word**. Fix OCR only. Never paraphrase. |
+| **Verbatim folders** | Working source = `studies/adult/{N}/` section tree. Copy print Spanish **word-for-word**. Fix OCR only. Never paraphrase. See **Precise extract** below. |
 | **Scan coverage** | After expand/build, `lamad` scan-coverage must pass (section text covers the scan body). If it fails, fill gaps from the scan — do not deliver. |
 | **Real scenic art** | `intro-header`, each `tema-N`, each `ab-N{Letter}` = **unique** finished scenes (~1408×768), left text-safe treatment, one design family per study. **Forbidden to deliver:** slate/cartoon placeholders, ~40KB stubs, identical PNGs. Prefer Cursor (`cursor_api_key`) for images when `openai_api_key` is empty; OpenAI host path only when that key is set. |
 | **Definición cards** | Locked gold layout only (estudio-4 / reference). Verbatim terms from the printed box. |
@@ -22,6 +22,18 @@ User-facing summary: [`README.md`](README.md). Template index: [`template/README
 | **Done means** | `lamad validate` **OK** + PDF exported + spot-check one scenic slide, one A/B body (logo present), one Definición card in the PDF. |
 
 If any gate fails, **fix before telling the user it is ready**. Estudios 8+ should match this bar by default — not as a special favor.
+
+#### Precise extract (HARD — adult / Lectura / A–B bodies)
+
+Senda pages are **two columns**. Be surgical; this is where agents drop text:
+
+1. **Column wrap** — A sentence that ends at the bottom of the left column and continues at the top of the right is **one sentence**. Join it. Never stop at the left-column cutoff.  
+   Example (estudio 7, 2.A, printed p.63):  
+   left ends `…la llegada de la hora de Dios` → right starts `para actuar.` → body must include **`…hora de Dios para actuar.`**
+2. **Cross-page join** — Same for page turns mid-sentence / mid-verse. Merge before packing.
+3. **Lectura / Texto chapter jump** — When the print starts a **new chapter** inside the same Lectura block, keep the printed marker **`capítulo:versículo`** (`5:1`, `16:1`). Do **not** reduce it to bare `1`. Same-chapter verses stay `7`, `3`, `10` as printed.  
+   Example (estudio 7 Lectura Antifonal): after `2:7` the next line is **`5:1 Vinieron todas las tribus…`**, not `1 Vinieron…`.
+4. **Spot-check** — Before “done,” open the last sentence of each A/B body and every Lectura verse that changes chapter against the scan. If the PDF slide ends early or shows bare `1` where the scan has `5:1`, fix the folder text and rebuild.
 
 ### Git / PR (HARD — protect `main`)
 

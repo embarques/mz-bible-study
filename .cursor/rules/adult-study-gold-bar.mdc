@@ -11,7 +11,8 @@ Treat every adult estudio like finished **estudio 7** (`bible-studies/adult/7/` 
 
 - Bound by **printed page numbers on the scan** (estudio 7 starts at **p.59**). Title → `RESUMEN GENERAL`. Do not invent PDF-sheet stories as the source of truth.
 - Working source: `studies/adult/{N}/` section folders. Verbatim print Spanish only.
-- **Scan coverage** must pass before calling a deck done.
+- **Precise extract:** two-column wraps and page cuts must be joined (never drop the right-column leftover, e.g. `…hora de Dios` + `para actuar.`). Lectura/Texto: keep printed **`5:1` / `16:1`** at chapter jumps — do not strip to bare `1`.
+- **Scan coverage** must pass before calling a deck done. Spot-check last sentence of each A/B body + every chapter-change verse against the scan.
 - Real scenic PNGs for `intro-header`, each `tema-N`, each `ab-N{Letter}` — unique scenes, left text-safe treatment. Never deliver placeholder cartoons.
 - Images: Cursor (`cursor_api_key`) when OpenAI is unset; host OpenAI only when that key is set.
 - Mount Zion logo (`Imagen 8`) on **intro body and every A/B body** slide; text above logo top.
