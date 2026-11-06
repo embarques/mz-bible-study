@@ -91,6 +91,7 @@ impl Model {
             audience: self.audience,
             prepare_only: false,
             force_prepare: false,
+            generate: false,
             gen_images: false,
             gen_definicion: false,
             export_pdf: true,

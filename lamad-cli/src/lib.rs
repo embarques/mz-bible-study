@@ -10,6 +10,7 @@ pub mod agent;
 pub mod build;
 pub mod cli;
 pub mod config;
+pub mod content;
 pub mod discover;
 pub mod export;
 pub mod job;
@@ -444,7 +445,99 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
         pdftoppm_path: cfg.pdftoppm_path.clone(),
     };
 
-    let resumed = if job.force_prepare || job.gen_images || job.gen_definicion {
+    // Adult without --generate: section folder is the source of truth.
+    // Assemble build-cache JSON from disk and skip the cloud agent.
+    if job.audience == Audience::Adult
+        && !job.generate
+        && !job.force_prepare
+        && !job.gen_images
+        && !job.gen_definicion
+    {
+        if content::has_adult_sections(study) {
+            progress::ok(format!(
+                "Section content on disk (studies/adult/{study}/) — skipping extract agent"
+            ));
+            let model = content::load_adult_sections(study)?;
+            let json = content::write_adult_build_json(&model, root)?;
+            let _ = agent::prepare::stamp_adult_image_paths(&json, study, root);
+            if job.prepare_only {
+                progress::ok("prepare-only — section tree → JSON (no PowerPoint)");
+                return Ok(StudyOutput {
+                    study,
+                    json,
+                    pptx: None,
+                    pdf: None,
+                });
+            }
+            let deliverables = agent::prepare::verify_deliverables(study, job.audience, root)?;
+            let json_path = deliverables.json.clone();
+            let data: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&json_path)?)?;
+            let title = data
+                .get("titulo")
+                .and_then(|v| v.as_str())
+                .unwrap_or("TITLE");
+            let out = paths::study_pptx_path(job.audience, study, title)?;
+            let build_spin = progress::Spinner::start(format!(
+                "Step 4/4 — Building PPTX{}… usually ~1–2 min",
+                if job.export_pdf {
+                    " + exporting PDF"
+                } else {
+                    ""
+                }
+            ));
+            let template = job.template.clone().unwrap_or_else(|| {
+                paths::master_template(job.audience).expect("template")
+            });
+            let build_result = tokio::task::spawn_blocking({
+                let json_path = json_path.clone();
+                let out = out.clone();
+                let template = template.clone();
+                let export_pdf = job.export_pdf;
+                let audience = job.audience;
+                move || build::build_study(&json_path, &out, Some(&template), audience, export_pdf)
+            })
+            .await?;
+            match build_result {
+                Ok(_) => build_spin.succeed(format!(
+                    "built {}",
+                    out.file_name().unwrap_or_default().to_string_lossy()
+                )),
+                Err(e) => {
+                    build_spin.fail("build failed");
+                    return Err(e);
+                }
+            }
+            let pdf = if job.export_pdf {
+                let p = export::default_pdf_path(&out);
+                if p.exists() {
+                    Some(p)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            progress::info(format!("  PPTX → {}", rel_from_root(root, &out)));
+            if let Some(ref pdf_path) = pdf {
+                progress::info(format!("  PDF  → {}", rel_from_root(root, pdf_path)));
+            }
+            return Ok(StudyOutput {
+                study,
+                json: json_path,
+                pptx: Some(out),
+                pdf,
+            });
+        }
+        bail!(
+            "No section content at studies/adult/{study}/ (need manifest.toml).\n\
+             Either:\n\
+               • drop generated section files there (see GENERATE_STUDY_AGENT.md), then re-run\n\
+               • or pass --generate / -g to extract from the scan"
+        );
+    }
+
+    let resumed = if job.force_prepare || job.gen_images || job.gen_definicion || job.generate {
         None
     } else {
         agent::prepare::try_resume_deliverables(study, job.audience, root)
@@ -574,6 +667,21 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
         });
     }
 
+    // After a generate run, expand adult JSON into the section folder tree
+    // so the next prepare (without -g) can rebuild from disk.
+    if job.audience == Audience::Adult && (job.generate || job.force_prepare) {
+        match content::expand_json_to_sections(&deliverables.json, study) {
+            Ok(dir) => progress::ok(format!(
+                "Wrote section tree → {}",
+                rel_from_root(root, &dir)
+            )),
+            Err(e) => progress::info(format!(
+                "note: could not expand section tree ({e:#}) — JSON build cache still used"
+            )),
+        }
+        let _ = agent::prepare::stamp_adult_image_paths(&deliverables.json, study, root);
+    }
+
     let json_path = &deliverables.json;
     let data: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(json_path)?)?;
@@ -581,9 +689,7 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
         .get("titulo")
         .and_then(|v| v.as_str())
         .unwrap_or("TITLE");
-    let out = root
-        .join("bible-studies")
-        .join(format!("{study} - {title}.pptx"));
+    let out = paths::study_pptx_path(job.audience, study, title)?;
 
     let build_spin = progress::Spinner::start(format!(
         "Step 4/4 — Building PPTX{}… usually ~1–2 min",
@@ -619,8 +725,12 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
     }
 
     let pdf = if job.export_pdf {
-        let p = out.with_extension("pdf");
-        if p.exists() { Some(p) } else { None }
+        let p = export::default_pdf_path(&out);
+        if p.exists() {
+            Some(p)
+        } else {
+            None
+        }
     } else {
         None
     };

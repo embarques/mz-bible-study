@@ -30,8 +30,14 @@ pub struct Config {
     /// Path to `pdftoppm` (absolute, or relative to app / project root).
     /// Default when unset: `tools/pdftoppm` then PATH.
     pub pdftoppm_path: Option<PathBuf>,
+    /// Scan PDF tray (`pending/` / `complete/` / `error/`). Relative → project root.
     pub scans_dir: Option<PathBuf>,
+    /// Study content root (section folders). Relative → project root.
+    pub studies_dir: Option<PathBuf>,
+    /// Finished decks root (`{audience}/{N}/powerpoint|pdf/…`). Relative → project root.
     pub output_dir: Option<PathBuf>,
+    /// Scratch / OCR pages / unzipped builds. Relative → project root.
+    pub generated_dir: Option<PathBuf>,
 }
 
 fn default_cursor_model() -> String {
@@ -63,7 +69,9 @@ impl Default for Config {
             export_pdf: true,
             pdftoppm_path: None,
             scans_dir: None,
+            studies_dir: None,
             output_dir: None,
+            generated_dir: None,
         }
     }
 }
@@ -270,6 +278,8 @@ fn merge(base: Config, over: Config) -> Config {
         export_pdf: over.export_pdf,
         pdftoppm_path: over.pdftoppm_path.or(base.pdftoppm_path),
         scans_dir: over.scans_dir.or(base.scans_dir),
+        studies_dir: over.studies_dir.or(base.studies_dir),
         output_dir: over.output_dir.or(base.output_dir),
+        generated_dir: over.generated_dir.or(base.generated_dir),
     }
 }

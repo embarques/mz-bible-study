@@ -1,18 +1,19 @@
-# Prepare inputs (by audience)
+# Studies
 
-| Folder | CLI flag | Contents |
-|--------|----------|----------|
-| `studies/youth/` | `--audience youth` (default) | `{N}.json`, `media/{N}-section*.png`, `REVIEW.md` |
-| `studies/adult/` | `--audience adult` | Same layout when adult builder is ready |
+Section-folder content for `lamad prepare` (without `-g`).
 
-Built decks still go in `bible-studies/` (flat, both audiences).
+| Path | Role |
+|------|------|
+| `adult/{N}/` | Adult section tree + `images/` |
+| `adult/{N}.json` | Build cache (written from sections) |
+| `youth/` | Youth (unchanged JSON/media for now) |
 
-```bash
-# One study
-mzbs prepare --pdf "…" -n 22 --pages 7-9 --last --audience youth
+External extract prompt (PDF → zip): [`../GENERATE_STUDY_AGENT.md`](../GENERATE_STUDY_AGENT.md).
+Unzip `adult-estudio-{N}.zip` here so you get `adult/{N}/`, then run prepare **without** `-g`.
 
-# Batch
-mzbs prepare --pdf "…" --from 23 --to 26 --audience youth
+Finished decks:
 
-mzbs build studies/youth/22.json -o "bible-studies/22 - TITLE.pptx" --audience youth
+```
+{output_dir}/{audience}/{N}/powerpoint/{N} - {TITLE}.pptx
+{output_dir}/{audience}/{N}/pdf/{N} - {TITLE}.pdf
 ```

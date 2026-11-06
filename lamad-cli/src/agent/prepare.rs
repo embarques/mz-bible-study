@@ -67,9 +67,19 @@ pub struct Deliverables {
 
 /// Adult scenic / definición PNGs live under `studies/adult/{N}/`.
 pub fn adult_media_dir(study: u32, root: &Path) -> PathBuf {
-    root.join("studies")
+    let study_dir = root
+        .join("studies")
         .join(Audience::Adult.as_str())
-        .join(study.to_string())
+        .join(study.to_string());
+    let images = study_dir.join("images");
+    // New layout: studies/adult/{N}/images/. Keep legacy flat dir only when
+    // images already live beside the folder (no images/ yet).
+    let legacy_intro = study_dir.join("intro-header.png");
+    if images.is_dir() || !legacy_intro.is_file() {
+        let _ = std::fs::create_dir_all(&images);
+        return images;
+    }
+    study_dir
 }
 
 /// Scenic + definición basenames derived from adult study shape (variable temas/points).
@@ -568,9 +578,20 @@ pub fn stamp_adult_image_paths(json_path: &Path, study: u32, root: &Path) -> Res
         .as_object_mut()
         .ok_or_else(|| anyhow::anyhow!("adult JSON root must be an object"))?;
 
-    let _ = root; // media paths are repo-relative under studies/adult/
+    let _ = root;
+    // Prefer section-layout images/ when that folder exists (or will exist).
+    let images_subdir = root
+        .join("studies")
+        .join("adult")
+        .join(study.to_string())
+        .join("images")
+        .is_dir();
     let rel = |name: &str| -> String {
-        format!("studies/adult/{study}/{name}")
+        if images_subdir {
+            format!("studies/adult/{study}/images/{name}")
+        } else {
+            format!("studies/adult/{study}/{name}")
+        }
     };
 
     let tema_paths: Vec<serde_json::Value> = (1..=study_model.temas.len())

@@ -119,6 +119,13 @@ pub struct PrepareArgs {
     #[arg(long = "force-prepare")]
     pub force_prepare: bool,
 
+    /// Extract study content from the scan into `studies/{audience}/{N}/`
+    /// (section folders + images). Without this flag, prepare expects those
+    /// files to already exist (e.g. written by an external agent using
+    /// `GENERATE_STUDY_AGENT.md`).
+    #[arg(short = 'g', long = "generate")]
+    pub generate: bool,
+
     /// (Re)generate section/scenic images from existing study JSON via OpenAI.
     /// Overwrites images if they already exist. Requires openai_api_key / OPENAI_API_KEY
     /// and a ready `{N}.json`. Skips the cloud agent.

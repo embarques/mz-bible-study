@@ -98,3 +98,11 @@ template/adult/**
 # Secrets
 .env
 .env.local
+
+# Local project config (keys + machine paths)
+config.toml
+
+# Archived legacy inputs (large; keep local)
+archive/**
+!archive/.gitkeep
+!archive/README.md

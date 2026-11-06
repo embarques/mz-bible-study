@@ -1,0 +1,42 @@
+# Copy to config.toml at the project root (or keep lamad-cli/config.toml).
+# Load order: --config PATH → ./config.toml → lamad-cli/config.toml → beside binary
+# Env overrides: CURSOR_API_KEY, OPENAI_API_KEY, LAMAD_AGENT_PROVIDER
+#
+# Paths may be relative to the project root OR absolute.
+
+# Backend for prepare / review: "cursor" (default) or "chatgpt" (alias: "openai")
+agent_provider = "cursor"
+
+# --- Cursor Cloud Agents (default) ---
+cursor_api_key = ""
+cursor_model = "composer-2.5"
+
+# --- ChatGPT / OpenAI (secondary; host images + Cursor fallback) ---
+openai_api_key = ""
+openai_model = "gpt-4o"
+openai_image_model = "gpt-image-1"
+
+audience = "adult"
+export_pdf = true
+
+# Bundled / Homebrew poppler
+# pdftoppm_path = "/opt/homebrew/bin/pdftoppm"
+
+# --- Data folders (defaults = beside lamad-cli/) ---
+# Scan PDFs live under scans/pending|complete|error
+scans_dir = "scans"
+
+# Section content (manifest + txt + images) for prepare without -g
+studies_dir = "studies"
+
+# Finished decks:
+#   {output_dir}/{audience}/{N}/powerpoint/{N} - {TITLE}.pptx
+#   {output_dir}/{audience}/{N}/pdf/{N} - {TITLE}.pdf
+output_dir = "bible-studies"
+
+# Scratch (OCR pages, unzipped builds)
+generated_dir = "generated"
+
+# Absolute path examples:
+# scans_dir = "/Users/you/Documents/mz-scans"
+# output_dir = "/Volumes/Shared/bible-studies"

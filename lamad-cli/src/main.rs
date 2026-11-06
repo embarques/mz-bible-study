@@ -134,6 +134,7 @@ async fn real_main() -> Result<()> {
     let cli = Cli::parse_from(normalize_argv(std::env::args().collect()));
     lamad::progress::set_verbosity(cli.verbose);
     let mut cfg = Config::load(cli.config.as_deref())?;
+    lamad::paths::init_from_config(&cfg);
 
     match cli.command {
         None => {
@@ -169,6 +170,7 @@ async fn real_main() -> Result<()> {
                                 audience: args.audience.into(),
                                 prepare_only: args.prepare_only,
                                 force_prepare: args.force_prepare,
+                                generate: args.generate,
                                 gen_images: args.gen_images,
                                 gen_definicion: args.gen_definicion,
                                 export_pdf: args.export_pdf,
@@ -198,6 +200,7 @@ async fn real_main() -> Result<()> {
                         audience: args.audience.into(),
                         prepare_only: args.prepare_only,
                         force_prepare: args.force_prepare,
+                        generate: args.generate,
                         gen_images: args.gen_images,
                         gen_definicion: args.gen_definicion,
                         export_pdf: args.export_pdf,
@@ -218,15 +221,18 @@ async fn real_main() -> Result<()> {
                 None => {
                     let data: serde_json::Value =
                         serde_json::from_str(&std::fs::read_to_string(&args.json)?)?;
-                    let n = data
+                    let n: u32 = data
                         .get("numero")
-                        .map(|v| v.to_string().trim_matches('"').to_string())
-                        .unwrap_or_else(|| "X".into());
+                        .and_then(|v| v.as_u64().map(|n| n as u32).or_else(|| {
+                            v.as_str()
+                                .and_then(|s| s.parse().ok())
+                        }))
+                        .unwrap_or(0);
                     let title = data
                         .get("titulo")
                         .and_then(|v| v.as_str())
                         .unwrap_or("TITLE");
-                    paths::bible_studies_dir()?.join(format!("{n} - {title}.pptx"))
+                    paths::study_pptx_path(audience, n, title)?
                 }
             };
             let tmpl = template;

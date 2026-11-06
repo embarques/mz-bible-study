@@ -43,6 +43,9 @@ pub struct PrepareJob {
     pub prepare_only: bool,
     /// When true, ignore local JSON/images and re-run the cloud agent.
     pub force_prepare: bool,
+    /// When true (`--generate` / `-g`), extract content from the scan into the
+    /// study section folder. When false, expect section files already on disk.
+    pub generate: bool,
     /// When true, (re)generate images from existing JSON via OpenAI (overwrite).
     pub gen_images: bool,
     /// Adult: force-regenerate DEFINICIÓN cards only (locked gold reference edit).
@@ -148,6 +151,17 @@ impl PrepareJob {
             );
         }
         println!("  Audience: {}", self.audience.as_str());
+        if self.generate {
+            println!(
+                "  Generate: on (-g) — extract scan → studies/{}/{{N}}/ then build",
+                self.audience.as_str()
+            );
+        } else if self.audience == Audience::Adult {
+            println!(
+                "  Generate: off — expect studies/adult/{{N}}/ section files \
+                 (GENERATE_STUDY_AGENT.md)"
+            );
+        }
         if self.force_prepare {
             println!("  Resume:   off (--force-prepare — agent will re-create JSON + images)");
         } else if self.gen_definicion {
