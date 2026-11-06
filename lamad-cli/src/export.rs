@@ -4,6 +4,67 @@ use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::job::Audience;
+use crate::paths;
+
+/// Locate the finished PPTX for a study under `bible-studies/{audience}/{N}/powerpoint/`.
+///
+/// Picks the newest non-lock `*.pptx` whose name starts with `{N} - ` (or any
+/// single `.pptx` in that tray). Used by `lamad export-pdf -n N` after manual
+/// PowerPoint edits — re-export PDF only, no rebuild.
+pub fn find_study_pptx(audience: Audience, study: u32) -> Result<PathBuf> {
+    let dir = paths::study_output_dir(audience, study)?.join("powerpoint");
+    if !dir.is_dir() {
+        bail!(
+            "no powerpoint tray for {} estudio {}: expected {}",
+            audience.as_str(),
+            study,
+            dir.display()
+        );
+    }
+    let prefix = format!("{study} - ");
+    let all: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .with_context(|| format!("read {}", dir.display()))?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension().and_then(|e| e.to_str()) == Some("pptx")
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| !n.starts_with("~$"))
+                    .unwrap_or(false)
+        })
+        .collect();
+    // Prefer `{N} - *.pptx`; fall back to any non-lock pptx in the tray.
+    let mut matches: Vec<PathBuf> = all
+        .iter()
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with(&prefix))
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect();
+    if matches.is_empty() {
+        matches = all;
+    }
+    if matches.is_empty() {
+        bail!(
+            "no .pptx found in {} — build or place the study deck there first",
+            dir.display()
+        );
+    }
+    matches.sort_by_key(|p| {
+        std::fs::metadata(p)
+            .and_then(|m| m.modified())
+            .ok()
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+    });
+    // Newest if several.
+    Ok(matches.pop().expect("non-empty"))
+}
+
 /// Default PDF destination for a PPTX.
 ///
 /// If the PPTX lives under `…/powerpoint/`, the PDF goes to sibling `…/pdf/`
@@ -142,4 +203,5 @@ mod tests {
             PathBuf::from("/tmp/bible-studies/7 - TITLE.pdf")
         );
     }
+
 }

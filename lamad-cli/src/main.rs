@@ -256,11 +256,29 @@ async fn real_main() -> Result<()> {
             validate::validate_pptx(&pptx)?;
             Ok(())
         }
-        Some(Commands::ExportPdf { pptx }) => {
-            let spin = lamad::progress::Spinner::start(
-                "Exporting PDF via PowerPoint (this can take a minute)…",
-            );
-            match export::export_one(&pptx) {
+        Some(Commands::ExportPdf(args)) => {
+            let pptx = if let Some(p) = args.pptx {
+                p
+            } else if let Some(n) = args.study {
+                export::find_study_pptx(args.audience.into(), n)?
+            } else {
+                anyhow::bail!(
+                    "export-pdf needs a PPTX path or `-n N` (e.g. \
+                     lamad export-pdf -n 7 --audience adult)"
+                );
+            };
+            let spin = lamad::progress::Spinner::start(format!(
+                "Exporting PDF from {} (PowerPoint)…",
+                pptx.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("deck.pptx")
+            ));
+            let result = if let Some(out) = args.output {
+                export::export_to(&pptx, &out)
+            } else {
+                export::export_one(&pptx)
+            };
+            match result {
                 Ok(pdf) => {
                     spin.succeed(format!(
                         "{} ({} bytes)",

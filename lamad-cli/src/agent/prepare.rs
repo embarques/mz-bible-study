@@ -479,10 +479,17 @@ fn verify_adult_deliverables(study: u32, root: &Path) -> Result<Deliverables> {
             missing_def.push(name);
             continue;
         }
-        crate::build::adult::assert_locked_definicion_card(&p).with_context(|| {
+        crate::build::adult::assert_study_definicion_card(
+            &p,
+            tema.definiciones
+                .iter()
+                .map(|d| (d.termino.as_str(), d.texto.as_str())),
+        )
+        .with_context(|| {
             format!(
-                "adult estudio {study}: {name} failed locked DEFINICIÓN layout QC — \
-                 run `lamad prepare -n {study} --audience adult --gen-definicion`"
+                "adult estudio {study}: {name} rejected — must show THIS study's scan \
+                 Definiciones (not gold / prior-study leftovers). Fix: delete {name} and \
+                 `lamad prepare -n {study} --audience adult --gen-definicion`"
             )
         })?;
     }
@@ -1158,28 +1165,15 @@ async fn download_resolved_artifacts(
                     if let Some(parent) = dest_path.parent() {
                         std::fs::create_dir_all(parent)?;
                     }
-                    // HARD: keep DEFINICIÓN only when layout QC passes the locked
-                    // house design. Size alone is NOT enough — agents invent wrong
-                    // chrome (centered title pills, cartoon hills, etc.).
+                    // HARD: never "keep" an existing DEFINICIÓN PNG across downloads.
+                    // Layout QC alone is not enough — leftover gold from another study
+                    // also passes QC (wrong terms baked in). Always take the new artifact;
+                    // assert_locked_definicion_card rejects invents after download.
                     let is_def = dest_path
                         .file_name()
                         .and_then(|n| n.to_str())
                         .map(|n| n.starts_with("definicion-") && n.ends_with(".png"))
                         .unwrap_or(false);
-                    if is_def
-                        && dest_path.is_file()
-                        && crate::build::adult::looks_like_locked_definicion_card(&dest_path)
-                    {
-                        crate::progress::warn(format!(
-                            "keeping existing {} (passed locked DEFINICIÓN layout QC)",
-                            dest_path
-                                .file_name()
-                                .and_then(|n| n.to_str())
-                                .unwrap_or("definicion.png")
-                        ));
-                        bar.inc(1);
-                        return Ok(());
-                    }
                     let is_image = dest_path.extension().and_then(|e| e.to_str()) == Some("png");
                     let fetched: Result<()> = async {
                         client
@@ -1204,6 +1198,29 @@ async fn download_resolved_artifacts(
                         return Ok(());
                     }
                     if is_def {
+                        // Stale .terms from a prior estudio must not launder new art.
+                        if let Some(stem) = dest_path.file_stem().and_then(|s| s.to_str()) {
+                            if let Some(parent) = dest_path.parent() {
+                                let _ = std::fs::remove_file(parent.join(format!("{stem}.terms")));
+                            }
+                        }
+                        if crate::build::adult::definicion_card::is_byte_identical_to_any_gold(
+                            &dest_path,
+                        ) {
+                            let _ = std::fs::remove_file(&dest_path);
+                            if !placeholders_fill_gaps {
+                                return Err(anyhow::anyhow!(
+                                    "agent returned a verbatim gold-reference DEFINICIÓN PNG \
+                                     (another study's baked terms) — refused"
+                                ));
+                            }
+                            crate::progress::warn(
+                                "Cursor DEFINICIÓN was a gold-reference copy (wrong-study \
+                                 terms) — deleted; stub/placeholder until --gen-definicion",
+                            );
+                            bar.inc(1);
+                            return Ok(());
+                        }
                         if let Err(e) =
                             crate::build::adult::assert_locked_definicion_card(&dest_path)
                         {
@@ -1215,13 +1232,25 @@ async fn download_resolved_artifacts(
                             }
                             crate::progress::warn(format!(
                                 "Cursor DEFINICIÓN art rejected by locked-layout QC ({}) — \
-                                 gold-card placeholder will fill it; refine later with \
-                                 --gen-definicion (needs openai_api_key)",
+                                 stub will fill it; regenerate with --gen-definicion \
+                                 (needs openai_api_key) from THIS estudio's scan terms",
                                 short_err(&e)
                             ));
                             bar.inc(1);
                             return Ok(());
                         }
+                        // Layout OK from Cursor still has no proven term match —
+                        // do NOT stamp .terms here. Build requires --gen-definicion
+                        // (OpenAI edit + sidecar) or an explicit verified stamp.
+                        crate::progress::warn(format!(
+                            "{} passed layout QC but has no terms sidecar yet — \
+                             run --gen-definicion so baked text matches this scan \
+                             (never reuse prior-study cards)",
+                            dest_path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("definicion.png")
+                        ));
                     }
                     if is_image {
                         crate::content::note_real_image(&dest_path);

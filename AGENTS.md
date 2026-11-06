@@ -16,7 +16,7 @@ User-facing summary: [`README.md`](README.md). Template index: [`template/README
 | **Verbatim folders** | Working source = `studies/adult/{N}/` section tree. Copy print Spanish **word-for-word**. Fix OCR only. Never paraphrase. See **Precise extract** below. |
 | **Scan coverage** | After expand/build, `lamad` scan-coverage must pass (section text covers the scan body). If it fails, fill gaps from the scan — do not deliver. |
 | **Real scenic art** | `intro-header`, each `tema-N`, each `ab-N{Letter}` = **unique** finished scenes (~1408×768), left text-safe treatment, one design family per study. **Forbidden to deliver:** slate/cartoon placeholders, ~40KB stubs, identical PNGs. Prefer Cursor (`cursor_api_key`) for images when `openai_api_key` is empty; OpenAI host path only when that key is set. |
-| **Definición cards** | Locked gold layout only (estudio-4 / reference). Verbatim terms from the printed box. |
+| **Definición cards** | Locked gold **layout** only. Baked terms = **this estudio’s** printed box only (folder `definicion-*.txt`). **Never** reuse another study’s PNG or copy the gold reference card (that bakes Amalec/Justicia/etc.). Build rejects gold byte-copies, placeholders, and missing/mismatched `.terms` sidecars. |
 | **Mount Zion logo** | Inject on **intro body and every A/B body** slide (`Imagen 8`). Text stays **above** the logo top. |
 | **CLI path** | Prefer `lamad prepare -n N --audience adult -g` (or build from a complete section tree). Output: `bible-studies/adult/{N}/powerpoint/` + `pdf/`. |
 | **Done means** | `lamad validate` **OK** + PDF exported + spot-check one scenic slide, one A/B body (logo present), one Definición card in the PDF. |

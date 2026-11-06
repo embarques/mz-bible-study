@@ -254,18 +254,34 @@ async fn generate_adult_images(
         },
     );
     let model = req.image_model.clone();
-    let jobs: Vec<(usize, String, PathBuf, bool)> = names
+    // (n, prompt, path, is_def, optional terms fingerprint for DEFINICIÓN cards)
+    let jobs: Vec<(usize, String, PathBuf, bool, Option<String>)> = names
         .iter()
         .zip(prompts.into_iter())
         .enumerate()
         .map(|(i, (name, prompt))| {
             let is_def = name.starts_with("definicion-");
-            (i + 1, prompt, media.join(name), is_def)
+            let fp = if is_def {
+                name.strip_prefix("definicion-")
+                    .and_then(|rest| rest.strip_suffix(".png"))
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .and_then(|idx| study_model.temas.get(idx.saturating_sub(1)))
+                    .map(|tema| {
+                        crate::build::adult::terms_fingerprint(
+                            tema.definiciones
+                                .iter()
+                                .map(|d| (d.termino.as_str(), d.texto.as_str())),
+                        )
+                    })
+            } else {
+                None
+            };
+            (i + 1, prompt, media.join(name), is_def, fp)
         })
         .collect();
 
     let results: Vec<Result<()>> = stream::iter(jobs)
-        .map(|(n, prompt, path, is_def)| {
+        .map(|(n, prompt, path, is_def, fp)| {
             let client = client;
             let model = model.clone();
             let gold = gold.clone();
@@ -274,14 +290,19 @@ async fn generate_adult_images(
                 if definicion_only && !is_def {
                     return Ok(());
                 }
+                // Keep only when layout QC **and** terms fingerprint match this study.
+                // Leftover gold from another study passes layout QC but must be replaced.
                 if is_def
                     && !definicion_only
                     && path.is_file()
                     && !crate::content::is_placeholder(&path)
-                    && crate::build::adult::looks_like_locked_definicion_card(&path)
+                    && fp
+                        .as_deref()
+                        .map(|f| crate::build::adult::keepable_definicion_card(&path, f))
+                        .unwrap_or(false)
                 {
                     crate::progress::warn(format!(
-                        "keeping existing {} (passed locked DEFINICIÓN layout QC)",
+                        "keeping existing {} (layout QC + terms fingerprint match)",
                         path.file_name()
                             .and_then(|x| x.to_str())
                             .unwrap_or("definicion.png")
@@ -295,6 +316,14 @@ async fn generate_adult_images(
                 {
                     crate::progress::warn(format!(
                         "replacing {} — failed locked DEFINICIÓN layout QC",
+                        path.file_name()
+                            .and_then(|x| x.to_str())
+                            .unwrap_or("definicion.png")
+                    ));
+                } else if is_def && path.is_file() {
+                    crate::progress::warn(format!(
+                        "replacing {} — terms fingerprint mismatch or missing .terms sidecar \
+                         (wrong-study leftover)",
                         path.file_name()
                             .and_then(|x| x.to_str())
                             .unwrap_or("definicion.png")
@@ -313,6 +342,9 @@ async fn generate_adult_images(
                     if let Err(e) = crate::build::adult::assert_locked_definicion_card(&path) {
                         let _ = std::fs::remove_file(&path);
                         return Err(e);
+                    }
+                    if let Some(ref fingerprint) = fp {
+                        crate::build::adult::write_terms_sidecar(&path, fingerprint)?;
                     }
                 } else {
                     std::fs::write(&path, &png)

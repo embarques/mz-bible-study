@@ -16,7 +16,7 @@ Treat every adult estudio like finished **estudio 7** (`bible-studies/adult/7/` 
 - Real scenic PNGs for `intro-header`, each `tema-N`, each `ab-N{Letter}` — unique scenes, left text-safe treatment. Never deliver placeholder cartoons.
 - Images: Cursor (`cursor_api_key`) when OpenAI is unset; host OpenAI only when that key is set.
 - Mount Zion logo (`Imagen 8`) on **intro body and every A/B body** slide; text above logo top.
-- Definición = locked gold card layout only.
+- Definición = locked gold **layout** only; baked Spanish must be **this estudio’s** scan Definiciones (never reuse prior-study / gold-reference cards — build rejects those).
 - Deliver: `bible-studies/adult/{N}/powerpoint/` + `pdf/` after `lamad validate` OK.
 
 Full checklist: `AGENTS.md` → **Adult gold bar**. Layout: `lamad-cli/src/build/adult/LAYOUT_GUIDE.md`. External agents: `GENERATE_STUDY_AGENT.md`.

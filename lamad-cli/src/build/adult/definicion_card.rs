@@ -123,6 +123,143 @@ pub fn assert_locked_definicion_card(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Stable fingerprint of the terms that belong on a DEFINICIÓN card.
+///
+/// Layout QC alone is not enough — leftover gold from another study also
+/// passes layout QC. Keep/reuse a PNG only when this fingerprint matches.
+pub fn terms_fingerprint<'a, I>(rows: I) -> String
+where
+    I: IntoIterator<Item = (&'a str, &'a str)>,
+{
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    let mut n = 0u32;
+    for (termino, texto) in rows {
+        n += 1;
+        n.hash(&mut h);
+        termino.trim().hash(&mut h);
+        texto.trim().hash(&mut h);
+    }
+    n.hash(&mut h);
+    format!("{:016x}", h.finish())
+}
+
+fn terms_sidecar_path(png: &Path) -> PathBuf {
+    let mut p = png.to_path_buf();
+    // definicion-1.png → definicion-1.terms
+    if let Some(stem) = png.file_stem().and_then(|s| s.to_str()) {
+        if let Some(parent) = png.parent() {
+            return parent.join(format!("{stem}.terms"));
+        }
+    }
+    p.set_extension("terms");
+    p
+}
+
+/// Write the terms fingerprint beside a freshly generated DEFINICIÓN PNG.
+pub fn write_terms_sidecar(png: &Path, fingerprint: &str) -> Result<()> {
+    let side = terms_sidecar_path(png);
+    std::fs::write(&side, format!("{fingerprint}\n"))
+        .with_context(|| format!("write {}", side.display()))
+}
+
+/// True when a `.terms` sidecar exists and equals `expected`.
+/// Missing sidecar → false (legacy / wrong-study leftovers must not be kept).
+pub fn terms_sidecar_matches(png: &Path, expected: &str) -> bool {
+    let side = terms_sidecar_path(png);
+    match std::fs::read_to_string(&side) {
+        Ok(s) => s.trim() == expected.trim(),
+        Err(_) => false,
+    }
+}
+
+/// Layout QC **and** terms fingerprint both pass.
+pub fn keepable_definicion_card(png: &Path, expected_fingerprint: &str) -> bool {
+    png.is_file()
+        && !is_byte_identical_to_any_gold(png)
+        && looks_like_locked_definicion_card(png)
+        && terms_sidecar_matches(png, expected_fingerprint)
+}
+
+/// True when `png` is a byte-for-byte copy of a shipped gold reference.
+/// Those cards bake **another study's** terms (e.g. Amalec / Justicia) — never deliver.
+pub fn is_byte_identical_to_any_gold(png: &Path) -> bool {
+    let Ok(bytes) = std::fs::read(png) else {
+        return false;
+    };
+    for gold in gold_reference_paths() {
+        if let Ok(g) = std::fs::read(&gold) {
+            if g == bytes {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// HARD gate before embedding a DEFINICIÓN card in a deck.
+///
+/// Rejects: missing file, placeholder stub, byte-copy of gold reference (wrong-study
+/// terms), failed layout QC, missing/mismatched `.terms` sidecar vs this estudio's
+/// verbatim `definicion-*.txt` / JSON terms.
+pub fn assert_study_definicion_card<'a, I>(png: &Path, rows: I) -> Result<()>
+where
+    I: IntoIterator<Item = (&'a str, &'a str)>,
+{
+    if !png.is_file() {
+        bail!(
+            "missing DEFINICIÓN card {} — generate from this estudio's printed \
+             «Definiciones y etimología» box (never reuse another study's card).",
+            png.display()
+        );
+    }
+    // Sidecar written by content::placeholders — check path directly (avoid
+    // build ↔ content module cycle).
+    if PathBuf::from(format!("{}.placeholder", png.display())).is_file() {
+        bail!(
+            "{} is still a PLACEHOLDER — not this estudio's scan terms. \
+             Generate the card from the printed Definiciones box \
+             (`lamad prepare --gen-definicion` with openai_api_key).",
+            png.display()
+        );
+    }
+    if is_byte_identical_to_any_gold(png) {
+        bail!(
+            "{} is a verbatim copy of the locked gold reference (another study's \
+             baked terms — e.g. Amalec / Justicia / Hipócritas). Delete it and \
+             regenerate from THIS estudio's scan Definiciones text only.",
+            png.display()
+        );
+    }
+    assert_locked_definicion_card(png)?;
+    let rows: Vec<(&str, &str)> = rows.into_iter().collect();
+    if rows.is_empty() {
+        bail!(
+            "{}: no definición terms supplied — refuse to embed a card without \
+             scan text.",
+            png.display()
+        );
+    }
+    let fp = terms_fingerprint(rows.iter().copied());
+    if !terms_sidecar_matches(png, &fp) {
+        let terms: Vec<String> = rows
+            .iter()
+            .map(|(t, _)| (*t).to_string())
+            .collect();
+        bail!(
+            "{} does not prove it shows THIS estudio's Definiciones terms \
+             (expected fingerprint for [{}]). Layout QC alone is NOT enough — \
+             leftover cards from other studies also pass layout. Delete the PNG \
+             (+ .terms if present) and regenerate from the scan / folder \
+             definicion-*.txt with `lamad prepare --gen-definicion`.",
+            png.display(),
+            terms.join(" | ")
+        );
+    }
+    Ok(())
+}
+
 fn count_navy(img: &image::RgbImage, x0: u32, y0: u32, x1: u32, y1: u32) -> u32 {
     let mut n = 0u32;
     for y in y0..y1.min(img.height()) {
@@ -244,6 +381,49 @@ mod tests {
             looks_like_locked_definicion_card(&p),
             "user gold must pass: {:?}",
             looks_like_locked_definicion_card_reason(&p).unwrap()
+        );
+    }
+
+    #[test]
+    fn gold_byte_copy_is_detected() {
+        let gold = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src/build/adult/reference/definicion-card-gold-estudio4-tema1.png");
+        assert!(
+            is_byte_identical_to_any_gold(&gold),
+            "gold reference must match itself"
+        );
+    }
+
+    #[test]
+    fn assert_study_rejects_gold_without_matching_terms() {
+        let gold = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src/build/adult/reference/definicion-card-gold-estudio4-tema1.png");
+        let err = assert_study_definicion_card(
+            &gold,
+            [("Hebrón", "ciudad antigua")],
+        )
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("gold") || msg.contains("verbatim copy"),
+            "expected gold rejection, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn assert_study_rejects_byte_copy_of_gold_elsewhere() {
+        let gold = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src/build/adult/reference/definicion-card-gold-estudio4-tema1.png");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("definicion-1.png");
+        std::fs::copy(&gold, &dest).expect("copy gold");
+        assert!(is_byte_identical_to_any_gold(&dest));
+        let err = assert_study_definicion_card(&dest, [("Hebrón", "ciudad antigua")])
+            .expect_err("copy of gold must fail");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("gold") || msg.contains("verbatim copy"),
+            "expected gold rejection, got: {msg}"
         );
     }
 

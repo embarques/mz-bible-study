@@ -1,4 +1,8 @@
-//! Placeholder PNGs so adult decks can build before (or without) host image gen.
+//! Placeholder PNGs so adult decks can soft-build scenic art before host image gen.
+//!
+//! **HARD — DEFINICIÓN:** never copy the gold reference card as a placeholder.
+//! Gold bakes another study's terms (Amalec / Justicia / …). A definición stub
+//! must be an obvious non-deliverable slate that fails study-terms QC at build.
 
 use anyhow::{Context, Result};
 use std::fs;
@@ -11,10 +15,10 @@ use crate::paths;
 const SCENIC_W: u32 = 1408;
 const SCENIC_H: u32 = 768;
 
-/// Create missing scenic / definición files under `studies/adult/{N}/images/`.
+/// Create missing scenic / definición stub files under `studies/adult/{N}/images/`.
 ///
 /// - Scenic slots: soft slate 16:9 PNG labeled as placeholder (sidecar `.placeholder`).
-/// - Definición slots: copy of the locked gold reference (passes layout QC).
+/// - Definición slots: **slate stub only** (never gold — gold has wrong-study text).
 ///
 /// Existing real files are left untouched.
 pub fn ensure_adult_placeholders(study: u32, model: &AdultStudy, root: &Path) -> Result<usize> {
@@ -26,12 +30,28 @@ pub fn ensure_adult_placeholders(study: u32, model: &AdultStudy, root: &Path) ->
     for name in needed {
         let dest = media.join(&name);
         if dest.is_file() && !is_placeholder(&dest) {
-            continue;
+            // HARD: a "real" file that is still a byte-copy of gold is leftover
+            // wrong-study art — delete and replace with a stub so build fails
+            // cleanly until regen with this estudio's scan terms.
+            if name.starts_with("definicion-")
+                && crate::build::adult::definicion_card::is_byte_identical_to_any_gold(&dest)
+            {
+                crate::progress::warn(format!(
+                    "removing {name} — it was a verbatim gold reference copy \
+                     (wrong-study terms). Stub until regenerated from this scan."
+                ));
+                let _ = fs::remove_file(&dest);
+                if let Some(stem) = dest.file_stem().and_then(|s| s.to_str()) {
+                    if let Some(parent) = dest.parent() {
+                        let _ = fs::remove_file(parent.join(format!("{stem}.terms")));
+                    }
+                }
+            } else {
+                continue;
+            }
         }
         if name.starts_with("definicion-") {
-            let gold = crate::build::adult::primary_gold_reference()?;
-            fs::copy(&gold, &dest)
-                .with_context(|| format!("copy gold → {}", dest.display()))?;
+            write_definicion_stub(&dest, &name)?;
         } else {
             write_scenic_placeholder(&dest, &name)?;
         }
@@ -41,7 +61,8 @@ pub fn ensure_adult_placeholders(study: u32, model: &AdultStudy, root: &Path) ->
     if created > 0 {
         crate::progress::phase(format!(
             "placeholders: wrote {created} image(s) under {} \
-             (deck can build now; real art can replace later)",
+             (scenic OK for soft build; DEFINICIÓN stubs are NOT deliverable — \
+             regenerate from this estudio's scan terms)",
             media.display()
         ));
     }
@@ -84,9 +105,7 @@ fn write_scenic_placeholder(path: &Path, label: &str) -> Result<()> {
             img.put_pixel(x, y, Rgb([v, v.saturating_sub(4), v.saturating_sub(8)]));
         }
     }
-    // Tiny marker strip at bottom so humans see it's a stub.
-    let mark = format!("PLACEHOLDER · {label}");
-    let _ = mark; // visual label would need a font crate — color bands are enough
+    let _ = label;
     for y in (SCENIC_H - 24)..SCENIC_H {
         for x in 0..SCENIC_W {
             img.put_pixel(x, y, Rgb([230, 126, 34]));
@@ -95,6 +114,29 @@ fn write_scenic_placeholder(path: &Path, label: &str) -> Result<()> {
 
     img.save(path)
         .with_context(|| format!("write placeholder {}", path.display()))?;
+    Ok(())
+}
+
+/// Slate stub for missing DEFINICIÓN — deliberately NOT the gold card layout / terms.
+fn write_definicion_stub(path: &Path, label: &str) -> Result<()> {
+    use image::{Rgb, RgbImage};
+
+    let mut img = RgbImage::from_pixel(SCENIC_W, SCENIC_H, Rgb([248, 250, 252]));
+    // Orange banner so humans see it's a stub, not a finished card.
+    for y in 0..64 {
+        for x in 0..SCENIC_W {
+            img.put_pixel(x, y, Rgb([230, 126, 34]));
+        }
+    }
+    let _ = label;
+    // Dark band — no navy header / no white chevron rows → fails locked layout QC.
+    for y in 200..280 {
+        for x in 80..(SCENIC_W - 80) {
+            img.put_pixel(x, y, Rgb([80, 80, 90]));
+        }
+    }
+    img.save(path)
+        .with_context(|| format!("write definición stub {}", path.display()))?;
     Ok(())
 }
 

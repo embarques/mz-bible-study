@@ -421,13 +421,21 @@ fn fill_tema(
         if let Some(imgs) = study.definicion_images.as_ref() {
             let img_path = resolve_study_path(&imgs[idx])?;
             if img_path.is_file() {
-                crate::build::adult::assert_locked_definicion_card(&img_path)?;
+                // HARD: card must show THIS estudio's scan terms — never leftover
+                // gold / another study's Justicia/Hipócritas/Amalec art.
+                crate::build::adult::assert_study_definicion_card(
+                    &img_path,
+                    tema.definiciones
+                        .iter()
+                        .map(|d| (d.termino.as_str(), d.texto.as_str())),
+                )?;
                 set_definicion_image(build, def_slide, &img_path)?;
             } else {
                 bail!(
                     "missing definición card for tema {} ({}). \
                      Generate studies/adult/.../definicion-{}.png from the printed \
-                     «Definiciones y etimología» box — do not use text fallback.",
+                     «Definiciones y etimología» box — do not use text fallback \
+                     or another study's card.",
                     idx + 1,
                     img_path.display(),
                     idx + 1

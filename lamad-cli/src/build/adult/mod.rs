@@ -11,6 +11,8 @@ mod ooxml;
 pub mod study;
 
 pub use definicion_card::{
-    assert_locked_definicion_card, looks_like_locked_definicion_card, primary_gold_reference,
+    assert_locked_definicion_card, assert_study_definicion_card, keepable_definicion_card,
+    looks_like_locked_definicion_card, primary_gold_reference, terms_fingerprint,
+    terms_sidecar_matches, write_terms_sidecar,
 };
 pub use study::{apply_adult_study, apply_adult_study_value, build_study as build_adult_study};

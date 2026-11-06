@@ -57,7 +57,7 @@ Volunteer zip packages already include a prebuilt `lamad` (or `lamad.exe`) next 
 | `prepare` | **Default full run:** scan PDF → JSON + images → **PowerPoint + PDF** |
 | `build` | Rebuild PPTX from existing JSON (+ optional PDF) |
 | `validate` | Package integrity (must print `OK`) |
-| `export-pdf` | Sibling PDF via PowerPoint AppleScript (macOS) |
+| `export-pdf` | Re-export PDF from an existing PPTX (macOS + PowerPoint). Use after manual edits: `lamad export-pdf -n 7 --audience adult` |
 | `review` | Optional cloud QA → `studies/{audience}/REVIEW.md` or `REVIEW-{N}.md` |
 | `doctor` | Template, provider + API keys, scans/, PowerPoint, pdftoppm |
 

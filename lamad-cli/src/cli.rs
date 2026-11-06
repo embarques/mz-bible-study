@@ -77,12 +77,15 @@ pub enum Commands {
         pptx: PathBuf,
     },
 
-    /// Export PPTX → sibling PDF via Microsoft PowerPoint (macOS).
+    /// Re-export PDF from an existing PPTX (macOS + Microsoft PowerPoint).
+    ///
+    /// Use after manual PowerPoint edits — does **not** rebuild the deck.
+    ///
+    /// Examples:
+    ///   lamad export-pdf -n 7 --audience adult
+    ///   lamad export-pdf "bible-studies/adult/7/powerpoint/7 - TITLE.pptx"
     #[command(name = "export-pdf")]
-    ExportPdf {
-        /// Path to `.pptx`
-        pptx: PathBuf,
-    },
+    ExportPdf(ExportPdfArgs),
 
     /// Re-run agent QA without prepare.
     Review(ReviewArgs),
@@ -179,6 +182,23 @@ pub struct PrepareArgs {
     #[arg(long = "stop-on-error", default_value_t = true)]
     #[arg(long = "continue-on-error", action = ArgAction::SetFalse)]
     pub stop_on_error: bool,
+}
+
+#[derive(Debug, Clone, Parser)]
+pub struct ExportPdfArgs {
+    /// Path to an existing `.pptx` (optional when `-n` / `--study` is set)
+    pub pptx: Option<PathBuf>,
+
+    /// Estudio number — finds `bible-studies/{audience}/{N}/powerpoint/*.pptx`
+    #[arg(short = 'n', long = "study")]
+    pub study: Option<u32>,
+
+    #[arg(long, value_enum, default_value_t = AudienceCli::Youth)]
+    pub audience: AudienceCli,
+
+    /// PDF output path (default: `…/pdf/` beside the powerpoint tray, same basename)
+    #[arg(short = 'o', long = "output")]
+    pub output: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Parser)]

@@ -492,9 +492,16 @@ pub fn verify_adult_section_images(study: u32, model: &AdultStudy, root: &Path) 
                 media.display()
             );
         }
-        crate::build::adult::assert_locked_definicion_card(&p).with_context(|| {
+        crate::build::adult::assert_study_definicion_card(
+            &p,
+            tema.definiciones
+                .iter()
+                .map(|d| (d.termino.as_str(), d.texto.as_str())),
+        )
+        .with_context(|| {
             format!(
-                "adult estudio {study}: {name} failed locked DEFINICIÓN layout QC"
+                "adult estudio {study}: {name} must match THIS study's scan \
+                 Definiciones terms (never reuse another study's card)"
             )
         })?;
     }

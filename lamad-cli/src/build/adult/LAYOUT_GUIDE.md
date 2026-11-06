@@ -178,8 +178,9 @@ Do **not** dump definitions as a plain blue-header body slide. Each tema’s def
 - Centered white title pill, cartoon flat green hills, play-button triangles, vertical book/tab chrome
 - Any new card chrome that is not the gold reference
 - Keeping a wrong invent on disk because it is “already large” — layout QC must pass; overwrite bad cards
+- **Reusing another estudio’s definición PNG / gold reference copy** (e.g. Justicia/Hipócritas/Amalec art on estudio 7). Layout QC alone is NOT enough — those leftovers also pass layout. Baked chevron text must be **verbatim from this estudio’s printed Definiciones box** (folder `definicion-*.txt`). Build requires a matching `.terms` fingerprint sidecar; gold byte-copies and placeholders are rejected.
 
-**Build path:** generate `definicion-{tema}.png` (≈1408×768+) with all of the above baked into the image (including title + body text — this is a composed slide, not chrome-over-photo). Swap onto the definición prototype slide’s picture fill / main image shape. Clear leftover text placeholders so they do not double-render. If a correct card PNG already exists for that tema, **keep it**.
+**Build path:** generate `definicion-{tema}.png` (≈1408×768+) with all of the above baked into the image (including title + body text — this is a composed slide, not chrome-over-photo). Swap onto the definición prototype slide’s picture fill / main image shape. Clear leftover text placeholders so they do not double-render. Keep an on-disk card **only** when layout QC **and** terms fingerprint match this estudio’s scan text (`assert_study_definicion_card`).
 
 JSON fields per term (`Definicion`):
 
