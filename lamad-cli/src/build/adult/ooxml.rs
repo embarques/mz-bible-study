@@ -860,9 +860,9 @@ pub fn fit_intro_body_box(path: &Path, _text: &str) -> Result<()> {
     fs::write(path, out).with_context(|| format!("write {}", path.display()))
 }
 
-/// Youth intro body slides include the Mount Zion logo at bottom-right
-/// (`Imagen 8`). Adult intro body prototypes omit it — inject the same
-/// geometry for intro slides only (not A/B / conclusión).
+/// Youth body slides include the Mount Zion logo at bottom-right (`Imagen 8`).
+/// Adult intro **and** A/B body prototypes omit it — inject the same geometry
+/// on every white body slide that shows the logo floor.
 pub fn ensure_intro_body_logo(build: &Path, slide_num: u32, logo_png: &Path) -> Result<()> {
     if !logo_png.is_file() {
         bail!("intro logo not found: {}", logo_png.display());

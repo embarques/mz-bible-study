@@ -540,8 +540,11 @@ fn fill_ab_block(
         ));
     }
     let body_nums = allocate_body_slides(build, body_slides, body_packs.len())?;
+    let logo = youth_intro_logo_path()?;
     for (&slide_n, text) in body_nums.iter().zip(body_packs.iter()) {
         set_ab_body_slide(&ooxml::slide_path(build, slide_n), &body_title, text)?;
+        // Adult A/B body prototypes lack Mount Zion logo (same as intro).
+        ensure_intro_body_logo(build, slide_n, &logo)?;
         order.push(slide_n);
     }
     Ok(())
