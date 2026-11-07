@@ -778,29 +778,43 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
         deliverables
     };
 
-    // After generate: expand adult agent JSON into the section folder tree.
-    // Keep `{N}.json` until host images finish (image prompts read it).
+    // Adult: prefer section folders downloaded from the agent; else expand JSON.
     let mut content_dir = deliverables.json.clone();
     if job.audience == Audience::Adult && (job.generate || job.force_prepare) {
-        match content::expand_json_to_sections(&deliverables.json, study) {
-            Ok(dir) => {
-                progress::ok(format!(
-                    "Wrote section tree → {}",
-                    rel_from_root(root, &dir)
-                ));
-                content::print_section_inventory(&dir)?;
-                content_dir = dir;
-                // HARD: extracted folders must cover the printed scan body.
-                content::assert_adult_scan_coverage(
-                    study,
-                    pdf,
-                    pages,
-                    cfg.pdftoppm_path.as_deref(),
-                )?;
+        if content::has_adult_sections(study) {
+            let dir = content::adult_study_folder(study)?;
+            progress::ok(format!(
+                "Section tree ready → {}",
+                rel_from_root(root, &dir)
+            ));
+            let _ = content::print_section_inventory(&dir);
+            content_dir = dir;
+            content::assert_adult_scan_coverage(
+                study,
+                pdf,
+                pages,
+                cfg.pdftoppm_path.as_deref(),
+            )?;
+        } else if deliverables.json.is_file() {
+            match content::expand_json_to_sections(&deliverables.json, study) {
+                Ok(dir) => {
+                    progress::ok(format!(
+                        "Expanded JSON → section tree {}",
+                        rel_from_root(root, &dir)
+                    ));
+                    content::print_section_inventory(&dir)?;
+                    content_dir = dir;
+                    content::assert_adult_scan_coverage(
+                        study,
+                        pdf,
+                        pages,
+                        cfg.pdftoppm_path.as_deref(),
+                    )?;
+                }
+                Err(e) => progress::info(format!(
+                    "note: could not expand section tree ({e:#}) — keeping agent JSON"
+                )),
             }
-            Err(e) => progress::info(format!(
-                "note: could not expand section tree ({e:#}) — keeping agent JSON"
-            )),
         }
     }
 

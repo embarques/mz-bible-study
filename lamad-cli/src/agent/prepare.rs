@@ -399,27 +399,34 @@ fn verify_youth_deliverables(study: u32, root: &Path) -> Result<Deliverables> {
 
 fn verify_adult_deliverables(study: u32, root: &Path) -> Result<Deliverables> {
     let paths = expected_paths(study, Audience::Adult, root);
-    if !paths.json.exists() {
-        bail!("deliverable missing: {}", paths.json.display());
-    }
-    let _ = normalize_adult_agent_json(&paths.json)?;
-    let text = std::fs::read_to_string(&paths.json)?;
-    let study_model: crate::model::adult_study::AdultStudy = serde_json::from_str(&text)
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "{} is not valid adult study JSON ({e}). \
-                 Need lectura_antifonal, objetivos, pensamiento_central, texto_aureo, \
-                 ensenanza, datos_generales, introduccion_slides, temas[1+] with \
-                 puntos A…N (or legacy A/B keys), proximo.",
+    // Prefer section folder tree (incremental prepare); fall back to JSON.
+    let study_model: crate::model::adult_study::AdultStudy =
+        if crate::content::has_adult_sections(study) {
+            crate::content::load_adult_sections(study)?
+        } else if paths.json.exists() {
+            let _ = normalize_adult_agent_json(&paths.json)?;
+            let text = std::fs::read_to_string(&paths.json)?;
+            serde_json::from_str(&text).map_err(|e| {
+                anyhow::anyhow!(
+                    "{} is not valid adult study JSON ({e}). \
+                     Need lectura_antifonal, objetivos, pensamiento_central, texto_aureo, \
+                     ensenanza, datos_generales, introduccion_slides, temas[1+] with \
+                     puntos A…N (or legacy A/B keys), proximo.",
+                    paths.json.display()
+                )
+            })?
+        } else {
+            bail!(
+                "adult estudio {study}: need studies/adult/{study}/ (section folders) \
+                 or {}",
                 paths.json.display()
-            )
-        })?;
+            );
+        };
     if study_model.numero.to_string() != study.to_string()
         && !study_model.numero.to_string().contains(&study.to_string())
     {
         bail!(
-            "{} numero is {:?}, expected {study}",
-            paths.json.display(),
+            "adult estudio {study}: numero is {:?}, expected {study}",
             study_model.numero
         );
     }
@@ -939,7 +946,7 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
                     "Cloud agent is writing JSON + 3 section images (~3–8 min)…"
                 }
                 Audience::Adult => {
-                    "Cloud agent is writing JSON + scenic/definición images (~5–15 min)…"
+                    "Cloud agent is writing section folders (then images) — progress per section…"
                 }
             }
         },
@@ -989,7 +996,10 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
         );
     }
 
-    if !artifact_list_has_study_json(req.study, &artifacts) {
+    let has_section_tree = artifact_list_has_adult_section_tree(req.study, &artifacts);
+    if req.audience == Audience::Adult && has_section_tree {
+        crate::progress::info("adult section tree present in artifacts — skipping JSON follow-up");
+    } else if !artifact_list_has_study_json(req.study, &artifacts) {
         artifacts = ensure_study_json_artifact(
             &client,
             &created.agent.id,
@@ -1065,15 +1075,25 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
     )
     .await?;
 
-    stamp_audience(&dest.json, req.audience)?;
-    if req.audience == Audience::Adult {
-        let _ = normalize_adult_agent_json(&dest.json)?;
-        stamp_adult_image_paths(&dest.json, req.study, &req.root)?;
-        // Placeholders first → deck can build immediately; host art optional.
-        let text = std::fs::read_to_string(&dest.json)?;
-        let model: crate::model::adult_study::AdultStudy = serde_json::from_str(&text)
-            .with_context(|| format!("parse {} for placeholders", dest.json.display()))?;
+    if req.audience == Audience::Adult && crate::content::has_adult_sections(req.study) {
+        let model = crate::content::load_adult_sections(req.study)?;
         crate::content::ensure_adult_placeholders(req.study, &model, &req.root)?;
+        // Optional sidecar JSON for tools that still expect {N}.json.
+        if !dest.json.is_file() {
+            if let Ok(text) = serde_json::to_string_pretty(&model) {
+                let _ = std::fs::write(&dest.json, text);
+            }
+        }
+    } else {
+        stamp_audience(&dest.json, req.audience)?;
+        if req.audience == Audience::Adult {
+            let _ = normalize_adult_agent_json(&dest.json)?;
+            stamp_adult_image_paths(&dest.json, req.study, &req.root)?;
+            let text = std::fs::read_to_string(&dest.json)?;
+            let model: crate::model::adult_study::AdultStudy = serde_json::from_str(&text)
+                .with_context(|| format!("parse {} for placeholders", dest.json.display()))?;
+            crate::content::ensure_adult_placeholders(req.study, &model, &req.root)?;
+        }
     }
 
     // Youth: host images here when configured.
@@ -1102,12 +1122,20 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
 
 fn json_followup_nudge(study: u32, audience: Audience, host_images: bool) -> String {
     if host_images {
-        return format!(
-            "STOP. Zero artifacts listed. Write **only** `artifacts/{study}.json` \
-             (valid {aud} schema). Do **not** generate images — the host CLI does that. \
-             Use Write/Shell tools; chat text does not count.",
-            aud = audience.as_str()
-        );
+        return match audience {
+            Audience::Adult => format!(
+                "STOP. Zero artifacts listed. Write the adult **section folder tree** under \
+                 `artifacts/{study}/` (`manifest.toml`, then `01-title/`, `02-lectura/`, … \
+                 one folder at a time). Do **not** generate images — the host CLI does that. \
+                 Use Write/Shell tools; chat text does not count."
+            ),
+            Audience::Youth => format!(
+                "STOP. Zero artifacts listed. Write **only** `artifacts/{study}.json` \
+                 (valid {aud} schema). Do **not** generate images — the host CLI does that. \
+                 Use Write/Shell tools; chat text does not count.",
+                aud = audience.as_str()
+            ),
+        };
     }
     match audience {
         Audience::Youth => format!(
@@ -1120,8 +1148,10 @@ fn json_followup_nudge(study: u32, audience: Audience, host_images: bool) -> Str
              Use Write/Shell/image tools — chat text does not count."
         ),
         Audience::Adult => format!(
-            "STOP. Zero artifacts listed. Write `artifacts/{study}.json` (adult schema) \
-             plus these exact PNG basenames under `artifacts/`: {names}. \
+            "STOP. Zero artifacts listed. Write the adult **section folder tree** under \
+             `artifacts/{study}/` starting with `manifest.toml` then `01-title/`, \
+             `02-lectura/`, … (one folder at a time). Also scenic PNGs under \
+             `artifacts/{study}/images/` or flat `artifacts/`: {names}. \
              Use Write/Shell/image tools — chat text does not count.",
             names = adult_image_basenames().join(", ")
         ),
@@ -1286,8 +1316,55 @@ fn resolve_adult_artifacts(
 ) -> Result<Vec<(String, PathBuf)>> {
     let dest_json = expected_paths(study, Audience::Adult, root).json;
     let media = adult_media_dir(study, root);
+    let study_dir = crate::content::adult_study_folder(study)?;
     let mut out: Vec<(String, PathBuf)> = Vec::new();
     let mut used = vec![false; artifacts.len()];
+
+    // Prefer incremental section tree: artifacts/{N}/manifest.toml + NN-kind/…
+    let tree_prefix = format!("artifacts/{study}/");
+    let tree_prefix_alt = format!("{study}/");
+    let mut section_files = 0usize;
+    for (idx, art) in artifacts.iter().enumerate() {
+        let path = art.path.replace('\\', "/");
+        let rel = path
+            .strip_prefix(&tree_prefix)
+            .or_else(|| path.strip_prefix(&tree_prefix_alt));
+        let Some(rel) = rel else {
+            continue;
+        };
+        if rel.is_empty() || rel.ends_with('/') {
+            continue;
+        }
+        used[idx] = true;
+        section_files += 1;
+        out.push((art.path.clone(), study_dir.join(rel)));
+    }
+    if section_files > 0 {
+        crate::progress::info(format!(
+            "adult prepare: downloading {section_files} section-tree file(s) → studies/adult/{study}/"
+        ));
+        // Also map any flat scenic/definición images still under artifacts/.
+        for (idx, art) in artifacts.iter().enumerate() {
+            if used[idx] {
+                continue;
+            }
+            let basename = art.path.rsplit('/').next().unwrap_or(&art.path);
+            let lower = basename.to_lowercase();
+            let (file_stem, ext) = match lower.rsplit_once('.') {
+                Some(pair) => pair,
+                None => continue,
+            };
+            if !matches!(ext, "png" | "jpg" | "jpeg" | "webp") {
+                continue;
+            }
+            let Some(dest_name) = adult_media_dest_from_stem(file_stem, study) else {
+                continue;
+            };
+            used[idx] = true;
+            out.push((art.path.clone(), media.join(dest_name)));
+        }
+        return Ok(out);
+    }
 
     let json_name = format!("{study}.json");
     for (idx, art) in artifacts.iter().enumerate() {
@@ -1301,7 +1378,8 @@ fn resolve_adult_artifacts(
     }
     if out.is_empty() {
         bail!(
-            "adult prepare missing artifacts/{study}.json (found {} artifacts)",
+            "adult prepare missing section tree artifacts/{study}/… \
+             (or legacy artifacts/{study}.json). Found {} artifacts.",
             artifacts.len()
         );
     }
@@ -1415,6 +1493,29 @@ fn artifact_list_has_study_json(study: u32, artifacts: &[Artifact]) -> bool {
         let base = a.path.rsplit('/').next().unwrap_or(a.path.as_str());
         base.eq_ignore_ascii_case(&json_name)
     })
+}
+
+fn artifact_list_has_adult_section_tree(study: u32, artifacts: &[Artifact]) -> bool {
+    let prefix = format!("artifacts/{study}/");
+    let prefix_alt = format!("{study}/");
+    let mut has_manifest = false;
+    let mut has_section = false;
+    for a in artifacts {
+        let path = a.path.replace('\\', "/");
+        let rel = path
+            .strip_prefix(&prefix)
+            .or_else(|| path.strip_prefix(&prefix_alt));
+        let Some(rel) = rel else {
+            continue;
+        };
+        if rel == "manifest.toml" || rel.starts_with("manifest.toml") {
+            has_manifest = true;
+        }
+        if rel.contains('-') && (rel.contains('/') || rel.ends_with(".txt")) {
+            has_section = true;
+        }
+    }
+    has_manifest || has_section
 }
 
 fn json_artifact_candidate_paths(study: u32) -> Vec<String> {
@@ -1664,152 +1765,81 @@ When finished, confirm the four artifact paths and `section_style.id`.
 fn build_adult_cloud_prepare_prompt(req: &PrepareRequest, host_images: bool) -> Result<String> {
     let study = req.study;
     let proximo_block = proximo_prompt_block(req)?;
+    let resume = crate::content::adult_resume_hint(study).unwrap_or_default();
+    let resume_block = if resume.is_empty() {
+        String::new()
+    } else {
+        format!("\n{resume}\n")
+    };
 
-    let schema = r#"## Adult JSON schema (required keys)
-```json
-{
-  "audience": "adult",
-  "numero": STUDY,
-  "titulo": "…",
-  "base_biblica": ["Cita 1;", "Cita 2;", "Cita 3"],
-  "lectura_antifonal": [{"cita":"…","versiculos":["1 …","2 …"]}],
-  "objetivos": ["…","…","…"],
-  "pensamiento_central": "…",
-  "texto_aureo": {"texto":"…","cita":"Libro N:N"},
-  "ensenanza": "…",
-  "datos_generales": {"autor":"…","personajes":"…","fecha":"…","lugar":"…"},
-  "introduccion_slides": ["para 1","para 2"],
-  "temas": [
-    {
-      "titulo": "…",
-      "rango": "Libro N:N-N",
-      "definiciones": [{"termino":"…","texto":"…","referencia":"(Libro N:N)"}],
-      "A": {"titulo":"…","texto_slides":["…"],"texto_biblico":{"cita":"…","versiculos":["…"]}},
-      "B": {"titulo":"…","texto_slides":["…"],"texto_biblico":{"cita":"…","versiculos":["…"]}},
-      "C": {"titulo":"…","texto_slides":["…"],"texto_biblico":{"cita":"…","versiculos":["…"]}}
-    }
-  ],
-  "proximo": {"numero":0,"titulo":"…","base_biblica":["…"]}
-}
+    let layout = format!(
+        r#"## Deliverable — SECTION FOLDERS (not a monolith JSON first)
+Write files **incrementally** under `artifacts/{study}/` so the host can resume
+after a failure and show progress per section.
+
+Exact layout (same as GENERATE_STUDY_AGENT / studies/adult/7):
+
 ```
-**Variable structure (HARD):**
-- `temas`: **1+** (not fixed to 3). One object per printed `I.` / `II.` / … until **RESUMEN GENERAL** (RESUMEN body is **not** in the deck — stop there).
-- Each tema: lettered points **A…N** as keys `A`,`B`,`C`,… (or a `puntos` array with `letra`). Count varies — stop at **Afianzamiento y aplicación** (skip that section and Ideas/Preguntas).
-- Every lettered point needs **non-empty** `texto_slides` (~360–400 chars each).
-- Scans may be **1-up or 2-up** — treat each half of a two-up spread as its own printed page when reading order. **Do not** assume 3 PDF pages per estudio.
-- **Content window:** start at this estudio’s title page (`ESTUDIO BÍBLICO N`); \
-read through **DESARROLLO DEL ESTUDIO**; use **`RESUMEN GENERAL`** only as the \
-end fence (do not copy RESUMEN / Preguntas / Afianzamiento bodies).
-- **Próximo:** only from the **next** estudio’s title page when attached; if no \
-next title page is present → omit `proximo` (do not invent).
-- **OMIT** `scenic_images` and `definicion_images` entirely — the host CLI stamps \
-canonical paths after images land. Do **not** invent path arrays, index maps \
-(`{\"1\":\"…\"}`), or flat basename maps (`intro-header` / `ab-1A`)."#;
-    let schema = schema.replace("STUDY", &study.to_string());
+artifacts/{study}/
+  manifest.toml
+  images/                    ← scenic + definición PNGs (flat basenames)
+  01-title/                  ← title.txt + base_biblica.txt
+  02-lectura/                ← block-01.txt …
+  03-objetivos/content.txt
+  04-pensamiento/content.txt
+  05-texto-aureo/            ← texto.txt + cita.txt
+  06-ensenanza/content.txt
+  07-datos/content.txt
+  08-introduccion/slides.txt
+  09-tema-1/                 ← titulo.txt, rango.txt, definicion-*.txt when printed
+  10-tema-1-A/               ← titulo.txt, body.txt (or slides.txt), texto_biblico…
+  …
+  NN-proximo/                ← omit if last study / no next title
+```
 
-    // Append HARD rule about Definiciones — never invent.
-    let schema = format!(
-        "{schema}
+**HARD order:** create `manifest.toml`, then `01-title`, then `02-lectura`, …
+Finish each folder (Write the .txt files) **before** starting the next.
+Do **not** wait until the end to dump everything — the host polls List Artifacts
+and shows each section as it appears.
 
-## Definiciones y etimología — HARD (never invent + LOCKED card design)
-- `temas[].definiciones` MUST come **only** from the printed sidebar box titled \
-**«Definiciones y etimología»** on the scans. **Every TEMA (I, II, …) that has \
-that box must have a non-empty `definiciones` array** — do not leave TEMA II+ empty.
-- Copy `termino` + `texto` (+ any citation in that box) **verbatim**. Do **not** \
-paraphrase, expand with Hebrew/Greek roots, or pull phrases from the body prose.
-- If a tema section has **no** such box → `\"definiciones\": []` (empty array). \
-Do **not** invent Rebelión / Anatema / Unción / etc. from the commentary.
-- Definición **card images** MUST match the **HARD-locked gold layout** exactly \
-(open-book header + white rows + coloured chevron + left circular icon + right icon \
-on soft lake/mountain). Change **ONLY** term text, definition text, and icons. \
-**FORBIDDEN invents:** parchment essay, centered white title pill, cartoon green hills, \
-play-button triangles, vertical book/tab chrome, cream title-only, any new card style. \
-Prefer omitting card PNGs when the host will generate them via OpenAI reference-edit.
-- Card images must render **only** those verbatim terms — never add quotes, extra \
-verses, or footer disclaimers not in the box."
+Optional: also write `artifacts/{study}.json` at the very end if easy — not required
+when the section tree is complete.
+"#
     );
 
-    if host_images {
-        return Ok(format!(
-            r#"You are a no-repo Cursor Cloud Agent preparing a Mount Zion Church **adult** Bible study.
-
-Follow AGENTS.md adult HARD rules. Do **NOT** build a .pptx.
-Do **NOT** generate images — the host CLI generates all scenic/definición PNGs after you finish.
-Adult JSON is **not** the youth schema (youth uses top-level `puntos` 1/2/3; adult uses \
-`temas[].A/B/C…` or `temas[].puntos` — no `section_images` / `section_style`).
-
-## Inputs
-- Estudio **{study}** (audience=adult)
-- Content pages **{p0}–{p1}** are attached as images (in order).
-- Some attachments may be **vertical multi-page composites** (top→bottom = reading order; yellow tick marks the page band). Read **every** band — do not skip stacked pages.
-- {proximo_block}
-
-## Deliverable — ONE file only
-Use Write/Shell to create:
-1. `artifacts/{study}.json`  ← required adult schema
-
-{schema}
-
-## Rules
-- {verbatim}
-- Merge cross-page cuts; skip Ideas para el maestro / Preguntas / Afianzamiento / RESUMEN GENERAL body.
-- Lectura/Texto = whole verses.
-- End as soon as `artifacts/{study}.json` exists. Speed matters — JSON only, no images.
-
----
-# AGENTS.md (rules)
-
-{agents}
-"#,
-            p0 = req.pages.0,
-            p1 = req.pages.1,
-            agents = AGENTS_MD,
-            verbatim = VERBATIM_HARD,
-        ));
-    }
+    let images_block = if host_images {
+        "Do **NOT** generate images — the host CLI generates scenic/definición PNGs after text sections exist.".to_string()
+    } else {
+        format!(
+            r#"## Images — under `artifacts/{study}/images/` (after text sections)
+16:9 ≈1408×768. Unique scene per file. Basenames:
+intro-header.png, tema-N.png, ab-N{{Letter}}.png, definicion-N.png (when that tema has a printed box).
+"#
+        )
+    };
 
     Ok(format!(
         r#"You are a no-repo Cursor Cloud Agent preparing a Mount Zion Church **adult** Bible study.
 
-Follow AGENTS.md adult HARD rules and LAYOUT_GUIDE ideas below. Do **NOT** build a .pptx.
-Adult JSON is **not** the youth schema (youth uses top-level `puntos` 1/2/3; adult uses \
-`temas[].A/B/C…` — no `section_images` / `section_style`).
+Follow AGENTS.md adult HARD rules. Do **NOT** build a .pptx.
+Adult source of truth is the **section folder tree** (not youth JSON).
 
 ## Inputs
 - Estudio **{study}** (audience=adult)
-- Content pages **{p0}–{p1}** are attached as images (in order).
-- Some attachments may be **vertical multi-page composites** (top→bottom = reading order; yellow tick marks the page band). Read **every** band — do not skip stacked pages.
+- Content pages **{p0}–{p1}** attached as images (order). Composites = top→bottom bands.
 - {proximo_block}
+{resume_block}
+{layout}
 
-## Deliverables — write under `artifacts/` (mandatory)
-Use Write / Shell / image tools. Host CLI downloads via List Artifacts.
-
-1. `artifacts/{study}.json`  ← required adult schema (see below)
-2. Scenic + definición PNGs named from the JSON (see Images below)
-
-Image paths may also be `artifacts/assets/<name>.png` **or `.jpg`** (host converts to PNG).
-Prefer PNG; JPG is accepted. **Scenic images (intro/tema/ab) are required**; definición cards are strongly preferred when that tema has a printed box.
-
-{schema}
-
-## Images — HARD (variable count; exact basenames)
-16:9 ≈1408×768. No text/letters/logos/watermarks/yellow dashed arcs.
-**UNIQUE SCENES (HARD):** every scenic PNG must be a **different** illustration \
-(intro ≠ tema-1 ≠ tema-2 ≠ ab-1A ≠ ab-1B ≠ …). Do **not** copy/reuse the same \
-image for multiple sections. Same design family OK; identical photos FAIL host QC.
-- `intro-header.png` — cinematic intro full-bleed
-- `tema-{{n}}.png` — one **distinct** scenic per tema in order
-- `ab-{{n}}{{letra}}.png` — one **distinct** scenic per lettered point (e.g. `ab-1A.png`, `ab-1C.png`, `ab-2B.png`)
-- `definicion-{{n}}.png` — DEFINICIÓN Y ETIMOLOGÍA **locked card design** for each tema \
-  with a printed box (white rows + coloured chevrons + icons on soft landscape). \
-  **FORBIDDEN:** parchment / centered essay / plain text dump. One card per TEMA that has the box.
+{images_block}
 
 ## Rules
 - {verbatim}
-- Merge cross-page cuts; skip Ideas / Afianzamiento / Preguntas / RESUMEN body.
-- **Definiciones y etimología:** copy ONLY from that printed box; empty array if the tema has no box — never invent terms or etymologies.
-- Lectura/Texto = whole verses; body slides ~360–400 chars when packing **verbatim** print text (do not shorten by rewriting).
-- End only after `{study}.json` + all required scenic PNGs exist under `artifacts/`.
+- Merge two-column / cross-page cuts; skip Ideas / Afianzamiento / Preguntas / RESUMEN body.
+- Lectura chapter jumps keep printed `5:1` (not bare `1`).
+- Definiciones: only from printed «Definiciones y etimología» boxes; else omit those files.
+- Variable temas/points: one folder per printed TEMA and lettered point — do not invent or drop.
+- End when the section tree under `artifacts/{study}/` is complete{img_end}.
 
 ---
 # AGENTS.md (rules)
@@ -1820,6 +1850,11 @@ image for multiple sections. Same design family OK; identical photos FAIL host Q
         p1 = req.pages.1,
         agents = AGENTS_MD,
         verbatim = VERBATIM_HARD,
+        img_end = if host_images {
+            ""
+        } else {
+            " and required scenic PNGs exist under images/"
+        },
     ))
 }
 
@@ -1879,10 +1914,34 @@ mod tests {
     }
 
     #[test]
-    fn adult_without_json_still_errors() {
+    fn adult_without_json_or_sections_still_errors() {
         let root = PathBuf::from("/repo");
         let arts = vec![art("artifacts/assets/intro-header.jpg")];
         assert!(resolve_adult_artifacts(7, &arts, &root).is_err());
+    }
+
+    #[test]
+    fn maps_adult_section_tree_without_json() {
+        let root = PathBuf::from("/repo");
+        let arts = vec![
+            art("artifacts/8/manifest.toml"),
+            art("artifacts/8/01-title/title.txt"),
+            art("artifacts/8/01-title/base_biblica.txt"),
+            art("artifacts/8/02-lectura/block-01.txt"),
+            art("artifacts/assets/intro-header.png"),
+        ];
+        let resolved = resolve_adult_artifacts(8, &arts, &root).expect("section tree");
+        assert!(resolved
+            .iter()
+            .any(|(_, d)| d.ends_with("studies/adult/8/manifest.toml")
+                || d.ends_with("adult/8/manifest.toml")));
+        assert!(resolved
+            .iter()
+            .any(|(_, d)| d.ends_with("01-title/title.txt")));
+        assert!(resolved
+            .iter()
+            .any(|(_, d)| d.ends_with("intro-header.png")));
+        assert!(!resolved.iter().any(|(_, d)| d.ends_with("8.json")));
     }
 
     #[test]

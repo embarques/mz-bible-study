@@ -53,6 +53,85 @@ pub fn has_adult_sections(study: u32) -> bool {
         .unwrap_or(false)
 }
 
+/// Fixed front-matter kinds (before variable `tema-*` folders), in order.
+pub const ADULT_FRONT_MATTER: &[&str] = &[
+    "title",
+    "lectura",
+    "objetivos",
+    "pensamiento",
+    "texto-aureo",
+    "ensenanza",
+    "datos",
+    "introduccion",
+];
+
+/// Section folder names present on disk (e.g. `01-title`, `09-tema-1`), sorted.
+pub fn present_section_dir_names(study: u32) -> Result<Vec<String>> {
+    let dir = adult_study_folder(study)?;
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut names = list_section_dirs(&dir)?
+        .into_iter()
+        .map(|(_, _, path)| {
+            path.file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default()
+        })
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>();
+    names.sort();
+    Ok(names)
+}
+
+/// Front-matter kinds still missing (by suffix after `NN-`).
+pub fn missing_front_matter_kinds(study: u32) -> Result<Vec<&'static str>> {
+    let present = present_section_dir_names(study)?;
+    let kinds: Vec<String> = present
+        .iter()
+        .filter_map(|n| n.split_once('-').map(|(_, k)| k.to_string()))
+        .collect();
+    Ok(ADULT_FRONT_MATTER
+        .iter()
+        .copied()
+        .filter(|k| !kinds.iter().any(|have| have == k))
+        .collect())
+}
+
+/// Human-readable resume hint for the cloud agent (empty if nothing on disk yet).
+pub fn adult_resume_hint(study: u32) -> Result<String> {
+    let dir = adult_study_folder(study)?;
+    let mut lines = Vec::new();
+    if dir.join("manifest.toml").is_file() {
+        lines.push("manifest.toml".into());
+    }
+    for name in present_section_dir_names(study)? {
+        lines.push(format!("{name}/"));
+    }
+    if lines.is_empty() {
+        return Ok(String::new());
+    }
+    let missing = missing_front_matter_kinds(study)?;
+    let mut out = format!(
+        "## RESUME — already on host disk under studies/adult/{study}/ (do NOT rewrite these)\n"
+    );
+    for l in &lines {
+        out.push_str(&format!("- {l}\n"));
+    }
+    out.push_str(
+        "\nWrite **only** missing section folders under `artifacts/{study}/` \
+         (same layout). Keep numbers sequential after what already exists.\n",
+    );
+    if !missing.is_empty() {
+        out.push_str(&format!("Missing front-matter kinds: {:?}\n", missing));
+    }
+    out.push_str(
+        "If temas/points are incomplete, continue from the next tema/point after \
+         the last existing `NN-tema-*` folder. Prefer section folders over a monolith JSON.\n",
+    );
+    Ok(out)
+}
+
 /// Images live under `{study_dir}/images/` (flat basenames the builder already expects).
 pub fn adult_images_dir(study_dir: &Path) -> PathBuf {
     study_dir.join("images")
