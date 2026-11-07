@@ -215,14 +215,16 @@ pub fn required_images_present(study: u32, audience: Audience, root: &Path) -> b
             p.img1.is_file() && p.img2.is_file() && p.img3.is_file()
         }
         Audience::Adult => {
-            let paths = expected_paths(study, Audience::Adult, root);
-            let _ = normalize_adult_agent_json(&paths.json);
-            let Ok(text) = std::fs::read_to_string(&paths.json) else {
-                return false;
+            let model = if crate::content::has_adult_sections(study) {
+                crate::content::load_adult_sections(study).ok()
+            } else {
+                let paths = expected_paths(study, Audience::Adult, root);
+                let _ = normalize_adult_agent_json(&paths.json);
+                std::fs::read_to_string(&paths.json)
+                    .ok()
+                    .and_then(|t| serde_json::from_str(&t).ok())
             };
-            let Ok(model) =
-                serde_json::from_str::<crate::model::adult_study::AdultStudy>(&text)
-            else {
+            let Some(model) = model else {
                 return false;
             };
             let media = adult_media_dir(study, root);
@@ -511,14 +513,14 @@ fn verify_adult_deliverables(study: u32, root: &Path) -> Result<Deliverables> {
     Ok(paths)
 }
 
-/// Strip / coerce agent-authored image path quirks **before** schema parse.
+/// Strip / coerce agent-authored quirks **before** schema parse.
 ///
-/// Cloud agents often invent:
-/// - `definicion_images` as `{"1":"…","2":"…"}` instead of an array
-/// - `scenic_images` as a flat basename map (`intro-header`, `ab-1A`, …)
+/// Cloud agents often invent shapes that are content-complete but schema-wrong:
+/// - `estudio` instead of `numero`; `lectura_slides` instead of `lectura_antifonal`
+/// - legacy `A`/`B`/`C` blocks missing `texto_biblico` (lives on tema as slides)
+/// - `definiciones` as bare strings; image maps instead of arrays
+/// - youth leftovers (`section_images`, `packed_slides`, …)
 ///
-/// Host [`stamp_adult_image_paths`] writes the canonical shapes. Removing junk
-/// here keeps prepare from failing on mature content that is otherwise valid.
 /// Returns `true` when the file was rewritten.
 pub fn normalize_adult_agent_json(json_path: &Path) -> Result<bool> {
     let text = std::fs::read_to_string(json_path)?;
@@ -527,6 +529,51 @@ pub fn normalize_adult_agent_json(json_path: &Path) -> Result<bool> {
         bail!("{} root must be an object", json_path.display());
     };
     let mut changed = false;
+
+    // estudio → numero
+    if obj.get("numero").is_none() {
+        if let Some(est) = obj.remove("estudio") {
+            obj.insert("numero".into(), est);
+            changed = true;
+        }
+    } else if obj.remove("estudio").is_some() {
+        changed = true;
+    }
+
+    // lectura_slides → lectura_antifonal [{cita, versiculos}]
+    if obj.get("lectura_antifonal").is_none() {
+        if let Some(slides) = obj.remove("lectura_slides") {
+            if let Some(block) = coerce_slide_strings_to_lectura(&slides) {
+                obj.insert(
+                    "lectura_antifonal".into(),
+                    serde_json::Value::Array(vec![block]),
+                );
+                changed = true;
+            }
+        }
+    } else if obj.remove("lectura_slides").is_some() {
+        changed = true;
+    }
+
+    // Clean datos_generales of agent extras (enseñanza duplicated under ensenanza).
+    if let Some(serde_json::Value::Object(datos)) = obj.get_mut("datos_generales") {
+        for junk in ["enseñanza", "ensenanza", "enseñaza"] {
+            if datos.remove(junk).is_some() {
+                changed = true;
+            }
+        }
+    }
+
+    if let Some(serde_json::Value::Array(temas)) = obj.get_mut("temas") {
+        for tema in temas.iter_mut() {
+            let Some(tema_obj) = tema.as_object_mut() else {
+                continue;
+            };
+            if coerce_tema_agent_shape(tema_obj) {
+                changed = true;
+            }
+        }
+    }
 
     if let Some(def) = obj.get("definicion_images") {
         match def {
@@ -568,8 +615,12 @@ pub fn normalize_adult_agent_json(json_path: &Path) -> Result<bool> {
         }
     }
 
-    // Youth leftovers some agents paste into adult JSON — harmless but noisy.
-    for junk in ["section_images", "section_style"] {
+    for junk in [
+        "section_images",
+        "section_style",
+        "packed_slides",
+        "tema_trimestral",
+    ] {
         if obj.remove(junk).is_some() {
             changed = true;
         }
@@ -579,6 +630,212 @@ pub fn normalize_adult_agent_json(json_path: &Path) -> Result<bool> {
         std::fs::write(json_path, serde_json::to_string_pretty(&v)?)?;
     }
     Ok(changed)
+}
+
+/// Convert agent slide strings / verse arrays into `{cita, versiculos}`.
+fn coerce_slide_strings_to_lectura(v: &serde_json::Value) -> Option<serde_json::Value> {
+    match v {
+        serde_json::Value::Object(o)
+            if o.contains_key("cita") && o.contains_key("versiculos") =>
+        {
+            Some(v.clone())
+        }
+        serde_json::Value::Array(arr) if !arr.is_empty() => {
+            let mut cita = String::new();
+            let mut versiculos: Vec<String> = Vec::new();
+            for item in arr {
+                match item {
+                    serde_json::Value::String(s) => {
+                        for line in s.lines().map(str::trim).filter(|l| !l.is_empty()) {
+                            let starts_verse = line
+                                .chars()
+                                .next()
+                                .map(|c| c.is_ascii_digit())
+                                .unwrap_or(false);
+                            if cita.is_empty() && !starts_verse {
+                                cita = line.to_string();
+                            } else {
+                                versiculos.push(line.to_string());
+                            }
+                        }
+                    }
+                    serde_json::Value::Object(o) => {
+                        if cita.is_empty() {
+                            if let Some(c) = o.get("cita").and_then(|x| x.as_str()) {
+                                cita = c.to_string();
+                            }
+                        }
+                        if let Some(vs) = o.get("versiculos").and_then(|x| x.as_array()) {
+                            for v in vs {
+                                if let Some(s) = v.as_str() {
+                                    versiculos.push(s.to_string());
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if cita.is_empty() && versiculos.is_empty() {
+                return None;
+            }
+            if cita.is_empty() {
+                cita = versiculos
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "Texto".into());
+            }
+            Some(serde_json::json!({ "cita": cita, "versiculos": versiculos }))
+        }
+        _ => None,
+    }
+}
+
+fn coerce_definicion_entry(v: &serde_json::Value) -> Option<serde_json::Value> {
+    match v {
+        serde_json::Value::Object(o)
+            if o.get("termino").and_then(|x| x.as_str()).is_some()
+                && o.get("texto").and_then(|x| x.as_str()).is_some() =>
+        {
+            Some(v.clone())
+        }
+        serde_json::Value::String(s) => {
+            let s = s.trim();
+            // `"Term". Body…` or `Term. Body…`
+            let (termino, texto) = if let Some(rest) = s.strip_prefix('"') {
+                if let Some(end) = rest.find('"') {
+                    let term = rest[..end].trim().to_string();
+                    let body = rest[end + 1..]
+                        .trim()
+                        .trim_start_matches('.')
+                        .trim()
+                        .to_string();
+                    (term, body)
+                } else {
+                    (s.to_string(), String::new())
+                }
+            } else if let Some((term, body)) = s.split_once('.') {
+                (term.trim().to_string(), body.trim().to_string())
+            } else {
+                (s.to_string(), String::new())
+            };
+            Some(serde_json::json!({ "termino": termino, "texto": texto }))
+        }
+        _ => None,
+    }
+}
+
+/// Rewrite one tema object: string defs, inject texto_biblico into A–F / puntos.
+fn coerce_tema_agent_shape(tema: &mut serde_json::Map<String, serde_json::Value>) -> bool {
+    let mut changed = false;
+
+    // definiciones: string[] → {termino,texto}[]
+    if let Some(serde_json::Value::Array(defs)) = tema.get("definiciones").cloned() {
+        let mut out = Vec::new();
+        let mut any = false;
+        for d in &defs {
+            if let Some(c) = coerce_definicion_entry(d) {
+                if !d.is_object()
+                    || d.get("termino").is_none()
+                    || d.get("texto").is_none()
+                {
+                    any = true;
+                }
+                out.push(c);
+            }
+        }
+        if any || out.len() != defs.len() {
+            tema.insert("definiciones".into(), serde_json::Value::Array(out));
+            changed = true;
+        }
+    }
+
+    // Prefer tema-level slides as the shared Lectura for lettered points.
+    let shared_tb = tema
+        .get("texto_biblico")
+        .and_then(coerce_slide_strings_to_lectura)
+        .or_else(|| {
+            tema.get("texto_biblico_slides")
+                .and_then(coerce_slide_strings_to_lectura)
+        });
+
+    if tema.remove("texto_biblico_slides").is_some() {
+        changed = true;
+    }
+    // Keep a structured texto_biblico on tema only if already object; else drop array form.
+    if let Some(tb) = &shared_tb {
+        match tema.get("texto_biblico") {
+            Some(serde_json::Value::Object(_)) => {}
+            _ => {
+                // Not part of TemaAdult schema — remove after injecting into points.
+                tema.remove("texto_biblico");
+                changed = true;
+                let _ = tb;
+            }
+        }
+    } else if matches!(tema.get("texto_biblico"), Some(serde_json::Value::Array(_))) {
+        tema.remove("texto_biblico");
+        changed = true;
+    }
+
+    let empty_tb = serde_json::json!({ "cita": "", "versiculos": [] });
+    let inject_tb = shared_tb.unwrap_or(empty_tb);
+
+    // Legacy A–F blocks: ensure texto_biblico present.
+    for letter in ["A", "B", "C", "D", "E", "F"] {
+        let Some(block) = tema.get_mut(letter) else {
+            continue;
+        };
+        let Some(bobj) = block.as_object_mut() else {
+            continue;
+        };
+        match bobj.get("texto_biblico") {
+            Some(serde_json::Value::Object(_)) => {}
+            Some(other) => {
+                if let Some(c) = coerce_slide_strings_to_lectura(other) {
+                    bobj.insert("texto_biblico".into(), c);
+                } else {
+                    bobj.insert("texto_biblico".into(), inject_tb.clone());
+                }
+                changed = true;
+            }
+            None => {
+                bobj.insert("texto_biblico".into(), inject_tb.clone());
+                changed = true;
+            }
+        }
+    }
+
+    // puntos[]: same injection
+    if let Some(serde_json::Value::Array(puntos)) = tema.get_mut("puntos") {
+        for p in puntos.iter_mut() {
+            let Some(pobj) = p.as_object_mut() else {
+                continue;
+            };
+            match pobj.get("texto_biblico") {
+                Some(serde_json::Value::Object(_)) => {}
+                Some(other) => {
+                    if let Some(c) = coerce_slide_strings_to_lectura(other) {
+                        pobj.insert("texto_biblico".into(), c);
+                    } else {
+                        pobj.insert("texto_biblico".into(), inject_tb.clone());
+                    }
+                    changed = true;
+                }
+                None => {
+                    pobj.insert("texto_biblico".into(), inject_tb.clone());
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    // Drop tema.numero (not in schema)
+    if tema.remove("numero").is_some() {
+        changed = true;
+    }
+
+    changed
 }
 
 /// Write `scenic_images` + `definicion_images` paths into adult JSON after PNGs land.
@@ -996,9 +1253,22 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
         );
     }
 
-    let has_section_tree = artifact_list_has_adult_section_tree(req.study, &artifacts);
-    if req.audience == Audience::Adult && has_section_tree {
-        crate::progress::info("adult section tree present in artifacts — skipping JSON follow-up");
+    // Adult: NEVER nudge for monolith JSON. Section folders are the deliverable.
+    if req.audience == Audience::Adult {
+        if !artifact_list_has_adult_section_tree(req.study, &artifacts) {
+            artifacts = ensure_adult_section_tree_artifact(
+                &client,
+                &created.agent.id,
+                req.study,
+                &artifacts,
+                req.stream,
+            )
+            .await?;
+        } else {
+            crate::progress::info(
+                "adult section tree present in artifacts — skipping JSON follow-up",
+            );
+        }
     } else if !artifact_list_has_study_json(req.study, &artifacts) {
         artifacts = ensure_study_json_artifact(
             &client,
@@ -1022,34 +1292,31 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
         .map(|k| !k.trim().is_empty())
         .unwrap_or(false);
 
-    let resolved = if host_images {
-        // OpenAI host path: never wait on Cursor for image files.
-        vec![resolve_json_artifact(req.study, &artifacts, &dest)?]
-    } else {
-        match req.audience {
-            Audience::Youth => match resolve_artifacts(req.study, &artifacts, &dest) {
-                Ok(r) => r,
-                Err(e) => {
-                    if can_host && artifact_list_has_study_json(req.study, &artifacts) {
-                        crate::progress::warn(format!(
-                            "agent section images incomplete ({e:#}); \
-                             downloading JSON and generating images via OpenAI…"
-                        ));
-                        vec![resolve_json_artifact(req.study, &artifacts, &dest)?]
-                    } else if artifact_list_has_study_json(req.study, &artifacts) {
-                        crate::progress::warn(format!(
-                            "agent section images incomplete ({e:#}); \
-                             downloading JSON — placeholders will fill gaps"
-                        ));
-                        vec![resolve_json_artifact(req.study, &artifacts, &dest)?]
-                    } else {
-                        return Err(e);
-                    }
-                }
-            },
-            // Cursor image path: take whatever art Cursor returned; placeholders fill gaps.
-            Audience::Adult => resolve_adult_artifacts(req.study, &artifacts, &req.root)?,
+    let resolved = match req.audience {
+        Audience::Adult => resolve_adult_artifacts(req.study, &artifacts, &req.root)?,
+        Audience::Youth if host_images => {
+            vec![resolve_json_artifact(req.study, &artifacts, &dest)?]
         }
+        Audience::Youth => match resolve_artifacts(req.study, &artifacts, &dest) {
+            Ok(r) => r,
+            Err(e) => {
+                if can_host && artifact_list_has_study_json(req.study, &artifacts) {
+                    crate::progress::warn(format!(
+                        "agent section images incomplete ({e:#}); \
+                         downloading JSON and generating images via OpenAI…"
+                    ));
+                    vec![resolve_json_artifact(req.study, &artifacts, &dest)?]
+                } else if artifact_list_has_study_json(req.study, &artifacts) {
+                    crate::progress::warn(format!(
+                        "agent section images incomplete ({e:#}); \
+                         downloading JSON — placeholders will fill gaps"
+                    ));
+                    vec![resolve_json_artifact(req.study, &artifacts, &dest)?]
+                } else {
+                    return Err(e);
+                }
+            }
+        },
     };
 
     crate::progress::now_step(
@@ -1075,25 +1342,46 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
     )
     .await?;
 
-    if req.audience == Audience::Adult && crate::content::has_adult_sections(req.study) {
-        let model = crate::content::load_adult_sections(req.study)?;
-        crate::content::ensure_adult_placeholders(req.study, &model, &req.root)?;
-        // Optional sidecar JSON for tools that still expect {N}.json.
-        if !dest.json.is_file() {
+    if req.audience == Audience::Adult {
+        if crate::content::has_adult_sections(req.study) {
+            let model = crate::content::load_adult_sections(req.study).with_context(|| {
+                format!(
+                    "adult estudio {}: section folders on disk but failed to load — \
+                     check studies/adult/{}/",
+                    req.study, req.study
+                )
+            })?;
+            crate::content::ensure_adult_placeholders(req.study, &model, &req.root)?;
+            // Sidecar JSON from sections (overwrite broken agent JSON).
             if let Ok(text) = serde_json::to_string_pretty(&model) {
                 let _ = std::fs::write(&dest.json, text);
             }
-        }
-    } else {
-        stamp_audience(&dest.json, req.audience)?;
-        if req.audience == Audience::Adult {
+        } else if dest.json.is_file() {
+            // Legacy JSON path only when no section tree landed.
             let _ = normalize_adult_agent_json(&dest.json)?;
+            stamp_audience(&dest.json, req.audience)?;
             stamp_adult_image_paths(&dest.json, req.study, &req.root)?;
             let text = std::fs::read_to_string(&dest.json)?;
             let model: crate::model::adult_study::AdultStudy = serde_json::from_str(&text)
-                .with_context(|| format!("parse {} for placeholders", dest.json.display()))?;
+                .with_context(|| {
+                    format!(
+                        "parse {} for placeholders — prefer section folders under \
+                         studies/adult/{}/ (delete this JSON and re-run to resume)",
+                        dest.json.display(),
+                        req.study
+                    )
+                })?;
             crate::content::ensure_adult_placeholders(req.study, &model, &req.root)?;
+        } else {
+            bail!(
+                "adult estudio {}: no section tree under studies/adult/{}/ and no JSON. \
+                 Re-run prepare to resume.",
+                req.study,
+                req.study
+            );
         }
+    } else {
+        stamp_audience(&dest.json, req.audience)?;
     }
 
     // Youth: host images here when configured.
@@ -1604,6 +1892,7 @@ fn json_followup_prompt(study: u32, artifacts: &[Artifact], attempt: u32) -> Str
 }
 
 /// Follow-up until `{study}.json` is listable or downloadable (up to 3 nudges + polling).
+/// Youth only — adult uses [`ensure_adult_section_tree_artifact`].
 async fn ensure_study_json_artifact(
     client: &CursorClient,
     agent_id: &str,
@@ -1624,6 +1913,58 @@ async fn ensure_study_json_artifact(
         println!("  JSON follow-up run {}", follow.run.id);
         client.wait_run(agent_id, &follow.run.id, stream).await?;
         artifacts = poll_artifacts_for_json(client, agent_id, study, 8, 3).await?;
+    }
+    Ok(artifacts)
+}
+
+/// Adult follow-up: require section folders under `artifacts/{study}/`, never monolith JSON.
+async fn ensure_adult_section_tree_artifact(
+    client: &CursorClient,
+    agent_id: &str,
+    study: u32,
+    artifacts: &[Artifact],
+    stream: bool,
+) -> Result<Vec<Artifact>> {
+    let mut artifacts = artifacts.to_vec();
+    for attempt in 1..=3u32 {
+        if artifact_list_has_adult_section_tree(study, &artifacts) {
+            return Ok(artifacts);
+        }
+        let listed: Vec<&str> = artifacts.iter().map(|a| a.path.as_str()).collect();
+        eprintln!(
+            "  Artifacts present but missing section tree artifacts/{study}/ — \
+             section follow-up {attempt}/3…"
+        );
+        let nudge = format!(
+            "STOP. Do **not** write artifacts/{study}.json.\n\n\
+             Adult deliverable is the **section folder tree**. Create these paths NOW \
+             (Write/Shell), one folder at a time:\n\
+             1. artifacts/{study}/manifest.toml\n\
+             2. artifacts/{study}/01-title/title.txt + base_biblica.txt\n\
+             3. artifacts/{study}/02-lectura/block-01.txt\n\
+             4. Continue 03-objetivos … 08-introduccion … tema folders.\n\n\
+             Currently listed: {listed:?}\n\
+             Chat text does not count. List Artifacts must show `artifacts/{study}/…` files.",
+        );
+        let follow = client.create_followup(agent_id, &nudge).await?;
+        println!("  section follow-up run {}", follow.run.id);
+        client.wait_run(agent_id, &follow.run.id, stream).await?;
+        artifacts = client.list_artifacts(agent_id).await?;
+        for _ in 0..6 {
+            if artifact_list_has_adult_section_tree(study, &artifacts) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            artifacts = client.list_artifacts(agent_id).await?;
+        }
+    }
+    if !artifact_list_has_adult_section_tree(study, &artifacts) {
+        bail!(
+            "adult prepare: cloud agent never wrote section folders under \
+             artifacts/{study}/ (after 3 follow-ups). Re-run the same command to resume. \
+             Listed: {:?}",
+            artifacts.iter().map(|a| a.path.as_str()).collect::<Vec<_>>()
+        );
     }
     Ok(artifacts)
 }
@@ -1996,6 +2337,69 @@ mod tests {
         assert!(v.get("scenic_images").is_none());
         assert!(v.get("section_images").is_none());
         assert!(v.get("section_style").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn normalize_adult_agent_json_salvages_legacy_a_b_without_texto_biblico() {
+        let dir = std::env::temp_dir().join(format!(
+            "lamad-normalize-adult-legacy-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("8.json");
+        let raw = serde_json::json!({
+            "estudio": 8,
+            "titulo": "T",
+            "base_biblica": "2 S 6",
+            "lectura_slides": ["2 Samuel 6\n\n1 David reunió…"],
+            "objetivos": ["a", "b", "c"],
+            "pensamiento_central": "p",
+            "texto_aureo": {"texto": "q", "cita": "Jn 15:7"},
+            "ensenanza": "e",
+            "datos_generales": {
+                "autor": "a",
+                "personajes": "p",
+                "fecha": "f",
+                "lugar": "l",
+                "enseñanza": "dup"
+            },
+            "introduccion_slides": ["intro"],
+            "packed_slides": {"introduccion": ["x"]},
+            "temas": [{
+                "titulo": "I. TEMA",
+                "rango": "2 S 6:1-11",
+                "definiciones": ["\"Arca\". Caja sagrada."],
+                "texto_biblico_slides": ["2 Samuel 6:1-11\n\n1 David reunió…"],
+                "A": {
+                    "titulo": "A. Point",
+                    "texto_slides": ["body A"]
+                },
+                "B": {
+                    "titulo": "B. Point",
+                    "texto_slides": ["body B"]
+                }
+            }],
+            "proximo": {"numero": 9, "titulo": "N", "base_biblica": "x"}
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&raw).unwrap()).unwrap();
+        assert!(normalize_adult_agent_json(&path).unwrap());
+        let text = std::fs::read_to_string(&path).unwrap();
+        let study: crate::model::adult_study::AdultStudy =
+            serde_json::from_str(&text).expect("parse after normalize");
+        assert_eq!(study.numero.to_string(), "8");
+        assert_eq!(study.lectura_antifonal.len(), 1);
+        assert_eq!(study.temas.len(), 1);
+        assert_eq!(study.temas[0].puntos.len(), 2);
+        assert!(
+            !study.temas[0].puntos[0].texto_biblico.cita.is_empty()
+                || !study.temas[0].puntos[0]
+                    .texto_biblico
+                    .versiculos
+                    .is_empty()
+        );
+        assert_eq!(study.temas[0].definiciones[0].termino, "Arca");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

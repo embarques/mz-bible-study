@@ -589,6 +589,8 @@ pub fn verify_adult_section_images(study: u32, model: &AdultStudy, root: &Path) 
 
 /// Expand an existing adult JSON (+ optional flat media dir) into the section tree.
 pub fn expand_json_to_sections(json_path: &Path, study: u32) -> Result<PathBuf> {
+    // Coerce agent quirks (estudio/lectura_slides/A-B without texto_biblico, …).
+    let _ = crate::agent::prepare::normalize_adult_agent_json(json_path)?;
     let text = fs::read_to_string(json_path)?;
     let model: AdultStudy = serde_json::from_str(&text)
         .with_context(|| format!("parse adult JSON {}", json_path.display()))?;

@@ -16,6 +16,10 @@ pub struct Config {
     pub cursor_api_key: Option<String>,
     #[serde(default = "default_cursor_model")]
     pub cursor_model: String,
+    /// Stronger Cursor model for **adult** prepare (section extract is harder than youth).
+    /// Empty → fall back to `cursor_model`.
+    #[serde(default = "default_adult_cursor_model")]
+    pub adult_cursor_model: String,
 
     pub openai_api_key: Option<String>,
     #[serde(default = "default_openai_model")]
@@ -43,6 +47,10 @@ pub struct Config {
 fn default_cursor_model() -> String {
     "composer-2.5".into()
 }
+/// Adult Bible-study extract needs a more reliable cloud agent than default Composer.
+fn default_adult_cursor_model() -> String {
+    "claude-4.5-sonnet".into()
+}
 fn default_openai_model() -> String {
     "gpt-4o".into()
 }
@@ -62,6 +70,7 @@ impl Default for Config {
             agent_provider: AgentProvider::Cursor,
             cursor_api_key: None,
             cursor_model: default_cursor_model(),
+            adult_cursor_model: default_adult_cursor_model(),
             openai_api_key: None,
             openai_model: default_openai_model(),
             openai_image_model: default_openai_image_model(),
@@ -108,8 +117,13 @@ impl Config {
         }
     }
 
-    /// Resolve API key + models for the configured provider.
+    /// Resolve API key + models for the configured provider (youth / default).
     pub fn provider_creds(&self) -> Result<ProviderCreds> {
+        self.provider_creds_for(Audience::Youth)
+    }
+
+    /// Adult prepare uses [`Self::adult_cursor_model`] when set (stronger extract agent).
+    pub fn provider_creds_for(&self, audience: Audience) -> Result<ProviderCreds> {
         match self.agent_provider {
             AgentProvider::Cursor => {
                 let api_key = self
@@ -126,15 +140,22 @@ impl Config {
                     .as_ref()
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty());
+                let model = match audience {
+                    Audience::Adult if !self.adult_cursor_model.trim().is_empty() => {
+                        self.adult_cursor_model.clone()
+                    }
+                    _ => self.cursor_model.clone(),
+                };
                 Ok(ProviderCreds {
                     provider: AgentProvider::Cursor,
                     api_key,
-                    model: self.cursor_model.clone(),
+                    model,
                     image_model: self.openai_image_model.clone(),
                     image_api_key,
                 })
             }
             AgentProvider::ChatGpt => {
+                let _ = audience;
                 let api_key = self
                     .openai_api_key
                     .as_deref()
@@ -258,6 +279,11 @@ fn merge(base: Config, over: Config) -> Config {
             base.cursor_model
         } else {
             over.cursor_model
+        },
+        adult_cursor_model: if over.adult_cursor_model.is_empty() {
+            base.adult_cursor_model
+        } else {
+            over.adult_cursor_model
         },
         openai_api_key: over.openai_api_key.or(base.openai_api_key),
         openai_model: if over.openai_model.is_empty() {

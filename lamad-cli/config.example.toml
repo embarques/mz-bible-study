@@ -9,6 +9,8 @@ agent_provider = "cursor"
 # --- Cursor Cloud Agents (default) ---
 cursor_api_key = ""
 cursor_model = "composer-2.5"
+# Adult prepare (section folders) — stronger than Composer; override if needed.
+adult_cursor_model = "claude-4.5-sonnet"
 
 # --- ChatGPT / OpenAI ---
 # Strongly recommended for adult prepare: Cursor writes JSON only; this machine

@@ -46,10 +46,10 @@ fn adult_fixture_slide_counts_match_template() {
     assert_eq!(study.lectura_antifonal.len(), 4);
     assert_eq!(study.introduccion_slides.len(), 4);
     assert_eq!(study.temas.len(), 3);
-    assert_eq!(study.temas[0].a.texto_slides.len(), 4);
-    assert_eq!(study.temas[0].b.texto_slides.len(), 5);
-    assert_eq!(study.temas[1].a.texto_slides.len(), 4);
-    assert_eq!(study.temas[1].b.texto_slides.len(), 5);
-    assert_eq!(study.temas[2].a.texto_slides.len(), 5);
-    assert_eq!(study.temas[2].b.texto_slides.len(), 7);
+    assert_eq!(study.temas[0].puntos[0].texto_slides.len(), 4);
+    assert_eq!(study.temas[0].puntos[1].texto_slides.len(), 5);
+    assert_eq!(study.temas[1].puntos[0].texto_slides.len(), 4);
+    assert_eq!(study.temas[1].puntos[1].texto_slides.len(), 5);
+    assert_eq!(study.temas[2].puntos[0].texto_slides.len(), 5);
+    assert_eq!(study.temas[2].puntos[1].texto_slides.len(), 7);
 }

@@ -375,6 +375,7 @@ fn read_existing_json_numero(path: &Path) -> Option<Result<u32, String>> {
             serde_json::from_str(&text).map_err(|e| format!("invalid JSON ({e})"))?;
         let n = v
             .get("numero")
+            .or_else(|| v.get("estudio"))
             .and_then(|x| x.as_u64().or_else(|| x.as_i64().map(|i| i as u64)))
             .ok_or_else(|| "missing numero".to_string())?;
         Ok(n as u32)
@@ -760,7 +761,7 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
             agent::prepare::existing_inventory_summary(study, job.audience, root)
         ));
 
-        let creds = cfg.provider_creds()?;
+        let creds = cfg.provider_creds_for(job.audience)?;
         progress::phase(format!(
             "backend: {} (model={}){}",
             creds.provider.display_name(),
@@ -1041,7 +1042,7 @@ async fn run_review(
     cfg: &Config,
     root: &Path,
 ) -> Result<()> {
-    let creds = cfg.provider_creds()?;
+    let creds = cfg.provider_creds_for(job.audience)?;
 
     println!("\n=== Agent review ({}) ===", creds.provider.display_name());
     let report = agent::review::run_review_agent(
