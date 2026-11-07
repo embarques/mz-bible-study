@@ -154,6 +154,9 @@ pub async fn run(mut job: PrepareJob, cfg: &Config) -> Result<()> {
     };
 
     let total = slices.len();
+    // HARD: collect every mapping / on-disk conflict *before* extract or build.
+    preflight_prepare_batch(&job, &slices, &pdf, &root)?;
+
     progress::info(format!(
         "preparing {} estudio{} ({}–{}) from {}",
         total,
@@ -274,6 +277,104 @@ fn more_studies_pending_in_pdf(slices: &[StudySlice], page_count: usize) -> bool
         .map(|s| s.pages.1 as usize)
         .unwrap_or(0);
     covered_through < page_count
+}
+
+/// Print the full prepare plan and fail on any on-disk conflict **before**
+/// cloud extract / image gen / build starts.
+fn preflight_prepare_batch(
+    job: &PrepareJob,
+    slices: &[StudySlice],
+    pdf: &Path,
+    root: &Path,
+) -> Result<()> {
+    progress::phase("preflight — collect plan; fail before extract if anything is wrong");
+    let mut problems: Vec<String> = Vec::new();
+
+    if slices.is_empty() {
+        problems.push(format!(
+            "no estudios mapped for {}–{} in {}",
+            job.from,
+            job.to,
+            pdf.display()
+        ));
+    }
+
+    let expected: Vec<u32> = (job.from..=job.to).collect();
+    let mapped: Vec<u32> = slices.iter().map(|s| s.study).collect();
+    if mapped != expected {
+        problems.push(format!(
+            "mapped estudios {:?} do not match requested {}–{} ({:?})",
+            mapped, job.from, job.to, expected
+        ));
+    }
+
+    println!("  Preflight plan ({} estudio{}):", slices.len(), if slices.len() == 1 { "" } else { "s" });
+    for s in slices {
+        let json = agent::prepare::expected_paths(s.study, job.audience, root).json;
+        let (json_note, json_problem) = match read_existing_json_numero(&json) {
+            None => ("no JSON yet".to_string(), None),
+            Some(Ok(n)) if n == s.study => (format!("JSON ok (numero={n})"), None),
+            Some(Ok(n)) => {
+                let msg = format!(
+                    "{} has numero={n}, expected {} — delete that JSON (or --force-prepare) \
+                     so prepare does not resume the wrong estudio",
+                    json.display(),
+                    s.study
+                );
+                (format!("JSON CONFLICT numero={n}"), Some(msg))
+            }
+            Some(Err(e)) => {
+                let msg = format!("{}: {e}", json.display());
+                ("JSON unreadable".to_string(), Some(msg))
+            }
+        };
+        if let Some(p) = json_problem {
+            if !job.force_prepare {
+                problems.push(p);
+            }
+        }
+        let prox = s
+            .proximo_title_page
+            .map(|p| format!("próximo sheet {p}"))
+            .unwrap_or_else(|| "no Próximo".into());
+        println!(
+            "    · estudio {} · PDF sheets {}–{} · {prox} · {json_note}",
+            s.study, s.pages.0, s.pages.1
+        );
+    }
+
+    if !problems.is_empty() {
+        eprintln!("Preflight failed — not starting extract/build:");
+        for (i, p) in problems.iter().enumerate() {
+            eprintln!("  {}. {p}", i + 1);
+        }
+        bail!(
+            "Preflight failed with {} problem(s). Fix the issues above, then re-run the same command.",
+            problems.len()
+        );
+    }
+    progress::ok(format!(
+        "preflight OK — {} estudio{} ready to prepare",
+        slices.len(),
+        if slices.len() == 1 { "" } else { "s" }
+    ));
+    Ok(())
+}
+
+fn read_existing_json_numero(path: &Path) -> Option<Result<u32, String>> {
+    if !path.is_file() {
+        return None;
+    }
+    Some((|| {
+        let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        let v: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| format!("invalid JSON ({e})"))?;
+        let n = v
+            .get("numero")
+            .and_then(|x| x.as_u64().or_else(|| x.as_i64().map(|i| i as u64)))
+            .ok_or_else(|| "missing numero".to_string())?;
+        Ok(n as u32)
+    })())
 }
 
 /// Log failure; keep the PDF in `scans/pending/` so the user can retry.

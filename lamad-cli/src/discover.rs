@@ -59,6 +59,10 @@ pub fn discover_study_pages(
 }
 
 /// OCR/text-extract once, then resolve many estudios (batch `--from`/`--to` with discover).
+///
+/// **HARD:** `--from 8 --to 11` on a PDF that also contains estudio 7 **skips 7**
+/// and starts at 8. Never map the first N title pages onto the requested range
+/// when the PDF holds earlier estudios (filename span / OCR catalog wins).
 pub fn discover_study_pages_batch(
     pdf: &Path,
     studies: &[u32],
@@ -73,15 +77,22 @@ pub fn discover_study_pages_batch(
         return Ok(Vec::new());
     }
     let texts = page_texts(pdf, page_count, pdftoppm_path)?;
+    resolve_batch_from_texts(pdf, studies, audience, &texts, page_count)
+}
 
-    // Stylized adult badges often OCR as the wrong digit (7→4, 8→5, …). When the
-    // user passed an explicit consecutive `--from`/`--to` (or the filename span
-    // matches), trust title-page **order** + that range — never remap missing
-    // estudios onto page 1 of another study.
-    if let Some(aligned) =
-        align_batch_to_requested(pdf, studies, audience, &texts, page_count)?
+/// Resolve requested estudios from already-extracted page texts (testable).
+pub(crate) fn resolve_batch_from_texts(
+    pdf: &Path,
+    studies: &[u32],
+    audience: Audience,
+    texts: &[String],
+    page_count: usize,
+) -> Result<Vec<StudyPages>> {
+    // Full PDF catalog first — then select the requested subset by number.
+    if let Some(selected) =
+        select_batch_from_catalog(pdf, studies, audience, texts, page_count)?
     {
-        return Ok(aligned);
+        return Ok(selected);
     }
 
     let mut out = Vec::with_capacity(studies.len());
@@ -90,69 +101,134 @@ pub fn discover_study_pages_batch(
             pdf,
             study,
             audience,
-            &texts,
+            texts,
             page_count,
         )?);
     }
     Ok(out)
 }
 
-/// Map title pages in order onto `studies` when OCR badges disagree with the
-/// requested range (or filename span). Returns `None` when OCR already matches.
-fn align_batch_to_requested(
+/// Build a page→estudio catalog for the whole PDF, then return only `studies`.
+///
+/// Returns `Ok(None)` when the catalog already matches OCR and the per-study
+/// path can resolve each number (no remapping needed).
+/// Returns `Err` when requested estudios are missing — **before** any extract.
+fn select_batch_from_catalog(
     pdf: &Path,
     studies: &[u32],
     audience: Audience,
     texts: &[String],
     page_count: usize,
 ) -> Result<Option<Vec<StudyPages>>> {
-    if studies.len() < 2 {
-        return Ok(None);
-    }
-    let consecutive = studies.windows(2).all(|w| w[1] == w[0] + 1);
-    if !consecutive {
-        return Ok(None);
+    if studies.is_empty() {
+        return Ok(Some(Vec::new()));
     }
     let from = studies[0];
     let to = *studies.last().unwrap();
+    let hint = estudio_span_from_filename(pdf)
+        .map(|(s, _)| s)
+        .or_else(|| estudio_number_from_filename(pdf))
+        .or(Some(from));
 
-    let filled = build_filled_title_map(texts, page_count, Some(from))?;
-    let title_pages: Vec<u32> = filled.keys().copied().collect();
-    if title_pages.len() < studies.len() {
+    let ocr_filled = build_filled_title_map(texts, page_count, hint)?;
+    let title_pages: Vec<u32> = ocr_filled.keys().copied().collect();
+    if title_pages.is_empty() {
         return Ok(None);
     }
 
-    let ocr_matches = studies
+    // page → estudio number for every title in the PDF
+    let catalog = catalog_title_estudios(pdf, &title_pages, &ocr_filled);
+    let found: Vec<u32> = {
+        let mut v: Vec<u32> = catalog.values().copied().collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    let ocr_nums: Vec<u32> = title_pages
         .iter()
-        .all(|s| filled.values().any(|n| n == s));
-    let filename_span = estudio_range_from_filename(pdf, studies.len())
-        .filter(|(s, e)| *s == from && *e == to);
-    // Also accept filename span when discovered title count equals the span
-    // length even if OCR digits are wrong (Study 7-11 Adult.pdf → 5 titles).
-    let filename_hint = estudio_range_from_filename(pdf, title_pages.len())
-        .filter(|(s, e)| *s == from && *e == to);
+        .filter_map(|p| ocr_filled.get(p).copied())
+        .collect();
 
-    if ocr_matches && filename_span.is_none() && filename_hint.is_none() {
-        return Ok(None);
-    }
-    if !ocr_matches || filename_span.is_some() || filename_hint.is_some() {
-        let ocr_nums: Vec<u32> = title_pages
+    let missing: Vec<u32> = studies
+        .iter()
+        .copied()
+        .filter(|s| !catalog.values().any(|n| n == s))
+        .collect();
+
+    if missing.is_empty() {
+        // Requested estudios are in the PDF — select by number (skip earlier).
+        let skipped: Vec<u32> = found
             .iter()
-            .take(studies.len())
-            .filter_map(|p| filled.get(p).copied())
+            .copied()
+            .filter(|n| *n < from || *n > to)
             .collect();
+        if catalog.values().any(|n| ocr_filled.values().all(|o| o != n))
+            || ocr_nums != found
+            || !skipped.is_empty()
+        {
+            eprintln!(
+                "  info: PDF catalog estudios {:?} (OCR badges {:?}) — \
+                 preparing {}–{}{}",
+                found,
+                ocr_nums,
+                from,
+                to,
+                if skipped.is_empty() {
+                    String::new()
+                } else {
+                    format!("; skipping {:?}", skipped)
+                }
+            );
+        }
+        let mut out = Vec::with_capacity(studies.len());
+        for &study in studies {
+            let start = *catalog
+                .iter()
+                .find(|(_, n)| **n == study)
+                .map(|(p, _)| p)
+                .expect("missing checked above");
+            let ordered_next = title_pages
+                .iter()
+                .position(|&p| p == start)
+                .and_then(|i| title_pages.get(i + 1).copied());
+            let next_title = real_next_title_page(
+                audience,
+                start,
+                ordered_next,
+                texts,
+                page_count,
+                false,
+            );
+            let end = content_end_page(audience, start, next_title, texts, page_count);
+            if end < start {
+                bail!("Estudio {study}: invalid page range {start}–{end}");
+            }
+            let proximo_title_page =
+                next_title.filter(|p| (*p as usize) <= page_count);
+            print_discovered(study, audience, start, end, proximo_title_page, texts);
+            out.push(StudyPages {
+                study,
+                pages: (start, end),
+                proximo_title_page,
+            });
+        }
+        return Ok(Some(out));
+    }
+
+    // Exact title count == requested count: PDF is only this batch; OCR digits
+    // are wrong — map title order onto --from/--to (legacy volunteer path).
+    if title_pages.len() == studies.len() {
         eprintln!(
             "  warn: OCR badges {:?} disagree with requested estudios {}–{} — \
-             aligning {} title pages in order to {}–{} \
-             (filename / --from/--to win over stylized badge OCR)",
+             PDF has exactly {} title page(s); mapping them in order to {}–{} \
+             (no earlier estudio to skip)",
             ocr_nums,
             from,
             to,
-            studies.len(),
+            title_pages.len(),
             from,
             to
         );
-
         let mut out = Vec::with_capacity(studies.len());
         for (i, &study) in studies.iter().enumerate() {
             let start = title_pages[i];
@@ -180,7 +256,65 @@ fn align_batch_to_requested(
         }
         return Ok(Some(out));
     }
-    Ok(None)
+
+    // More titles than requested, but catalog does not contain the numbers —
+    // refuse to pretend the first pages are estudio `from` (that mapped 7→8).
+    bail!(
+        "Preflight failed — cannot start extract/build.\n\
+         Requested: estudios {}–{}.\n\
+         Found in PDF ({}): {:?}.\n\
+         Missing: {:?}.\n\
+         OCR badges on title pages: {:?}.\n\
+         Hint: rename the PDF to the full span (e.g. Study 7-11 Adult.pdf) so \
+         title-page order can be numbered correctly, then re-run \
+         --from {} --to {}. Or prepare the estudios that are actually in the file \
+         (--from {} --to {}).",
+        from,
+        to,
+        pdf.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("(pdf)"),
+        found,
+        missing,
+        ocr_nums,
+        from,
+        to,
+        found.first().copied().unwrap_or(from),
+        found.last().copied().unwrap_or(to),
+    );
+}
+
+/// Assign estudio numbers to every title page (filename span preferred).
+fn catalog_title_estudios(
+    pdf: &Path,
+    title_pages: &[u32],
+    ocr_filled: &BTreeMap<u32, u32>,
+) -> BTreeMap<u32, u32> {
+    // Filename span matching title count: Study 7-11 Adult.pdf + 5 titles → 7…11.
+    if let Some((start, end)) = estudio_range_from_filename(pdf, title_pages.len()) {
+        let mut map = BTreeMap::new();
+        for (i, &p) in title_pages.iter().enumerate() {
+            let n = start + i as u32;
+            if n <= end {
+                map.insert(p, n);
+            }
+        }
+        return map;
+    }
+    // Filename has a span but title count differs (e.g. only part of the book
+    // was scanned). Still number from the span start in title order when the
+    // span covers at least as many estudios as title pages.
+    if let Some((start, end)) = estudio_span_from_filename(pdf) {
+        let span_len = (end - start + 1) as usize;
+        if title_pages.len() <= span_len {
+            let mut map = BTreeMap::new();
+            for (i, &p) in title_pages.iter().enumerate() {
+                map.insert(p, start + i as u32);
+            }
+            return map;
+        }
+    }
+    ocr_filled.clone()
 }
 
 /// Discover **every** estudio in the PDF (one OCR/text pass).
@@ -1219,7 +1353,7 @@ LECTURA ANTIFONAL
     }
 
     #[test]
-    fn align_batch_prefers_from_to_over_wrong_ocr_badges() {
+    fn align_batch_prefers_filename_span_over_wrong_ocr_badges() {
         // Five adult title pages; OCR wrongly read 4…8 instead of 7…11.
         let mut texts = vec![String::new(); 41];
         for (page, ocr_n) in [(1u32, 4u32), (9, 5), (17, 6), (25, 7), (33, 8)] {
@@ -1235,15 +1369,40 @@ LECTURA ANTIFONAL
         let pdf = PathBuf::from("Study 7-11 Adult.pdf");
         let studies = [7u32, 8, 9, 10, 11];
         let aligned =
-            align_batch_to_requested(&pdf, &studies, Audience::Adult, &texts, 41)
-                .unwrap()
-                .expect("should align");
+            resolve_batch_from_texts(&pdf, &studies, Audience::Adult, &texts, 41).unwrap();
         assert_eq!(aligned.len(), 5);
         assert_eq!(aligned[0].study, 7);
         assert_eq!(aligned[0].pages.0, 1);
         assert_eq!(aligned[4].study, 11);
         assert_eq!(aligned[1].study, 8);
         assert_eq!(aligned[1].pages.0, 9);
+    }
+
+    #[test]
+    fn batch_from_8_to_11_skips_estudio_7_in_7_11_pdf() {
+        // Same wrong OCR; user asked only 8–11 — must NOT treat sheet 1 as estudio 8.
+        let mut texts = vec![String::new(); 41];
+        for (page, ocr_n) in [(1u32, 4u32), (9, 5), (17, 6), (25, 7), (33, 8)] {
+            texts[(page - 1) as usize] = format!(
+                "ESTUDIO BÍBLICO {ocr_n}\nBase bíblica\n2 Samuel 1:1\n\
+                 Pensamiento central\nTexto áureo\nLECTURA ANTIFONAL"
+            );
+        }
+        for page in [8u32, 16, 24, 32, 40] {
+            texts[(page - 1) as usize] = "RESUMEN GENERAL\nalgo".into();
+        }
+        let pdf = PathBuf::from("Study 7-11 Adult.pdf");
+        let studies = [8u32, 9, 10, 11];
+        let got =
+            resolve_batch_from_texts(&pdf, &studies, Audience::Adult, &texts, 41).unwrap();
+        assert_eq!(got.len(), 4);
+        assert_eq!(got[0].study, 8);
+        assert_eq!(
+            got[0].pages.0, 9,
+            "estudio 8 must start at the 2nd title page, not sheet 1 (estudio 7)"
+        );
+        assert_eq!(got[3].study, 11);
+        assert_eq!(got[3].pages.0, 33);
     }
 
     #[test]
