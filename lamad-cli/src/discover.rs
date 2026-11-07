@@ -137,7 +137,7 @@ fn select_batch_from_catalog(
     }
 
     // page → estudio number for every title in the PDF
-    let catalog = catalog_title_estudios(pdf, &title_pages, &ocr_filled);
+    let catalog = catalog_title_estudios(pdf, &title_pages, &ocr_filled, texts);
     let found: Vec<u32> = {
         let mut v: Vec<u32> = catalog.values().copied().collect();
         v.sort_unstable();
@@ -187,10 +187,11 @@ fn select_batch_from_catalog(
                 .find(|(_, n)| **n == study)
                 .map(|(p, _)| p)
                 .expect("missing checked above");
-            let ordered_next = title_pages
+            let catalog_pages: Vec<u32> = catalog.keys().copied().collect();
+            let ordered_next = catalog_pages
                 .iter()
                 .position(|&p| p == start)
-                .and_then(|i| title_pages.get(i + 1).copied());
+                .and_then(|i| catalog_pages.get(i + 1).copied());
             let next_title = real_next_title_page(
                 audience,
                 start,
@@ -285,10 +286,15 @@ fn select_batch_from_catalog(
 }
 
 /// Assign estudio numbers to every title page (filename span preferred).
+///
+/// When OCR finds **extra** title-like pages (common on adult scans), trim to
+/// the filename span length by score so `Study 7-11 Adult.pdf` still maps 7…11
+/// instead of trusting wrong OCR badges `[4,5,6,7,8,9]`.
 fn catalog_title_estudios(
     pdf: &Path,
     title_pages: &[u32],
     ocr_filled: &BTreeMap<u32, u32>,
+    texts: &[String],
 ) -> BTreeMap<u32, u32> {
     // Filename span matching title count: Study 7-11 Adult.pdf + 5 titles → 7…11.
     if let Some((start, end)) = estudio_range_from_filename(pdf, title_pages.len()) {
@@ -301,20 +307,97 @@ fn catalog_title_estudios(
         }
         return map;
     }
-    // Filename has a span but title count differs (e.g. only part of the book
-    // was scanned). Still number from the span start in title order when the
-    // span covers at least as many estudios as title pages.
     if let Some((start, end)) = estudio_span_from_filename(pdf) {
         let span_len = (end - start + 1) as usize;
-        if title_pages.len() <= span_len {
-            let mut map = BTreeMap::new();
-            for (i, &p) in title_pages.iter().enumerate() {
-                map.insert(p, start + i as u32);
+        let pages = if title_pages.len() > span_len {
+            let kept = trim_title_pages_to_count(title_pages, texts, span_len);
+            eprintln!(
+                "  warn: OCR saw {} title-like pages but filename span is {}–{} ({} estudios) — \
+                 keeping strongest {} title page(s) in order: {:?}",
+                title_pages.len(),
+                start,
+                end,
+                span_len,
+                kept.len(),
+                kept
+            );
+            kept
+        } else {
+            title_pages.to_vec()
+        };
+        let mut map = BTreeMap::new();
+        for (i, &p) in pages.iter().enumerate() {
+            let n = start + i as u32;
+            if n <= end {
+                map.insert(p, n);
             }
-            return map;
         }
+        return map;
     }
     ocr_filled.clone()
+}
+
+/// Keep `want` title pages in document order, dropping the weakest extras.
+fn trim_title_pages_to_count(title_pages: &[u32], texts: &[String], want: usize) -> Vec<u32> {
+    if title_pages.len() <= want {
+        return title_pages.to_vec();
+    }
+    let mut scored: Vec<(u32, i32)> = title_pages
+        .iter()
+        .map(|&p| {
+            let idx = (p as usize).saturating_sub(1);
+            let score = texts
+                .get(idx)
+                .map(|t| title_page_strength(t))
+                .unwrap_or(0);
+            (p, score)
+        })
+        .collect();
+    // Drop weakest first; ties keep earlier pages (stable by page order).
+    scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let mut keep: Vec<u32> = scored.into_iter().take(want).map(|(p, _)| p).collect();
+    keep.sort_unstable();
+    keep
+}
+
+fn title_page_strength(t: &str) -> i32 {
+    let low = t.to_lowercase();
+    let mut s = 0i32;
+    if extract_study_number(t).is_some() {
+        s += 4;
+    }
+    if Regex::new(r"(?is)\bestudio\s+b[ií]blico\b")
+        .unwrap()
+        .is_match(&low)
+    {
+        s += 5;
+    }
+    if Regex::new(r"base\s*b[ií1l]bl").unwrap().is_match(&low) {
+        s += 3;
+    }
+    if Regex::new(r"texto\s+[aá]ureo").unwrap().is_match(&low) {
+        s += 2;
+    }
+    if low.contains("pensamiento") {
+        s += 2;
+    }
+    if low.contains("objetivo") {
+        s += 1;
+    }
+    if Regex::new(r"(?is)resumen\s+general")
+        .unwrap()
+        .is_match(&low)
+    {
+        s -= 8;
+    }
+    if Regex::new(r"(?is)ideas\s+para\s+el\s+maestro")
+        .unwrap()
+        .is_match(&low)
+        && !Regex::new(r"base\s*b[ií1l]bl").unwrap().is_match(&low)
+    {
+        s -= 4;
+    }
+    s
 }
 
 /// Discover **every** estudio in the PDF (one OCR/text pass).
@@ -775,9 +858,12 @@ fn page_texts(
     let bin = crate::pdftoppm::resolve(pdftoppm_path)?;
     // One pdftoppm for the whole PDF (much faster than per-page) + parallel OCR.
     // 150dpi is enough to read ESTUDIO / Base bíblica badges.
-    crate::progress::phase(format!(
-        "Discover: rasterizing {page_count} pages @150dpi (one shot) + parallel tesseract ({})",
-        tesseract.display()
+    // Always show feedback at default verbosity — this wait used to look "stuck".
+    crate::progress::info(format!(
+        "Discover: rasterizing {page_count} pages @150dpi, then OCR (tesseract) — usually ~30–90s"
+    ));
+    let spin = crate::progress::Spinner::start(format!(
+        "pdftoppm rasterizing {page_count} pages…"
     ));
 
     let prefix = root.join("page");
@@ -794,8 +880,10 @@ fn page_texts(
         .status()
         .context("pdftoppm (all pages)")?;
     if !status.success() {
+        spin.fail("pdftoppm failed");
         bail!("pdftoppm failed while rasterizing {}", pdf.display());
     }
+    spin.succeed(format!("rasterized {page_count} pages"));
 
     // pdftoppm writes page-1.png … page-N.png (1-based, zero-padded sometimes).
     let mut pngs: Vec<PathBuf> = Vec::with_capacity(page_count);
@@ -812,7 +900,7 @@ fn page_texts(
         pngs.push(png);
     }
 
-    let pb = crate::progress::bar(page_count as u64, "OCR pages");
+    let pb = crate::progress::bar_always(page_count as u64, "OCR pages");
     let workers = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4)
@@ -1403,6 +1491,47 @@ LECTURA ANTIFONAL
         );
         assert_eq!(got[3].study, 11);
         assert_eq!(got[3].pages.0, 33);
+    }
+
+    #[test]
+    fn filename_span_trims_extra_false_title_page() {
+        // Six title-like pages (one weak false positive) + filename 7–11 → keep 5.
+        let mut texts = vec![String::new(); 48];
+        for (page, ocr_n) in [
+            (1u32, 4u32),
+            (9, 5),
+            (17, 6),
+            (25, 7),
+            (33, 8),
+            (41, 9), // weak extra: Base + Lectura only, no Pensamiento/áureo
+        ] {
+            if page == 41 {
+                texts[(page - 1) as usize] = format!(
+                    "Base bíblica\n2 Samuel 1:1\nLECTURA ANTIFONAL\n(OCR ghost {ocr_n})"
+                );
+            } else {
+                texts[(page - 1) as usize] = format!(
+                    "ESTUDIO BÍBLICO {ocr_n}\nBase bíblica\n2 Samuel 1:1\n\
+                     Pensamiento central\nTexto áureo\nLECTURA ANTIFONAL\nObjetivos"
+                );
+            }
+        }
+        for page in [8u32, 16, 24, 32, 40] {
+            texts[(page - 1) as usize] = "RESUMEN GENERAL\nalgo".into();
+        }
+        let pdf = PathBuf::from("Study 7-11 Adult.pdf");
+        let studies = [8u32, 9, 10, 11];
+        let got =
+            resolve_batch_from_texts(&pdf, &studies, Audience::Adult, &texts, 48).unwrap();
+        assert_eq!(got.len(), 4);
+        assert_eq!(got[0].study, 8);
+        assert_eq!(got[0].pages.0, 9);
+        assert_eq!(got[3].study, 11);
+        assert_eq!(got[3].pages.0, 33);
+        assert!(
+            got.iter().all(|s| s.pages.0 != 41),
+            "false title at sheet 41 must not be kept as an estudio"
+        );
     }
 
     #[test]

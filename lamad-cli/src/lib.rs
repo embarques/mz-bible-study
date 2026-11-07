@@ -127,13 +127,17 @@ pub async fn run(mut job: PrepareJob, cfg: &Config) -> Result<()> {
                 .collect::<Vec<_>>()
         } else {
             // Pre-resolve page slices (discover once for -n, or page-math for --from/--to).
-            if job.discover {
+            if job.discover || job.audience == Audience::Adult {
                 progress::now_step(
                     1,
                     4,
                     "Find pages (OCR)",
                     "Looking for this estudio inside the PDF (parallel OCR, usually under ~40s)…",
                 );
+                progress::info(format!(
+                    "Step 1/4 — finding estudios {}–{} in PDF ({page_count} pages; OCR can take ~30–90s)…",
+                    job.from, job.to
+                ));
             } else {
                 progress::now_step(
                     1,
