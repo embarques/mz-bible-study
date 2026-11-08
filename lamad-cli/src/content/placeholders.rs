@@ -74,9 +74,24 @@ pub fn is_placeholder(png: &Path) -> bool {
 }
 
 pub fn any_placeholders(study: u32, model: &AdultStudy, root: &Path) -> bool {
+    any_scenic_placeholders(study, model, root)
+        || any_definicion_placeholders(study, model, root)
+}
+
+/// Scenic intro/tema/ab stubs — these block resume/build (must be unique real art).
+pub fn any_scenic_placeholders(study: u32, model: &AdultStudy, root: &Path) -> bool {
+    let media = adult_media_dir(study, root);
+    crate::agent::prepare::adult_scenic_basenames_for(model)
+        .into_iter()
+        .any(|n| is_placeholder(&media.join(n)))
+}
+
+/// DEFINICIÓN stubs — need openai `--gen-definicion`; build skips those slides.
+pub fn any_definicion_placeholders(study: u32, model: &AdultStudy, root: &Path) -> bool {
     let media = adult_media_dir(study, root);
     adult_basenames_for_study(model)
         .into_iter()
+        .filter(|n| n.starts_with("definicion-"))
         .any(|n| is_placeholder(&media.join(n)))
 }
 

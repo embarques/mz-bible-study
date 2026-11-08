@@ -661,9 +661,9 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
             let model = content::load_adult_sections(study)?;
             let _ = content::ensure_adult_placeholders(study, &model, root)?;
 
-            // Text is ready but scenic stubs are identical → uniqueness QC fails.
-            // Fill real art before building; do not skip the agent when images are stubs.
-            if content::any_placeholders(study, &model, root) {
+            // Scenic stubs → need Cursor/host art. Definición stubs alone do not
+            // block build (those slides are omitted until --gen-definicion).
+            if content::any_scenic_placeholders(study, &model, root) {
                 if host_image_key {
                     progress::ok(format!(
                         "Section text ready for estudio {study}; scenic are placeholders — \
@@ -680,13 +680,13 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
                 } else {
                     bail!(
                         "adult estudio {study}: section folders exist but scenic images are \
-                         PLACEHOLDERS (identical stubs). Re-run with -g so the Cursor agent \
-                         generates unique scenes, or set openai_api_key and use --gen-images."
+                         PLACEHOLDERS. Re-run with -g so the Cursor agent generates unique \
+                         scenes, or set openai_api_key and use --gen-images."
                     );
                 }
             }
 
-            if !content::any_placeholders(study, &model, root) {
+            if !content::any_scenic_placeholders(study, &model, root) {
                 progress::ok(format!(
                     "Section content + scenic art ready (studies/adult/{study}/) — building \
                      (skipping cloud extract; use --force-prepare to re-extract text)"

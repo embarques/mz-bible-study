@@ -227,7 +227,7 @@ pub fn required_images_present(study: u32, audience: Audience, root: &Path) -> b
             let Some(model) = model else {
                 return false;
             };
-            if crate::content::any_placeholders(study, &model, root) {
+            if crate::content::any_scenic_placeholders(study, &model, root) {
                 return false;
             }
             let media = adult_media_dir(study, root);
@@ -480,25 +480,25 @@ fn verify_adult_deliverables(study: u32, root: &Path) -> Result<Deliverables> {
             missing_scenic.join("\n  ")
         );
     }
-    // Placeholders count as "not ready" — otherwise resume skips the agent and
-    // build dies on identical stubs / definición PLACEHOLDER asserts.
-    if crate::content::any_placeholders(study, &study_model, root) {
+    // Scenic stubs block resume (need Cursor/host art). Definición stubs do NOT —
+    // they need openai --gen-definicion; build skips those slides until then.
+    if crate::content::any_scenic_placeholders(study, &study_model, root) {
         bail!(
-            "adult estudio {study}: PLACEHOLDER image(s) remain under {} — \
-             not ready to resume/build. Re-run with -g (Cursor generates unique \
-             scenic + definición) or set openai_api_key and --gen-images / --gen-definicion.",
+            "adult estudio {study}: PLACEHOLDER scenic image(s) remain under {} — \
+             not ready to resume/build. Re-run with -g (Cursor generates unique scenes) \
+             or set openai_api_key and --gen-images.",
             media.display()
         );
     }
-    let mut missing_def = Vec::new();
+    let mut missing_or_stub_def = Vec::new();
     for (i, tema) in study_model.temas.iter().enumerate() {
         if tema.definiciones.is_empty() {
             continue;
         }
         let name = format!("definicion-{}.png", i + 1);
         let p = media.join(&name);
-        if !p.exists() {
-            missing_def.push(name);
+        if !p.exists() || crate::content::is_placeholder(&p) {
+            missing_or_stub_def.push(name);
             continue;
         }
         if let Err(e) = crate::build::adult::assert_study_definicion_card(
@@ -507,18 +507,21 @@ fn verify_adult_deliverables(study: u32, root: &Path) -> Result<Deliverables> {
                 .iter()
                 .map(|d| (d.termino.as_str(), d.texto.as_str())),
         ) {
-            bail!(
-                "adult estudio {study}: {name} failed locked-layout QC ({e:#}). \
-                 Delete it and re-run -g / --gen-definicion so baked terms match THIS scan."
-            );
+            crate::progress::warn(format!(
+                "adult estudio {study}: {name} failed locked-layout QC ({e:#}) — \
+                 build will omit that Definición slide; fix with --gen-definicion \
+                 (needs openai_api_key)"
+            ));
+            missing_or_stub_def.push(name);
         }
     }
-    if !missing_def.is_empty() {
-        bail!(
-            "adult estudio {study}: definición cards missing on disk ({}) — \
-             tema has printed Definiciones; generate the card PNG with -g or --gen-definicion",
-            missing_def.join(", ")
-        );
+    if !missing_or_stub_def.is_empty() {
+        crate::progress::warn(format!(
+            "adult estudio {study}: definición card(s) not ready ({}) — \
+             deck builds without those slides until `lamad prepare -n {study} \
+             --audience adult --gen-definicion` (openai_api_key)",
+            missing_or_stub_def.join(", ")
+        ));
     }
     Ok(paths)
 }
@@ -1806,10 +1809,20 @@ fn artifact_list_has_adult_section_tree(study: u32, artifacts: &[Artifact]) -> b
         let Some(rel) = rel else {
             continue;
         };
-        if rel == "manifest.toml" || rel.starts_with("manifest.toml") {
+        // images/ alone is NOT a section tree (was falsely skipping text follow-ups).
+        let top = rel.split('/').next().unwrap_or(rel);
+        if top == "images" {
+            continue;
+        }
+        if top == "manifest.toml" || rel.starts_with("manifest.toml") {
             has_manifest = true;
         }
-        if rel.contains('-') && (rel.contains('/') || rel.ends_with(".txt")) {
+        // Section folders look like `01-title/…` or `10-tema-1-A/body.txt`.
+        let looks_section = top.len() >= 4
+            && top.as_bytes().get(0).is_some_and(|c| c.is_ascii_digit())
+            && top.as_bytes().get(1).is_some_and(|c| c.is_ascii_digit())
+            && top.as_bytes().get(2) == Some(&b'-');
+        if looks_section {
             has_section = true;
         }
     }

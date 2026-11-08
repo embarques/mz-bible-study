@@ -410,46 +410,47 @@ fn fill_tema(
     order.push(header);
     image_slides.push(header);
 
-    // Only emit a Definición slide when the printed study has a
-    // "Definiciones y etimología" box for this tema. Never invent terms.
+    // Only emit a Definición slide when the printed study has a box AND a
+    // QC-passing card PNG. Stubs / missing cards omit the slide (warn) so
+    // prepare can finish without openai_api_key; fill later with --gen-definicion.
     if !tema.definiciones.is_empty() {
-        let def_slide = if idx == 0 {
-            PROTO_DEFINICION
-        } else {
-            ooxml::duplicate_slide(build, PROTO_DEFINICION)?
-        };
-        if let Some(imgs) = study.definicion_images.as_ref() {
-            let img_path = resolve_study_path(&imgs[idx])?;
-            if img_path.is_file() {
-                // HARD: card must show THIS estudio's scan terms — never leftover
-                // gold / another study's Justicia/Hipócritas/Amalec art.
-                crate::build::adult::assert_study_definicion_card(
-                    &img_path,
+        let img_path = study
+            .definicion_images
+            .as_ref()
+            .and_then(|imgs| imgs.get(idx))
+            .map(|p| resolve_study_path(p))
+            .transpose()?;
+        let card_ok = img_path.as_ref().is_some_and(|p| {
+            p.is_file()
+                && !crate::content::is_placeholder(p)
+                && crate::build::adult::assert_study_definicion_card(
+                    p,
                     tema.definiciones
                         .iter()
                         .map(|d| (d.termino.as_str(), d.texto.as_str())),
-                )?;
-                set_definicion_image(build, def_slide, &img_path)?;
+                )
+                .is_ok()
+        });
+        if card_ok {
+            let def_slide = if idx == 0 {
+                PROTO_DEFINICION
             } else {
-                bail!(
-                    "missing definición card for tema {} ({}). \
-                     Generate studies/adult/.../definicion-{}.png from the printed \
-                     «Definiciones y etimología» box — do not use text fallback \
-                     or another study's card.",
-                    idx + 1,
-                    img_path.display(),
-                    idx + 1
-                );
-            }
+                ooxml::duplicate_slide(build, PROTO_DEFINICION)?
+            };
+            set_definicion_image(build, def_slide, img_path.as_ref().unwrap())?;
+            order.push(def_slide);
         } else {
-            bail!(
-                "tema {} has definiciones but JSON has no definicion_images[{}]. \
-                 Re-run prepare --gen-images or stamp definicion_images paths.",
+            crate::progress::warn(format!(
+                "omitting Definición slide for tema {} — card not ready{} \
+                 (later: `lamad prepare -n {{N}} --audience adult --gen-definicion` \
+                 with openai_api_key)",
                 idx + 1,
-                idx
-            );
+                img_path
+                    .as_ref()
+                    .map(|p| format!(" at {}", p.display()))
+                    .unwrap_or_default()
+            ));
         }
-        order.push(def_slide);
     }
 
     let point_n = idx + 1;

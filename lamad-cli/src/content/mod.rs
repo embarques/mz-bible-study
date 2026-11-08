@@ -14,6 +14,7 @@ pub use adult_sections::{
     print_section_inventory, verify_adult_section_images, write_adult_sections, ADULT_FRONT_MATTER,
 };
 pub use placeholders::{
-    any_placeholders, ensure_adult_placeholders, is_placeholder, note_real_image,
+    any_definicion_placeholders, any_placeholders, any_scenic_placeholders,
+    ensure_adult_placeholders, is_placeholder, note_real_image,
 };
 pub use scan_coverage::{assert_adult_scan_coverage, verify_adult_scan_coverage};
