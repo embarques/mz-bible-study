@@ -767,7 +767,8 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
     }
 
     // Resume complete deliverables unless --force-prepare (or image-only flags).
-    // `-g` alone does NOT wipe resume — that was forcing useless re-agents.
+    // `-g` alone does NOT wipe resume — but placeholders must NOT count as complete
+    // (verify_deliverables rejects `.placeholder` sidecars).
     let resumed = if job.force_prepare || job.gen_images || job.gen_definicion {
         None
     } else {

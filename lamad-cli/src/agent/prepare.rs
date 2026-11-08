@@ -227,6 +227,9 @@ pub fn required_images_present(study: u32, audience: Audience, root: &Path) -> b
             let Some(model) = model else {
                 return false;
             };
+            if crate::content::any_placeholders(study, &model, root) {
+                return false;
+            }
             let media = adult_media_dir(study, root);
             adult_scenic_basenames_for(&model)
                 .iter()
@@ -477,6 +480,16 @@ fn verify_adult_deliverables(study: u32, root: &Path) -> Result<Deliverables> {
             missing_scenic.join("\n  ")
         );
     }
+    // Placeholders count as "not ready" — otherwise resume skips the agent and
+    // build dies on identical stubs / definición PLACEHOLDER asserts.
+    if crate::content::any_placeholders(study, &study_model, root) {
+        bail!(
+            "adult estudio {study}: PLACEHOLDER image(s) remain under {} — \
+             not ready to resume/build. Re-run with -g (Cursor generates unique \
+             scenic + definición) or set openai_api_key and --gen-images / --gen-definicion.",
+            media.display()
+        );
+    }
     let mut missing_def = Vec::new();
     for (i, tema) in study_model.temas.iter().enumerate() {
         if tema.definiciones.is_empty() {
@@ -488,27 +501,24 @@ fn verify_adult_deliverables(study: u32, root: &Path) -> Result<Deliverables> {
             missing_def.push(name);
             continue;
         }
-        // Soft QC: bad definición art must not abort the whole prepare/build.
-        // Host can regenerate later with --gen-definicion; placeholders still build.
         if let Err(e) = crate::build::adult::assert_study_definicion_card(
             &p,
             tema.definiciones
                 .iter()
                 .map(|d| (d.termino.as_str(), d.texto.as_str())),
         ) {
-            crate::progress::warn(format!(
-                "adult estudio {study}: {name} failed locked-layout QC ({e:#}) — \
-                 continuing; fix with `lamad prepare -n {study} --audience adult --gen-definicion`"
-            ));
+            bail!(
+                "adult estudio {study}: {name} failed locked-layout QC ({e:#}). \
+                 Delete it and re-run -g / --gen-definicion so baked terms match THIS scan."
+            );
         }
     }
     if !missing_def.is_empty() {
-        crate::progress::warn(format!(
+        bail!(
             "adult estudio {study}: definición cards missing on disk ({}) — \
-             OK only if that tema has no «Definiciones y etimología» box (then \
-             clear definiciones in JSON); otherwise generate the card PNG",
+             tema has printed Definiciones; generate the card PNG with -g or --gen-definicion",
             missing_def.join(", ")
-        ));
+        );
     }
     Ok(paths)
 }
