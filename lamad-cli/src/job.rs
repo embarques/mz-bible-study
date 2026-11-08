@@ -468,8 +468,9 @@ mod tests {
         assert!(picked.ends_with("Study 7-11 Adult.pdf"));
         let picked5 = pick_pending_pdf_for_range(&list, 5, 5).expect("5");
         assert!(picked5.ends_with("Study 5 - Adult.pdf"));
-        // 1-8 and single 4 both cover estudio 4 alone → ambiguous
-        assert!(pick_pending_pdf_for_range(&list, 4, 4).is_none());
+        // Exact single-study name wins over a wider 1–8 span.
+        let picked4 = pick_pending_pdf_for_range(&list, 4, 4).expect("4");
+        assert!(picked4.ends_with("Bible Study 4 - Adult.pdf"));
         // range 1-8 uniquely covers 1–8
         let picked18 = pick_pending_pdf_for_range(&list, 1, 8).expect("1-8");
         assert!(picked18.ends_with("Bible study 1-8.pdf"));

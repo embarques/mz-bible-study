@@ -52,10 +52,13 @@ pub async fn run(mut job: PrepareJob, cfg: &Config) -> Result<()> {
         }
     }
 
+    let root = paths::project_root()?;
+    // Clear finished scans out of pending/ before auto-pick (otherwise old
+    // singles clutter the tray forever after a successful prepare).
+    archive_ready_pending_pdfs(job.audience, &root);
+
     let pdf = scans::normalize_pending_inbox(&job.resolve_pdf()?)?;
     let page_count = pdf_page_count(&pdf)?;
-
-    let root = paths::project_root()?;
     let mut errors: Vec<String> = Vec::new();
     let mut outputs: Vec<StudyOutput> = Vec::new();
 
@@ -251,36 +254,100 @@ pub async fn run(mut job: PrepareJob, cfg: &Config) -> Result<()> {
         run_review(&study_nums, &pdf, !job.prepare_only, &job, cfg, &root).await?;
     }
 
-    // Archive the scan PDF only after a fully successful prepare.
-    let covered_through = slices
-        .last()
-        .map(|s| s.pages.1 as usize)
-        .unwrap_or(0);
-    let started_at_page_one = slices.first().map(|s| s.pages.0 == 1).unwrap_or(false);
-    let pdf_fully_prepared = started_at_page_one && covered_through >= page_count;
-    if pdf_fully_prepared {
-        scans::move_to_complete(&pdf)?;
-        progress::info(format!(
-            "done — {} prepared; PDF moved to scans/complete/",
+    // Archive when every estudio *named by the PDF* is now ready on disk.
+    // Do NOT require "started at PDF page 1" — that blocked `--from 8` on a
+    // Study 7–11 PDF and left leftover Próximo title pages keeping singles in pending/.
+    let _ = page_count;
+    match pdf_ready_to_archive(&pdf, job.audience, &root) {
+        Ok(true) => {
+            scans::move_to_complete(&pdf)?;
+            progress::info(format!(
+                "done — {} prepared; PDF moved to scans/complete/",
+                slices.len()
+            ));
+        }
+        Ok(false) => {
+            let remaining = pdf_named_estudios_missing(&pdf, job.audience, &root);
+            progress::info(format!(
+                "done — {} prepared; PDF stays in scans/pending/ ({})",
+                slices.len(),
+                if remaining.is_empty() {
+                    "filename has no estudio span — pass a full-span name or --force archive later"
+                        .to_string()
+                } else {
+                    format!(
+                        "still need estudio(s) {} on disk",
+                        remaining
+                            .iter()
+                            .map(|n| n.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                }
+            ));
+        }
+        Err(e) => progress::warn(format!(
+            "done — {} prepared; could not decide archive ({e:#}) — PDF left in pending/",
             slices.len()
-        ));
-    } else {
-        progress::info(format!(
-            "done — {} prepared; PDF stays in scans/pending/ (more estudios remain)",
-            slices.len()
-        ));
+        )),
     }
     Ok(())
 }
 
-/// True when this job did not consume the PDF through the last page (more estudios may remain).
-#[allow(dead_code)] // kept for future batch archive heuristics
-fn more_studies_pending_in_pdf(slices: &[StudySlice], page_count: usize) -> bool {
-    let covered_through = slices
-        .last()
-        .map(|s| s.pages.1 as usize)
-        .unwrap_or(0);
-    covered_through < page_count
+/// Estudios implied by the PDF filename (`Study 7-11` → 7..=11, `Study 5` → [5]).
+fn pdf_named_estudios(pdf: &Path) -> Option<Vec<u32>> {
+    if let Some((s, e)) = discover::estudio_span_from_filename(pdf) {
+        return Some((s..=e).collect());
+    }
+    discover::estudio_number_from_filename(pdf).map(|n| vec![n])
+}
+
+fn estudio_ready_on_disk(study: u32, audience: Audience, root: &Path) -> bool {
+    agent::prepare::try_resume_deliverables(study, audience, root).is_some()
+        || (audience == Audience::Adult && content::has_adult_sections(study))
+}
+
+/// True when every filename-named estudio is ready (section tree / JSON+images).
+fn pdf_ready_to_archive(pdf: &Path, audience: Audience, root: &Path) -> Result<bool> {
+    let Some(named) = pdf_named_estudios(pdf) else {
+        return Ok(false);
+    };
+    Ok(named
+        .iter()
+        .all(|&n| estudio_ready_on_disk(n, audience, root)))
+}
+
+fn pdf_named_estudios_missing(pdf: &Path, audience: Audience, root: &Path) -> Vec<u32> {
+    pdf_named_estudios(pdf)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|&n| !estudio_ready_on_disk(n, audience, root))
+        .collect()
+}
+
+/// Move any pending PDF whose filename-named estudios are already prepared.
+fn archive_ready_pending_pdfs(audience: Audience, root: &Path) {
+    let Ok(list) = scans::list_pending_pdfs() else {
+        return;
+    };
+    for pdf in list {
+        match pdf_ready_to_archive(&pdf, audience, root) {
+            Ok(true) => match scans::move_to_complete(&pdf) {
+                Ok(dest) => progress::ok(format!(
+                    "archived {} → scans/complete/ (estudios already prepared)",
+                    dest.file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("pdf")
+                )),
+                Err(e) => progress::warn(format!(
+                    "could not archive {}: {e:#}",
+                    pdf.display()
+                )),
+            },
+            Ok(false) => {}
+            Err(_) => {}
+        }
+    }
 }
 
 /// Print the full prepare plan and fail on any on-disk conflict **before**
