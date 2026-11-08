@@ -129,6 +129,12 @@ pub fn adult_resume_hint(study: u32) -> Result<String> {
         "If temas/points are incomplete, continue from the next tema/point after \
          the last existing `NN-tema-*` folder. Prefer section folders over a monolith JSON.\n",
     );
+    out.push_str(
+        "\n## Images — REPLACE any PLACEHOLDER scenic under `artifacts/{study}/images/`\n\
+         Write unique 16:9 PNGs: intro-header.png, tema-N.png, ab-N{{Letter}}.png \
+         (and definicion-N.png when that tema has printed Definiciones). \
+         Never reuse the same scene bytes across slots.\n",
+    );
     Ok(out)
 }
 
