@@ -118,10 +118,10 @@ fn write_scenic_placeholder(path: &Path, label: &str) -> Result<()> {
             img.put_pixel(x, y, Rgb([v, v.saturating_sub(4), v.saturating_sub(8)]));
         }
     }
-    // Encode label length into a unique stripe so no two stubs share bytes.
-    let stripe_y = 40 + (h as usize % (SCENIC_H.saturating_sub(80).max(1)));
+    // Encode label into a unique stripe so no two stubs share bytes.
+    let stripe_y = 40u32 + (h % (SCENIC_H.saturating_sub(80).max(1)));
     for x in 0..SCENIC_W {
-        let c = ((x as u32).wrapping_add(h) % 200) as u8;
+        let c = (x.wrapping_add(h) % 200) as u8;
         img.put_pixel(x, stripe_y, Rgb([c, 180, 90]));
     }
     for y in (SCENIC_H - 24)..SCENIC_H {
