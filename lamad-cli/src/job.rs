@@ -401,8 +401,12 @@ fn find_in_error_tray(file_name: &str) -> Option<PathBuf> {
 
 /// Pick the unique pending PDF whose filename span/number covers `from..=to`.
 ///
-/// Examples: `--from 8 --to 11` → `Study 7-11 Adult.pdf`; `--from 5 --to 5` →
-/// `Study 5 - Adult.pdf`. Returns `None` if zero or multiple candidates match.
+/// Preference (tightest wins):
+/// 1. Exact single-study name when `from == to` (`Study 5 - Adult.pdf`)
+/// 2. Exact span `from–to` (`Study 7-11 Adult.pdf` for 7–11)
+/// 3. Unique covering span (`Study 7-11` for `--from 8 --to 11`)
+///
+/// Returns `None` if still ambiguous.
 pub(crate) fn pick_pending_pdf_for_range(
     pending: &[PathBuf],
     from: u32,
@@ -411,21 +415,38 @@ pub(crate) fn pick_pending_pdf_for_range(
     if from == 0 || to == 0 || to < from {
         return None;
     }
-    let mut hits: Vec<&PathBuf> = Vec::new();
-    for p in pending {
-        let covers = if let Some((s, e)) = crate::discover::estudio_span_from_filename(p) {
-            s <= from && e >= to
-        } else if let Some(n) = crate::discover::estudio_number_from_filename(p) {
-            from == to && n == from
-        } else {
-            false
-        };
-        if covers {
-            hits.push(p);
+
+    if from == to {
+        let singles: Vec<&PathBuf> = pending
+            .iter()
+            .filter(|p| {
+                crate::discover::estudio_number_from_filename(p) == Some(from)
+                    && crate::discover::estudio_span_from_filename(p).is_none()
+            })
+            .collect();
+        if singles.len() == 1 {
+            return Some(singles[0].clone());
         }
     }
-    if hits.len() == 1 {
-        Some(hits[0].clone())
+
+    let exact_span: Vec<&PathBuf> = pending
+        .iter()
+        .filter(|p| crate::discover::estudio_span_from_filename(p) == Some((from, to)))
+        .collect();
+    if exact_span.len() == 1 {
+        return Some(exact_span[0].clone());
+    }
+
+    let covering: Vec<&PathBuf> = pending
+        .iter()
+        .filter(|p| {
+            crate::discover::estudio_span_from_filename(p)
+                .map(|(s, e)| s <= from && e >= to)
+                .unwrap_or(false)
+        })
+        .collect();
+    if covering.len() == 1 {
+        Some(covering[0].clone())
     } else {
         None
     }
