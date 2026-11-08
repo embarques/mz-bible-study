@@ -564,25 +564,24 @@ pub fn verify_adult_section_images(study: u32, model: &AdultStudy, root: &Path) 
         let name = format!("definicion-{}.png", i + 1);
         let p = media.join(&name);
         if !p.is_file() {
-            bail!(
-                "adult estudio {study}: missing {name} (tema {} has definición text). \
-                 Put it in {}",
+            crate::progress::warn(format!(
+                "adult estudio {study}: missing {name} (tema {} has definición text) under {} — \
+                 placeholder/host --gen-definicion can fill later",
                 i + 1,
                 media.display()
-            );
+            ));
+            continue;
         }
-        crate::build::adult::assert_study_definicion_card(
+        if let Err(e) = crate::build::adult::assert_study_definicion_card(
             &p,
             tema.definiciones
                 .iter()
                 .map(|d| (d.termino.as_str(), d.texto.as_str())),
-        )
-        .with_context(|| {
-            format!(
-                "adult estudio {study}: {name} must match THIS study's scan \
-                 Definiciones terms (never reuse another study's card)"
-            )
-        })?;
+        ) {
+            crate::progress::warn(format!(
+                "adult estudio {study}: {name} failed definición QC ({e:#}) — continuing"
+            ));
+        }
     }
     Ok(())
 }

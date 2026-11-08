@@ -564,19 +564,31 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
         pdftoppm_path: cfg.pdftoppm_path.clone(),
     };
 
-    // Adult without --generate: section folder on disk → build. No JSON file.
+    // Adult: if section tree (or salvable JSON) is already on disk, build it.
+    // `-g` means "generate when missing" — NOT "always re-run the cloud agent".
+    // Only `--force-prepare` forces a fresh agent.
     if job.audience == Audience::Adult
-        && !job.generate
         && !job.force_prepare
         && !job.gen_images
         && !job.gen_definicion
     {
+        let json_path = agent::prepare::expected_paths(study, job.audience, root).json;
+        if !content::has_adult_sections(study) && json_path.is_file() {
+            match content::expand_json_to_sections(&json_path, study) {
+                Ok(dir) => progress::ok(format!(
+                    "Expanded salvaged JSON → section tree {}",
+                    rel_from_root(root, &dir)
+                )),
+                Err(e) => progress::info(format!(
+                    "note: could not expand studies/adult/{study}.json ({e:#})"
+                )),
+            }
+        }
         if content::has_adult_sections(study) {
             progress::ok(format!(
-                "Section content on disk (studies/adult/{study}/) — building from folder"
+                "Section content on disk (studies/adult/{study}/) — building from folder \
+                 (skipping cloud agent; use --force-prepare to re-extract)"
             ));
-            // Folder builds also gate on scan coverage so truncated extracts
-            // cannot ship silently.
             content::assert_adult_scan_coverage(
                 study,
                 pdf,
@@ -629,8 +641,7 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
             if content::any_placeholders(study, &model, root) {
                 progress::warn(format!(
                     "deck has PLACEHOLDER images — replace under studies/adult/{study}/images/ \
-                     or re-run -g (Cursor/cursor_api_key generates art; optional \
-                     openai_api_key + --gen-images for host fast path)"
+                     or re-run with --force-prepare / --gen-images"
                 ));
             }
             let pdf = if job.export_pdf {
@@ -654,15 +665,20 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
                 pdf,
             });
         }
-        bail!(
-            "No section content at studies/adult/{study}/ (need manifest.toml).\n\
-             Either:\n\
-               • drop generated section files there (see GENERATE_STUDY_AGENT.md), then re-run\n\
-               • or pass --generate / -g to extract from the scan"
-        );
+        if !job.generate {
+            bail!(
+                "No section content at studies/adult/{study}/ (need manifest.toml).\n\
+                 Either:\n\
+                   • drop generated section files there (see GENERATE_STUDY_AGENT.md), then re-run\n\
+                   • or pass --generate / -g to extract from the scan"
+            );
+        }
+        // -g and nothing on disk → fall through to cloud agent below.
     }
 
-    let resumed = if job.force_prepare || job.gen_images || job.gen_definicion || job.generate {
+    // Resume complete deliverables unless --force-prepare (or image-only flags).
+    // `-g` alone does NOT wipe resume — that was forcing useless re-agents.
+    let resumed = if job.force_prepare || job.gen_images || job.gen_definicion {
         None
     } else {
         agent::prepare::try_resume_deliverables(study, job.audience, root)

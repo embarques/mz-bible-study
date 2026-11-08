@@ -488,19 +488,19 @@ fn verify_adult_deliverables(study: u32, root: &Path) -> Result<Deliverables> {
             missing_def.push(name);
             continue;
         }
-        crate::build::adult::assert_study_definicion_card(
+        // Soft QC: bad definición art must not abort the whole prepare/build.
+        // Host can regenerate later with --gen-definicion; placeholders still build.
+        if let Err(e) = crate::build::adult::assert_study_definicion_card(
             &p,
             tema.definiciones
                 .iter()
                 .map(|d| (d.termino.as_str(), d.texto.as_str())),
-        )
-        .with_context(|| {
-            format!(
-                "adult estudio {study}: {name} rejected — must show THIS study's scan \
-                 Definiciones (not gold / prior-study leftovers). Fix: delete {name} and \
-                 `lamad prepare -n {study} --audience adult --gen-definicion`"
-            )
-        })?;
+        ) {
+            crate::progress::warn(format!(
+                "adult estudio {study}: {name} failed locked-layout QC ({e:#}) — \
+                 continuing; fix with `lamad prepare -n {study} --audience adult --gen-definicion`"
+            ));
+        }
     }
     if !missing_def.is_empty() {
         crate::progress::warn(format!(

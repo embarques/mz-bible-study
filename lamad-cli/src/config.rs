@@ -47,9 +47,10 @@ pub struct Config {
 fn default_cursor_model() -> String {
     "composer-2.5".into()
 }
-/// Adult Bible-study extract needs a more reliable cloud agent than default Composer.
+/// Adult Bible-study extract — use a strong id from `GET https://api.cursor.com/v1/models`
+/// (IDE nicknames like `claude-4.5-sonnet` are **not** valid Cloud Agent ids).
 fn default_adult_cursor_model() -> String {
-    "claude-4.5-sonnet".into()
+    "claude-opus-5-5".into()
 }
 fn default_openai_model() -> String {
     "gpt-4o".into()
