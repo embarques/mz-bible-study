@@ -652,10 +652,6 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
             }
         }
         if content::has_adult_sections(study) {
-            progress::ok(format!(
-                "Section content on disk (studies/adult/{study}/) — building from folder \
-                 (skipping cloud agent; use --force-prepare to re-extract)"
-            ));
             content::assert_adult_scan_coverage(
                 study,
                 pdf,
@@ -664,73 +660,100 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
             )?;
             let model = content::load_adult_sections(study)?;
             let _ = content::ensure_adult_placeholders(study, &model, root)?;
-            content::verify_adult_section_images(study, &model, root)?;
-            let study_dir = content::adult_study_folder(study)?;
-            if job.prepare_only {
-                progress::ok("prepare-only — section tree OK (no PowerPoint)");
+
+            // Text is ready but scenic stubs are identical → uniqueness QC fails.
+            // Fill real art before building; do not skip the agent when images are stubs.
+            if content::any_placeholders(study, &model, root) {
+                if host_image_key {
+                    progress::ok(format!(
+                        "Section text ready for estudio {study}; scenic are placeholders — \
+                         generating host images…"
+                    ));
+                    let creds = cfg.provider_creds_for(job.audience)?;
+                    agent::prepare_openai::generate_host_images(&make_req(creds)).await?;
+                } else if job.generate {
+                    progress::ok(format!(
+                        "Section text ready for estudio {study}; scenic are placeholders — \
+                         Cursor agent will generate unique images (set openai_api_key for host fast path)"
+                    ));
+                    // Fall through to cloud agent below (images), keep section tree on disk.
+                } else {
+                    bail!(
+                        "adult estudio {study}: section folders exist but scenic images are \
+                         PLACEHOLDERS (identical stubs). Re-run with -g so the Cursor agent \
+                         generates unique scenes, or set openai_api_key and use --gen-images."
+                    );
+                }
+            }
+
+            if !content::any_placeholders(study, &model, root) {
+                progress::ok(format!(
+                    "Section content + scenic art ready (studies/adult/{study}/) — building \
+                     (skipping cloud extract; use --force-prepare to re-extract text)"
+                ));
+                content::verify_adult_section_images(study, &model, root)?;
+                let study_dir = content::adult_study_folder(study)?;
+                if job.prepare_only {
+                    progress::ok("prepare-only — section tree OK (no PowerPoint)");
+                    return Ok(StudyOutput {
+                        study,
+                        json: study_dir,
+                        pptx: None,
+                        pdf: None,
+                    });
+                }
+                let out = paths::study_pptx_path(job.audience, study, &model.titulo)?;
+                let build_spin = progress::Spinner::start(format!(
+                    "Step 4/4 — Building PPTX{}… usually ~1–2 min",
+                    if job.export_pdf {
+                        " + exporting PDF"
+                    } else {
+                        ""
+                    }
+                ));
+                let template = job.template.clone().unwrap_or_else(|| {
+                    paths::master_template(job.audience).expect("template")
+                });
+                let build_result = tokio::task::spawn_blocking({
+                    let model = model.clone();
+                    let out = out.clone();
+                    let template = template.clone();
+                    let export_pdf = job.export_pdf;
+                    move || build::build_adult_from_model(&model, &out, Some(&template), export_pdf)
+                })
+                .await?;
+                match build_result {
+                    Ok(_) => build_spin.succeed(format!(
+                        "built {}",
+                        out.file_name().unwrap_or_default().to_string_lossy()
+                    )),
+                    Err(e) => {
+                        build_spin.fail("build failed");
+                        return Err(e);
+                    }
+                }
+                let pdf = if job.export_pdf {
+                    let p = export::default_pdf_path(&out);
+                    if p.exists() {
+                        Some(p)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                progress::info(format!("  PPTX → {}", rel_from_root(root, &out)));
+                if let Some(ref pdf_path) = pdf {
+                    progress::info(format!("  PDF  → {}", rel_from_root(root, pdf_path)));
+                }
                 return Ok(StudyOutput {
                     study,
                     json: study_dir,
-                    pptx: None,
-                    pdf: None,
+                    pptx: Some(out),
+                    pdf,
                 });
             }
-            let out = paths::study_pptx_path(job.audience, study, &model.titulo)?;
-            let build_spin = progress::Spinner::start(format!(
-                "Step 4/4 — Building PPTX{}… usually ~1–2 min",
-                if job.export_pdf {
-                    " + exporting PDF"
-                } else {
-                    ""
-                }
-            ));
-            let template = job.template.clone().unwrap_or_else(|| {
-                paths::master_template(job.audience).expect("template")
-            });
-            let build_result = tokio::task::spawn_blocking({
-                let model = model.clone();
-                let out = out.clone();
-                let template = template.clone();
-                let export_pdf = job.export_pdf;
-                move || build::build_adult_from_model(&model, &out, Some(&template), export_pdf)
-            })
-            .await?;
-            match build_result {
-                Ok(_) => build_spin.succeed(format!(
-                    "built {}",
-                    out.file_name().unwrap_or_default().to_string_lossy()
-                )),
-                Err(e) => {
-                    build_spin.fail("build failed");
-                    return Err(e);
-                }
-            }
-            if content::any_placeholders(study, &model, root) {
-                progress::warn(format!(
-                    "deck has PLACEHOLDER images — replace under studies/adult/{study}/images/ \
-                     or re-run with --force-prepare / --gen-images"
-                ));
-            }
-            let pdf = if job.export_pdf {
-                let p = export::default_pdf_path(&out);
-                if p.exists() {
-                    Some(p)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            progress::info(format!("  PPTX → {}", rel_from_root(root, &out)));
-            if let Some(ref pdf_path) = pdf {
-                progress::info(format!("  PDF  → {}", rel_from_root(root, pdf_path)));
-            }
-            return Ok(StudyOutput {
-                study,
-                json: study_dir,
-                pptx: Some(out),
-                pdf,
-            });
+            // Placeholders remain + -g → continue into Cursor prepare for images.
         }
         if !job.generate {
             bail!(

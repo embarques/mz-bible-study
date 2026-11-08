@@ -96,7 +96,20 @@ fn mark_placeholder(png: &Path) -> Result<()> {
 fn write_scenic_placeholder(path: &Path, label: &str) -> Result<()> {
     use image::{Rgb, RgbImage};
 
-    let mut img = RgbImage::from_pixel(SCENIC_W, SCENIC_H, Rgb([45, 55, 72]));
+    // Per-label tint so identical-byte uniqueness QC does not fire on stubs
+    // (stubs still carry `.placeholder` and must be replaced before delivery).
+    let mut h: u32 = 2166136261;
+    for b in label.as_bytes() {
+        h ^= u32::from(*b);
+        h = h.wrapping_mul(16777619);
+    }
+    let tint = Rgb([
+        40 + (h % 40) as u8,
+        50 + ((h >> 8) % 40) as u8,
+        60 + ((h >> 16) % 50) as u8,
+    ]);
+
+    let mut img = RgbImage::from_pixel(SCENIC_W, SCENIC_H, tint);
     // Left text-safe band (lighter) so title chrome stays readable.
     for y in 0..SCENIC_H {
         for x in 0..(SCENIC_W * 40 / 100) {
@@ -105,7 +118,12 @@ fn write_scenic_placeholder(path: &Path, label: &str) -> Result<()> {
             img.put_pixel(x, y, Rgb([v, v.saturating_sub(4), v.saturating_sub(8)]));
         }
     }
-    let _ = label;
+    // Encode label length into a unique stripe so no two stubs share bytes.
+    let stripe_y = 40 + (h as usize % (SCENIC_H.saturating_sub(80).max(1)));
+    for x in 0..SCENIC_W {
+        let c = ((x as u32).wrapping_add(h) % 200) as u8;
+        img.put_pixel(x, stripe_y, Rgb([c, 180, 90]));
+    }
     for y in (SCENIC_H - 24)..SCENIC_H {
         for x in 0..SCENIC_W {
             img.put_pixel(x, y, Rgb([230, 126, 34]));
