@@ -652,12 +652,17 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
             }
         }
         if content::has_adult_sections(study) {
-            content::assert_adult_scan_coverage(
-                study,
-                pdf,
-                pages,
-                cfg.pdftoppm_path.as_deref(),
-            )?;
+            // Scan coverage needs real OCR page windows. The all-resumable path
+            // uses youth page-math stubs (1–3) — do not OCR-gate those rebuilds.
+            // When -g / force re-extract, pages come from discover and we gate.
+            if job.generate || job.force_prepare {
+                content::assert_adult_scan_coverage(
+                    study,
+                    pdf,
+                    pages,
+                    cfg.pdftoppm_path.as_deref(),
+                )?;
+            }
             let model = content::load_adult_sections(study)?;
             let _ = content::ensure_adult_placeholders(study, &model, root)?;
 
