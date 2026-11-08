@@ -80,17 +80,35 @@ impl PrepareJob {
                  Ejemplo: --pdf \"scans/pending/Bible Study 4 - Adult.pdf\""
             ),
             1 => Ok(list[0].clone()),
-            _ => bail!(
-                "Hay varios PDFs en scans/pending/ ({}). Pasa --pdf con el nombre del documento:\n{}",
-                list.len(),
-                list.iter()
-                    .map(|p| {
-                        let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("?");
-                        format!("  - {name}\n      ({})", p.display())
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            ),
+            _ => {
+                // Auto-pick when --from/--to uniquely match a filename span
+                // (Study 7-11 Adult.pdf covers --from 8 --to 11).
+                if let Some(picked) = pick_pending_pdf_for_range(&list, self.from, self.to) {
+                    let name = picked
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("?");
+                    crate::progress::info(format!(
+                        "auto-selected pending PDF for estudios {}–{} → {name}",
+                        self.from, self.to
+                    ));
+                    return Ok(picked);
+                }
+                bail!(
+                    "Hay varios PDFs en scans/pending/ ({}). Ninguno encaja solo con \
+                     estudios {}–{} por el nombre del archivo. Pasa --pdf:\n{}",
+                    list.len(),
+                    self.from,
+                    self.to,
+                    list.iter()
+                        .map(|p| {
+                            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("?");
+                            format!("  - {name}\n      ({})", p.display())
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                )
+            }
         }
     }
 
@@ -381,9 +399,60 @@ fn find_in_error_tray(file_name: &str) -> Option<PathBuf> {
         .or_else(|| matches.pop())
 }
 
+/// Pick the unique pending PDF whose filename span/number covers `from..=to`.
+///
+/// Examples: `--from 8 --to 11` → `Study 7-11 Adult.pdf`; `--from 5 --to 5` →
+/// `Study 5 - Adult.pdf`. Returns `None` if zero or multiple candidates match.
+pub(crate) fn pick_pending_pdf_for_range(
+    pending: &[PathBuf],
+    from: u32,
+    to: u32,
+) -> Option<PathBuf> {
+    if from == 0 || to == 0 || to < from {
+        return None;
+    }
+    let mut hits: Vec<&PathBuf> = Vec::new();
+    for p in pending {
+        let covers = if let Some((s, e)) = crate::discover::estudio_span_from_filename(p) {
+            s <= from && e >= to
+        } else if let Some(n) = crate::discover::estudio_number_from_filename(p) {
+            from == to && n == from
+        } else {
+            false
+        };
+        if covers {
+            hits.push(p);
+        }
+    }
+    if hits.len() == 1 {
+        Some(hits[0].clone())
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pick_pending_pdf_matches_filename_span_and_single() {
+        let list = vec![
+            PathBuf::from("scans/pending/Bible Study 4 - Adult.pdf"),
+            PathBuf::from("scans/pending/Bible study 1-8.pdf"),
+            PathBuf::from("scans/pending/Study 5 - Adult.pdf"),
+            PathBuf::from("scans/pending/Study 7-11 Adult.pdf"),
+        ];
+        let picked = pick_pending_pdf_for_range(&list, 8, 11).expect("7-11");
+        assert!(picked.ends_with("Study 7-11 Adult.pdf"));
+        let picked5 = pick_pending_pdf_for_range(&list, 5, 5).expect("5");
+        assert!(picked5.ends_with("Study 5 - Adult.pdf"));
+        // 1-8 and single 4 both cover estudio 4 alone → ambiguous
+        assert!(pick_pending_pdf_for_range(&list, 4, 4).is_none());
+        // range 1-8 uniquely covers 1–8
+        let picked18 = pick_pending_pdf_for_range(&list, 1, 8).expect("1-8");
+        assert!(picked18.ends_with("Bible study 1-8.pdf"));
+    }
 
     #[test]
     fn page_math_and_proximo_on_long_pdf() {

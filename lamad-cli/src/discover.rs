@@ -1157,7 +1157,7 @@ fn is_title_page(t: &str) -> bool {
 }
 
 /// Parse `Study 7-11 Adult.pdf` → `(7, 11)` regardless of how many titles OCR found.
-fn estudio_span_from_filename(pdf: &Path) -> Option<(u32, u32)> {
+pub(crate) fn estudio_span_from_filename(pdf: &Path) -> Option<(u32, u32)> {
     let name = pdf.file_name()?.to_str()?;
     let re = Regex::new(r"(?i)(?:estudio|study|bible\s+study)?\s*(\d+)\s*[-–]\s*(\d+)").ok()?;
     let caps = re.captures(name)?;
@@ -1179,7 +1179,7 @@ fn estudio_range_from_filename(pdf: &Path, discovered_count: usize) -> Option<(u
 
 /// Single-study scan names: `Study 5 - Adult.pdf`, `Bible Study 4 - Adult.pdf`,
 /// `Estudio 24 - Adulto.pdf`.
-fn estudio_number_from_filename(pdf: &Path) -> Option<u32> {
+pub(crate) fn estudio_number_from_filename(pdf: &Path) -> Option<u32> {
     let name = pdf.file_name()?.to_str()?;
     // Prefer explicit “Study/Estudio N” (not a range N-M).
     let re = Regex::new(
