@@ -481,7 +481,7 @@ fn verify_adult_deliverables(study: u32, root: &Path) -> Result<Deliverables> {
         );
     }
     // Scenic stubs block resume (need Cursor/host art). Definición stubs do NOT —
-    // they need openai --gen-definicion; build skips those slides until then.
+    // local gold bake / --gen-definicion fills them (OpenAI only if key set).
     if crate::content::any_scenic_placeholders(study, &study_model, root) {
         bail!(
             "adult estudio {study}: PLACEHOLDER scenic image(s) remain under {} — \
@@ -510,7 +510,7 @@ fn verify_adult_deliverables(study: u32, root: &Path) -> Result<Deliverables> {
             crate::progress::warn(format!(
                 "adult estudio {study}: {name} failed locked-layout QC ({e:#}) — \
                  build will omit that Definición slide; fix with --gen-definicion \
-                 (needs openai_api_key)"
+                 (OpenAI if key set, else local gold bake)"
             ));
             missing_or_stub_def.push(name);
         }
@@ -518,8 +518,9 @@ fn verify_adult_deliverables(study: u32, root: &Path) -> Result<Deliverables> {
     if !missing_or_stub_def.is_empty() {
         crate::progress::warn(format!(
             "adult estudio {study}: definición card(s) not ready ({}) — \
-             deck builds without those slides until `lamad prepare -n {study} \
-             --audience adult --gen-definicion` (openai_api_key)",
+             deck omits those slides until `lamad prepare -n {study} \
+             --audience adult --gen-definicion` (Cursor gold-edit by default; \
+             OpenAI if openai_api_key is set)",
             missing_or_stub_def.join(", ")
         ));
     }
@@ -1547,7 +1548,7 @@ async fn download_resolved_artifacts(
                             }
                             crate::progress::warn(
                                 "Cursor DEFINICIÓN was a gold-reference copy (wrong-study \
-                                 terms) — deleted; stub/placeholder until --gen-definicion",
+                                 terms) — deleted; local gold bake will fill from this scan",
                             );
                             bar.inc(1);
                             return Ok(());
@@ -1563,20 +1564,20 @@ async fn download_resolved_artifacts(
                             }
                             crate::progress::warn(format!(
                                 "Cursor DEFINICIÓN art rejected by locked-layout QC ({}) — \
-                                 stub will fill it; regenerate with --gen-definicion \
-                                 (needs openai_api_key) from THIS estudio's scan terms",
+                                 deleted; local gold bake (or OpenAI --gen-definicion if key set) \
+                                 will fill from THIS estudio's scan terms",
                                 short_err(&e)
                             ));
                             bar.inc(1);
                             return Ok(());
                         }
                         // Layout OK from Cursor still has no proven term match —
-                        // do NOT stamp .terms here. Build requires --gen-definicion
-                        // (OpenAI edit + sidecar) or an explicit verified stamp.
+                        // remove so local bake / --gen-definicion writes correct
+                        // scan terms + .terms sidecar (never trust agent text alone).
+                        let _ = std::fs::remove_file(&dest_path);
                         crate::progress::warn(format!(
-                            "{} passed layout QC but has no terms sidecar yet — \
-                             run --gen-definicion so baked text matches this scan \
-                             (never reuse prior-study cards)",
+                            "Cursor {} passed layout QC but has no terms proof — \
+                             removed; local bake will redraw this estudio's Definiciones",
                             dest_path
                                 .file_name()
                                 .and_then(|n| n.to_str())

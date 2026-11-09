@@ -412,7 +412,8 @@ fn fill_tema(
 
     // Only emit a Definición slide when the printed study has a box AND a
     // QC-passing card PNG. Stubs / missing cards omit the slide (warn) so
-    // prepare can finish without openai_api_key; fill later with --gen-definicion.
+    // prepare can finish; fill via local gold bake or `--gen-definicion`
+    // (OpenAI only when openai_api_key is set).
     if !tema.definiciones.is_empty() {
         let img_path = study
             .definicion_images
@@ -442,8 +443,7 @@ fn fill_tema(
         } else {
             crate::progress::warn(format!(
                 "omitting Definición slide for tema {} — card not ready{} \
-                 (later: `lamad prepare -n {{N}} --audience adult --gen-definicion` \
-                 with openai_api_key)",
+                 (later: `lamad prepare -n {{N}} --audience adult --gen-definicion`)",
                 idx + 1,
                 img_path
                     .as_ref()
@@ -509,10 +509,13 @@ fn fill_ab_block(
     image_slides: &mut Vec<u32>,
 ) -> Result<()> {
     let label = format!("{point}.{letter}");
+    // Builder already prefixes `{N}.{Letter} - ` / `{N}.{Letter}- `.
+    // Strip agent leftovers: `A. …`, `2.A- …`, trailing `(6:12)`.
+    let titulo = sanitize_ab_point_titulo(&block.titulo);
     set_ab_title_header(
         &ooxml::slide_path(build, title_slide),
         &label,
-        &block.titulo,
+        &titulo,
         &block.texto_biblico.cita,
         AbRefShape::CuadroTexto6,
     )?;
@@ -534,7 +537,7 @@ fn fill_ab_block(
     }
     order.extend(&texto_nums);
 
-    let body_title = format!("{label} - {}", block.titulo);
+    let body_title = format!("{label} - {titulo}");
     // Even packs above the logo / navy-footer floor (same budget as intro).
     let body_packs = pack::rebalance_body_slides(&block.texto_slides, ADULT_BODY_LOGO_BUDGET);
     if body_packs.is_empty() {
@@ -685,10 +688,49 @@ pub fn apply_adult_study_value(build: &Path, study: &Value) -> Result<Vec<u32>> 
     apply_adult_study(build, &study)
 }
 
+/// A/B body + image titles: plain Spanish only.
+///
+/// Builder adds `{N}.{Letter} - ` itself. Agents often leave `A. … (6:12)` or
+/// nested `2.A- …` — strip those so we never ship `2.A - A. Title (6:12).`.
+fn sanitize_ab_point_titulo(raw: &str) -> String {
+    use regex::Regex;
+    let point = Regex::new(r"(?i)^\d+\.[A-D]\s*[-–—]?\s*").unwrap();
+    let letter = Regex::new(r"(?i)^[A-D]\.\s*").unwrap();
+    let verse_paren = Regex::new(r"\s*\(\s*\d+(?:\s*[,:\-–—]\s*\d+)*\s*\)\s*\.?\s*$").unwrap();
+    let mut t = raw.trim().to_string();
+    for _ in 0..6 {
+        let before = t.clone();
+        t = point.replace(&t, "").into_owned();
+        t = letter.replace(t.trim_start(), "").into_owned();
+        t = verse_paren.replace(t.trim_end(), "").into_owned();
+        t = t.trim().trim_end_matches('.').trim().to_string();
+        if t == before {
+            break;
+        }
+    }
+    t
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::adult_study::AdultStudy;
+
+    #[test]
+    fn sanitize_ab_titulo_strips_letter_and_verse_paren() {
+        assert_eq!(
+            sanitize_ab_point_titulo("A. Hacer todo con gozo y una actitud reverente (6:12)."),
+            "Hacer todo con gozo y una actitud reverente"
+        );
+        assert_eq!(
+            sanitize_ab_point_titulo("A. 2.A- Recomendaciones generales a un pueblo elegido (28:8)."),
+            "Recomendaciones generales a un pueblo elegido"
+        );
+        assert_eq!(
+            sanitize_ab_point_titulo("Dios le dio Hebrón como capital de Judá"),
+            "Dios le dio Hebrón como capital de Judá"
+        );
+    }
 
     #[test]
     fn fixture_24_deserializes() {

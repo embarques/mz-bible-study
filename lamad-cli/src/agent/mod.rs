@@ -4,6 +4,7 @@ pub mod client;
 pub mod openai;
 pub mod page_pack;
 pub mod prepare;
+pub mod prepare_cursor_definicion;
 pub mod prepare_openai;
 pub mod provider;
 pub mod review;

@@ -11,6 +11,7 @@ name = "lamad"
 path = "src/main.rs"
 
 [dependencies]
+ab_glyph = "0.2"
 anyhow = "1"
 base64 = "0.22"
 clap = { version = "4", features = ["derive", "env"] }

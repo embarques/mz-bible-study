@@ -86,13 +86,37 @@ pub fn any_scenic_placeholders(study: u32, model: &AdultStudy, root: &Path) -> b
         .any(|n| is_placeholder(&media.join(n)))
 }
 
-/// DEFINICIÓN stubs — need openai `--gen-definicion`; build skips those slides.
+/// DEFINICIÓN stubs — filled by local gold bake (no key) or OpenAI when set.
 pub fn any_definicion_placeholders(study: u32, model: &AdultStudy, root: &Path) -> bool {
     let media = adult_media_dir(study, root);
     adult_basenames_for_study(model)
         .into_iter()
         .filter(|n| n.starts_with("definicion-"))
         .any(|n| is_placeholder(&media.join(n)))
+}
+
+/// True when any tema DEFINICIÓN card is missing, a stub, gold leftover, or
+/// fails layout/terms QC — i.e. needs bake or `--gen-definicion`.
+pub fn adult_definicion_cards_need_regen(study: u32, model: &AdultStudy, root: &Path) -> bool {
+    let media = adult_media_dir(study, root);
+    for (i, tema) in model.temas.iter().enumerate() {
+        if tema.definiciones.is_empty() {
+            continue;
+        }
+        let dest = media.join(format!("definicion-{}.png", i + 1));
+        if !dest.is_file() || is_placeholder(&dest) {
+            return true;
+        }
+        let fp = crate::build::adult::terms_fingerprint(
+            tema.definiciones
+                .iter()
+                .map(|d| (d.termino.as_str(), d.texto.as_str())),
+        );
+        if !crate::build::adult::keepable_definicion_card(&dest, &fp) {
+            return true;
+        }
+    }
+    false
 }
 
 pub fn clear_placeholder_mark(png: &Path) {

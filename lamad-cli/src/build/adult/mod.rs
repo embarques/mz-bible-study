@@ -11,7 +11,8 @@ mod ooxml;
 pub mod study;
 
 pub use definicion_card::{
-    assert_locked_definicion_card, assert_study_definicion_card, keepable_definicion_card,
+    assert_locked_definicion_card, assert_study_definicion_card,
+    bake_adult_definicion_cards_local, bake_definicion_card_local, keepable_definicion_card,
     looks_like_locked_definicion_card, primary_gold_reference, terms_fingerprint,
     terms_sidecar_matches, write_terms_sidecar,
 };

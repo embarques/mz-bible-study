@@ -136,8 +136,9 @@ pub struct PrepareArgs {
     pub gen_images: bool,
 
     /// Adult only: force-regenerate DEFINICIÓN Y ETIMOLOGÍA cards from the locked
-    /// gold reference (text + icons only). Keeps scenic images. Requires
-    /// openai_api_key and studies/adult/{N}.json.
+    /// gold PNG (text + icons only). Keeps scenic images. Default = Cursor agent
+    /// edits the gold reference (`cursor_api_key`). If `openai_api_key` is set,
+    /// uses OpenAI images/edits instead. Needs studies/adult/{N}.json or section tree.
     #[arg(long = "gen-definicion")]
     pub gen_definicion: bool,
 

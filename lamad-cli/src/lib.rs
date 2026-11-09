@@ -692,6 +692,21 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
             }
 
             if !content::any_scenic_placeholders(study, &model, root) {
+                // DEFINICIÓN: Cursor gold-edit by default; OpenAI only when key is set.
+                let needs_def = content::adult_definicion_cards_need_regen(study, &model, root);
+                if needs_def {
+                    let creds = cfg.provider_creds_for(job.audience)?;
+                    if let Err(e) = agent::prepare_openai::regenerate_adult_definicion_cards(
+                        &make_req(creds),
+                    )
+                    .await
+                    {
+                        progress::warn(format!(
+                            "DEFINICIÓN gold-edit failed ({e:#}) — omitting those slides \
+                             (re-run --gen-definicion)"
+                        ));
+                    }
+                }
                 progress::ok(format!(
                     "Section content + scenic art ready (studies/adult/{study}/) — building \
                      (skipping cloud extract; use --force-prepare to re-extract text)"
@@ -781,12 +796,7 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
     };
 
     let deliverables = if job.gen_definicion {
-        if !host_image_key {
-            bail!(
-                "--gen-definicion needs openai_api_key / OPENAI_API_KEY \
-                 (reference-edit of the locked DEFINICIÓN gold card)"
-            );
-        }
+        // Default: Cursor gold-PNG edit. OpenAI images/edits only when key is set.
         let json = agent::prepare::try_resume_json_only(study, job.audience, root)
             .with_context(|| {
                 format!(
@@ -796,10 +806,15 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
                 )
             })?;
         progress::ok(format!(
-            "--gen-definicion — using {} (force-rebuild DEFINICIÓN cards from gold)",
+            "--gen-definicion — {} gold reference-edit ({})",
+            if host_image_key {
+                "OpenAI"
+            } else {
+                "Cursor (default)"
+            },
             json.display()
         ));
-        let creds = cfg.provider_creds()?;
+        let creds = cfg.provider_creds_for(job.audience)?;
         agent::prepare_openai::regenerate_adult_definicion_cards(&make_req(creds)).await?;
         agent::prepare::verify_deliverables(study, job.audience, root)?
     } else if job.gen_images {
@@ -959,6 +974,17 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
     if job.audience == Audience::Adult && content::has_adult_sections(study) {
         let model = content::load_adult_sections(study)?;
         let _ = content::ensure_adult_placeholders(study, &model, root)?;
+        // DEFINICIÓN: Cursor gold-edit by default; OpenAI when key is set.
+        if content::adult_definicion_cards_need_regen(study, &model, root) {
+            let creds = cfg.provider_creds_for(job.audience)?;
+            if let Err(e) =
+                agent::prepare_openai::regenerate_adult_definicion_cards(&make_req(creds)).await
+            {
+                progress::warn(format!(
+                    "DEFINICIÓN gold-edit failed ({e:#}) — omitting those slides"
+                ));
+            }
+        }
         content::verify_adult_section_images(study, &model, root)?;
 
         let out = paths::study_pptx_path(job.audience, study, &model.titulo)?;
@@ -968,7 +994,8 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
             .unwrap_or_else(|| paths::master_template(job.audience).expect("template"));
 
         // Kick off host images while we build the first deck.
-        let image_join = if host_image_key && content::any_placeholders(study, &model, root)
+        // Only scenic stubs block / need host regen — definición is local-baked above.
+        let image_join = if host_image_key && content::any_scenic_placeholders(study, &model, root)
         {
             let creds = cfg.provider_creds()?;
             let req = make_req(creds);
