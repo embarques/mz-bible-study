@@ -55,7 +55,11 @@ pub fn set_adult_title_slide(path: &Path, numero: &str, titulo: &str, base: &[St
     let xml = transform_shape(&xml, "CuadroTexto 1", |b| {
         let b = force_shape_run_sz(b, title_sz);
         let b = set_body_pr_anchor(&b, "t"); // top — wrap down, leave Base clear
-        Ok(fit_title_box_above_base(&b, max_bottom))
+        Ok(fit_title_box_above_base(&no_automatic_wrap(&b), max_bottom))
+    })?;
+    let xml = transform_shape(&xml, "TextBox 3", |b| {
+        let b = b.replace(r#"typeface="Agency FB""#, r#"typeface="Gill Sans MT""#);
+        Ok(no_automatic_wrap(&force_shape_run_sz(&b, 1450)))
     })?;
     fs::write(path, xml).with_context(|| format!("write {}", path.display()))
 }
@@ -146,12 +150,11 @@ fn adult_title_font_sz_fit(
 ) -> u32 {
     let mut sz = adult_title_font_sz_start(titulo, lines.len());
     while sz > 6400 {
-        let visual = estimate_visual_lines(lines, box_cx, sz);
-        let need = (visual as i64) * line_height_emu(sz);
-        if need <= available_cy {
+        let need = lines.len() as i64 * line_height_emu(sz);
+        if need <= available_cy && title_lines_fit_width(lines, box_cx, sz) {
             break;
         }
-        sz -= 400; // step down 4pt
+        sz = (sz - 400).max(6400);
     }
     sz
 }
@@ -169,17 +172,14 @@ fn adult_title_font_sz_start(titulo: &str, line_count: usize) -> u32 {
     }
 }
 
-/// Rough visual wrap count for bold caps (Verlag Black) at `sz` hundredths.
-fn estimate_visual_lines(lines: &[String], box_cx: i64, sz: u32) -> usize {
-    // Average capital width ≈ 0.58 × font size (pt) for Verlag Black.
-    let char_emu = ((sz as f64) / 100.0) * 0.58 * (914_400.0 / 72.0);
-    let cpl = ((box_cx as f64) / char_emu).floor().max(8.0) as usize;
-    let mut total = 0usize;
-    for line in lines {
-        let n = line.chars().count().max(1);
-        total += n.div_ceil(cpl);
-    }
-    total.max(1)
+/// Leave width for the textbox insets and for wider fallback fonts in PDF exports.
+fn title_lines_fit_width(lines: &[String], box_cx: i64, sz: u32) -> bool {
+    let char_emu = (sz as f64 / 100.0) * 0.66 * (914_400.0 / 72.0);
+    lines.iter().all(|line| line.chars().count() as f64 * char_emu <= box_cx as f64 * 0.94)
+}
+
+fn no_automatic_wrap(shape_xml: &str) -> String {
+    shape_xml.replace(r#"wrap="square""#, r#"wrap="none""#)
 }
 
 fn line_height_emu(sz: u32) -> i64 {
