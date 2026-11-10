@@ -14,6 +14,7 @@ These are enforced in `lamad-cli` build + QC. Do not “match gold” when gold 
 | Rule | Detail |
 |------|--------|
 | **No `()` on citations** | Image chrome (TEMA / A-B verse under gray line) and **Texto Bíblico** citation titles are plain: `MATEO 6:1-4` — never `(MATEO 6:1-4)`. Strip parens from JSON/`rango`/`cita` on fill. Inline body refs like `(Génesis 16:13)` stay bold with parens (body prose only). |
+| **Section vs TEMA verses (HARD — gold estudio 8)** | TEMA image chrome = tema `RANGO` only. Each A/B **image** and **Texto Bíblico** = that point’s verses only (same cita). Never put the full TEMA range on every A/B Texto (e.g. `2 Samuel 6:1,2` on 1.A — not `2 Samuel 6:1-11`). Title chrome: `TEMA I - …` / `1.A - …` (spaces around the dash). |
 | **Title = youth style** | No cyan `<a:highlight>` chip behind the study title (or próximo). Black Verlag title on white — strip all `a:highlight` on title/próximo fills. |
 | **Text too big → shrink** | If title/verse/diagram text overflows or collides, **decrease font** (TEMA/A-B image titles: 18–32pt; A/B **body** headers `Título 1`: 22–36pt by length, top-anchored, no orphan `1.B -` before a break). Never leave title overlapping the verse under the gray line or climbing off the top of the slide. |
 | **Scenic image visible** | After cloning youth section chrome, **remove** the full-bleed black `!!Rectangle`. Normalize pic to one `<a:stretch><a:fillRect/></a:stretch>` full-bleed. QC fails if `!!Rectangle` remains or `<p:pic>` is missing. |

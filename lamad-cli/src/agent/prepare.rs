@@ -739,7 +739,11 @@ fn coerce_definicion_entry(v: &serde_json::Value) -> Option<serde_json::Value> {
     }
 }
 
-/// Rewrite one tema object: string defs, inject texto_biblico into A–F / puntos.
+/// Rewrite one tema object: string defs; coerce A–F / puntos texto_biblico.
+///
+/// **HARD (gold estudio 8):** never copy tema-wide Lectura into every point.
+/// TEMA image uses `rango`; each A/B image + Texto Bíblico uses that point’s
+/// own verses only.
 fn coerce_tema_agent_shape(tema: &mut serde_json::Map<String, serde_json::Value>) -> bool {
     let mut changed = false;
 
@@ -764,38 +768,23 @@ fn coerce_tema_agent_shape(tema: &mut serde_json::Map<String, serde_json::Value>
         }
     }
 
-    // Prefer tema-level slides as the shared Lectura for lettered points.
-    let shared_tb = tema
-        .get("texto_biblico")
-        .and_then(coerce_slide_strings_to_lectura)
-        .or_else(|| {
-            tema.get("texto_biblico_slides")
-                .and_then(coerce_slide_strings_to_lectura)
-        });
-
+    // Tema-level texto_biblico / slides are not part of TemaAdult — drop them.
+    // Do **not** inject into A/B (that made every Texto Bíblico show the full
+    // TEMA range, e.g. `2 Samuel 6:1-11` on 1.A instead of `6:1,2`).
     if tema.remove("texto_biblico_slides").is_some() {
         changed = true;
     }
-    // Keep a structured texto_biblico on tema only if already object; else drop array form.
-    if let Some(tb) = &shared_tb {
-        match tema.get("texto_biblico") {
-            Some(serde_json::Value::Object(_)) => {}
-            _ => {
-                // Not part of TemaAdult schema — remove after injecting into points.
-                tema.remove("texto_biblico");
-                changed = true;
-                let _ = tb;
-            }
+    match tema.get("texto_biblico") {
+        Some(serde_json::Value::Object(_)) | Some(serde_json::Value::Array(_)) => {
+            tema.remove("texto_biblico");
+            changed = true;
         }
-    } else if matches!(tema.get("texto_biblico"), Some(serde_json::Value::Array(_))) {
-        tema.remove("texto_biblico");
-        changed = true;
+        _ => {}
     }
 
     let empty_tb = serde_json::json!({ "cita": "", "versiculos": [] });
-    let inject_tb = shared_tb.unwrap_or(empty_tb);
 
-    // Legacy A–F blocks: ensure texto_biblico present.
+    // Legacy A–F blocks: coerce shape only — never fill from tema rango.
     for letter in ["A", "B", "C", "D", "E", "F"] {
         let Some(block) = tema.get_mut(letter) else {
             continue;
@@ -809,18 +798,18 @@ fn coerce_tema_agent_shape(tema: &mut serde_json::Map<String, serde_json::Value>
                 if let Some(c) = coerce_slide_strings_to_lectura(other) {
                     bobj.insert("texto_biblico".into(), c);
                 } else {
-                    bobj.insert("texto_biblico".into(), inject_tb.clone());
+                    bobj.insert("texto_biblico".into(), empty_tb.clone());
                 }
                 changed = true;
             }
             None => {
-                bobj.insert("texto_biblico".into(), inject_tb.clone());
+                bobj.insert("texto_biblico".into(), empty_tb.clone());
                 changed = true;
             }
         }
     }
 
-    // puntos[]: same injection
+    // puntos[]: same — coerce only, no tema-wide inject.
     if let Some(serde_json::Value::Array(puntos)) = tema.get_mut("puntos") {
         for p in puntos.iter_mut() {
             let Some(pobj) = p.as_object_mut() else {
@@ -832,12 +821,12 @@ fn coerce_tema_agent_shape(tema: &mut serde_json::Map<String, serde_json::Value>
                     if let Some(c) = coerce_slide_strings_to_lectura(other) {
                         pobj.insert("texto_biblico".into(), c);
                     } else {
-                        pobj.insert("texto_biblico".into(), inject_tb.clone());
+                        pobj.insert("texto_biblico".into(), empty_tb.clone());
                     }
                     changed = true;
                 }
                 None => {
-                    pobj.insert("texto_biblico".into(), inject_tb.clone());
+                    pobj.insert("texto_biblico".into(), empty_tb.clone());
                     changed = true;
                 }
             }
@@ -2221,6 +2210,9 @@ Adult source of truth is the **section folder tree** (not youth JSON).
 - Lectura chapter jumps keep printed `5:1` (not bare `1`).
 - Definiciones: only from printed «Definiciones y etimología» boxes; else omit those files.
 - Variable temas/points: one folder per printed TEMA and lettered point — do not invent or drop.
+- **Texto Bíblico (HARD — gold estudio 8):** TEMA image chrome uses tema `RANGO` only. \
+Each `tema-N-X/texto-biblico.txt` must be **that point’s verses only** (same cita as the \
+A/B image under the gray line). Never copy the full TEMA range into every A/B Texto.
 - End when the section tree under `artifacts/{study}/` is complete{img_end}.
 
 ---
@@ -2451,12 +2443,10 @@ mod tests {
         assert_eq!(study.lectura_antifonal.len(), 1);
         assert_eq!(study.temas.len(), 1);
         assert_eq!(study.temas[0].puntos.len(), 2);
+        // Must NOT copy tema-wide `2 S 6:1-11` into every point (gold 8).
         assert!(
-            !study.temas[0].puntos[0].texto_biblico.cita.is_empty()
-                || !study.temas[0].puntos[0]
-                    .texto_biblico
-                    .versiculos
-                    .is_empty()
+            study.temas[0].puntos[0].texto_biblico.cita.is_empty(),
+            "legacy salvage must not inject tema-wide texto_biblico into A/B"
         );
         assert_eq!(study.temas[0].definiciones[0].termino, "Arca");
         let _ = std::fs::remove_dir_all(&dir);

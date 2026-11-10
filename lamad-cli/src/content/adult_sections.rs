@@ -1,7 +1,7 @@
 //! Adult section-folder layout under `studies/adult/{N}/`.
 //!
 //! ```text
-//! studies/adult/7/
+//! studies/adult/8/
 //!   manifest.toml
 //!   images/                  # scenic + definición PNGs (builder paths)
 //!   01-title/

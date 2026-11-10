@@ -93,7 +93,7 @@ Do not reuse PNGs from another estudio in the same batch.
 
 ## HARD rules
 
-**Quality bar:** match finished **estudio 7** (`EL TIEMPO DE DIOS SIEMPRE ES MEJOR`) —
+**Quality bar:** match finished **estudio 8** (`HACIENDO LO BUENO DE MANERA INCORRECTA`) —
 precise folder structure, complete verbatim text, and beautiful unique scenic art.
 This is church teaching material: work with care and professionalism. Do not ship
 stub/cartoon placeholders or truncated bodies. See `AGENTS.md` → **Adult gold bar**.

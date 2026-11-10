@@ -401,10 +401,12 @@ fn fill_tema(
     if let Some(scenic) = study.scenic_images.as_ref() {
         apply_scenic_image(build, header, &resolve_study_path(&scenic.tema[idx])?, true)?;
     }
+    // Gold 8: `TEMA I - LAS COSAS…` — label carries the Roman; strip `I.` from titulo.
+    let tema_title = strip_tema_roman_prefix(&tema.titulo);
     set_tema_header_image(
         &ooxml::slide_path(build, header),
         &label,
-        &tema.titulo,
+        &tema_title,
         &tema.rango,
     )?;
     order.push(header);
@@ -487,6 +489,7 @@ fn fill_tema(
             point_n,
             &punto.letra,
             &punto.as_bloque(),
+            &tema.rango,
             title_slide,
             texto_proto,
             &body_protos,
@@ -502,6 +505,7 @@ fn fill_ab_block(
     point: usize,
     letter: &str,
     block: &crate::model::adult_study::BloqueAdult,
+    tema_rango: &str,
     title_slide: u32,
     texto_proto: u32,
     body_slides: &[u32],
@@ -509,14 +513,31 @@ fn fill_ab_block(
     image_slides: &mut Vec<u32>,
 ) -> Result<()> {
     let label = format!("{point}.{letter}");
-    // Builder already prefixes `{N}.{Letter} - ` / `{N}.{Letter}- `.
+    // Builder already prefixes `{N}.{Letter} - `.
     // Strip agent leftovers: `A. …`, `2.A- …`, trailing `(6:12)`.
     let titulo = sanitize_ab_point_titulo(&block.titulo);
+    if block.texto_biblico.cita.trim().is_empty() || block.texto_biblico.versiculos.is_empty()
+    {
+        bail!(
+            "{label}: texto_biblico missing section verses — each A/B point needs its own \
+             cita + verses (gold estudio 8). TEMA rango `{tema_rango}` is for the TEMA image \
+             only; do not reuse it as every point’s Texto Bíblico."
+        );
+    }
+    // Same cita on A/B image chrome and Texto Bíblico (section-only, not tema rango).
+    let section_cita = block.texto_biblico.cita.trim();
+    if cites_match(section_cita, tema_rango) {
+        bail!(
+            "{label}: texto_biblico.cita `{section_cita}` is the full TEMA rango — gold 8 \
+             requires the section verse only on A/B image + Texto Bíblico (e.g. `2 Samuel 6:1,2` \
+             not `2 Samuel 6:1-11`). Fix the point’s texto-biblico.txt / JSON."
+        );
+    }
     set_ab_title_header(
         &ooxml::slide_path(build, title_slide),
         &label,
         &titulo,
-        &block.texto_biblico.cita,
+        section_cita,
         AbRefShape::CuadroTexto6,
     )?;
     order.push(title_slide);
@@ -694,8 +715,8 @@ pub fn apply_adult_study_value(build: &Path, study: &Value) -> Result<Vec<u32>> 
 /// nested `2.A- …` — strip those so we never ship `2.A - A. Title (6:12).`.
 fn sanitize_ab_point_titulo(raw: &str) -> String {
     use regex::Regex;
-    let point = Regex::new(r"(?i)^\d+\.[A-D]\s*[-–—]?\s*").unwrap();
-    let letter = Regex::new(r"(?i)^[A-D]\.\s*").unwrap();
+    let point = Regex::new(r"(?i)^\d+\.[A-Z]\s*[-–—]?\s*").unwrap();
+    let letter = Regex::new(r"(?i)^[A-Z]\.\s*").unwrap();
     let verse_paren = Regex::new(r"\s*\(\s*\d+(?:\s*[,:\-–—]\s*\d+)*\s*\)\s*\.?\s*$").unwrap();
     let mut t = raw.trim().to_string();
     for _ in 0..6 {
@@ -709,6 +730,27 @@ fn sanitize_ab_point_titulo(raw: &str) -> String {
         }
     }
     t
+}
+
+/// Drop leading `I.` / `II.` / `III.` from tema titulo — `TEMA I` is already in the label.
+fn strip_tema_roman_prefix(titulo: &str) -> String {
+    use regex::Regex;
+    let re = Regex::new(r"(?i)^(I{1,3}|IV|VI{0,3}|IX|X)\.\s*").unwrap();
+    re.replace(titulo.trim(), "").into_owned().trim().to_string()
+}
+
+/// True when point cita is the **same** string as tema rango (tema-wide inject bug).
+/// Section cites that are a subset (e.g. `28:8` vs `28:8-10`) are fine.
+fn cites_match(a: &str, b: &str) -> bool {
+    let norm = |s: &str| {
+        s.chars()
+            .filter(|c| !c.is_whitespace())
+            .flat_map(|c| c.to_lowercase())
+            .collect::<String>()
+    };
+    let na = norm(a);
+    let nb = norm(b);
+    !na.is_empty() && na == nb
 }
 
 #[cfg(test)]
@@ -730,6 +772,20 @@ mod tests {
             sanitize_ab_point_titulo("Dios le dio Hebrón como capital de Judá"),
             "Dios le dio Hebrón como capital de Judá"
         );
+    }
+
+    #[test]
+    fn strip_tema_roman_and_cites_match_exact_only() {
+        assert_eq!(
+            strip_tema_roman_prefix("I. LAS COSAS DEBEN HACERSE COMO DIOS LAS ORDENA"),
+            "LAS COSAS DEBEN HACERSE COMO DIOS LAS ORDENA"
+        );
+        assert!(cites_match("2 Samuel 6:1-11", "2 Samuel 6:1-11"));
+        assert!(
+            !cites_match("2 Samuel 6:1,2", "2 Samuel 6:1-11"),
+            "section subset must not equal tema rango"
+        );
+        assert!(!cites_match("1 Crónicas 28:8", "1 Crónicas 28:8-10"));
     }
 
     #[test]

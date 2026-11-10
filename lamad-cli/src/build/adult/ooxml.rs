@@ -156,7 +156,8 @@ fn set_shape_y_cy(shape_xml: &str, y: i64, cy: i64) -> String {
 /// title, gray line, verse), anchored at the **bottom-left** so longer
 /// adult titles have room without covering the scene.
 pub fn set_tema_header_image(path: &Path, tema_label: &str, titulo: &str, rango: &str) -> Result<()> {
-    let title = format!("{tema_label}- {titulo}");
+    // Gold (estudio 8): `TEMA I - TITLE` — spaces on both sides of the dash.
+    let title = format!("{tema_label} - {titulo}");
     // Adult image + Texto Bíblico citations never use parentheses.
     let cite = strip_citation_parens(rango);
     rewrite_as_youth_section_bottom(path, &title, &cite)
@@ -170,7 +171,8 @@ pub fn set_ab_title_header(
     cita: &str,
     _reference: AbRefShape,
 ) -> Result<()> {
-    let title = format!("{point_label}- {titulo}");
+    // Gold (estudio 8): `1.A - Title` — spaces on both sides of the dash.
+    let title = format!("{point_label} - {titulo}");
     let cite = strip_citation_parens(cita);
     rewrite_as_youth_section_bottom(path, &title, &cite)
 }
