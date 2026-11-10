@@ -2,8 +2,24 @@
 
 Copy the prompt below into Codex and attach the adult study scan.
 
-> Prepare the adult study content from this scan. Show me the printed page
-> boundaries first. After I confirm, transcribe each study verbatim into its
-> `studies/adult/{N}/` folder. Flag any wording or citations you can’t verify.
-> Prepare the scenic artwork, but stop before building the PowerPoints or PDFs
-> so I can review the files.
+Prepare the adult studies from the attached scan and verify the files yourself.
+For this run, proceed without waiting for batch confirmation or my review.
+
+1. Identify each study’s printed page boundaries, from its title page through
+   the page marked `RESUMEN GENERAL`. Use the next title page for Próximo when
+   available. Report the boundaries in your handoff.
+2. Transcribe the required Spanish content verbatim into the standard
+   `studies/adult/{N}/` section files. Read the columns in order, join text
+   across columns and pages, preserve chapter and verse markers, and prepare
+   the required scenic PNGs.
+3. In a separate pass, compare the section files against the original scan.
+   Check for omissions, altered words, incorrect citations, and broken joins.
+   Re-read unclear areas at higher zoom and fix every discrepancy you can
+   resolve from the scan.
+4. Run `lamad validate-content -n N --audience adult` for each study. Fix any
+   structural or artwork errors and rerun validation. If wording still cannot
+   be verified, report the printed page and section and mark that study
+   incomplete. Continue preparing the other studies.
+
+Stop after preparing and validating the files. Leave PowerPoint and PDF
+generation for a separate build.
