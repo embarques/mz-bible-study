@@ -103,6 +103,7 @@ pub async fn run(mut job: PrepareJob, cfg: &Config) -> Result<()> {
         // and the cloud agent — only rebuild PPTX/PDF.
         let all_resumable = !job.force_prepare
             && !job.gen_images
+            && !(job.audience == Audience::Adult && job.generate)
             && studies.iter().all(|n| {
                 agent::prepare::try_resume_deliverables(*n, job.audience, &root).is_some()
             });
@@ -303,11 +304,17 @@ fn pdf_named_estudios(pdf: &Path) -> Option<Vec<u32>> {
 }
 
 fn estudio_ready_on_disk(study: u32, audience: Audience, root: &Path) -> bool {
+    if audience == Audience::Adult {
+        let Ok(model) = content::load_adult_sections(study) else {
+            return false;
+        };
+        return paths::study_pptx_path(audience, study, &model.titulo).is_ok_and(|p| p.is_file())
+            && paths::study_pdf_path(audience, study, &model.titulo).is_ok_and(|p| p.is_file());
+    }
     agent::prepare::try_resume_deliverables(study, audience, root).is_some()
-        || (audience == Audience::Adult && content::has_adult_sections(study))
 }
 
-/// True when every filename-named estudio is ready (section tree / JSON+images).
+/// Adult scans stay available until each study has both final files.
 fn pdf_ready_to_archive(pdf: &Path, audience: Audience, root: &Path) -> Result<bool> {
     let Some(named) = pdf_named_estudios(pdf) else {
         return Ok(false);
@@ -703,21 +710,7 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
             }
 
             if !content::any_scenic_placeholders(study, &model, root) {
-                // DEFINICIÓN: Cursor gold-edit by default; OpenAI only when key is set.
-                let needs_def = content::adult_definicion_cards_need_regen(study, &model, root);
-                if needs_def {
-                    let creds = cfg.provider_creds_for(job.audience)?;
-                    if let Err(e) = agent::prepare_openai::regenerate_adult_definicion_cards(
-                        &make_req(creds),
-                    )
-                    .await
-                    {
-                        progress::warn(format!(
-                            "DEFINICIÓN gold-edit failed ({e:#}) — omitting those slides \
-                             (re-run --gen-definicion)"
-                        ));
-                    }
-                }
+                build::adult::bake_adult_definicion_cards_local(study, &model, root, false)?;
                 progress::ok(format!(
                     "Section content + scenic art ready (studies/adult/{study}/) — building \
                      (skipping cloud extract; use --force-prepare to re-extract text)"
@@ -993,17 +986,7 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
     if job.audience == Audience::Adult && content::has_adult_sections(study) {
         let model = content::load_adult_sections(study)?;
         let _ = content::ensure_adult_placeholders(study, &model, root)?;
-        // DEFINICIÓN: Cursor gold-edit by default; OpenAI when key is set.
-        if content::adult_definicion_cards_need_regen(study, &model, root) {
-            let creds = cfg.provider_creds_for(job.audience)?;
-            if let Err(e) =
-                agent::prepare_openai::regenerate_adult_definicion_cards(&make_req(creds)).await
-            {
-                progress::warn(format!(
-                    "DEFINICIÓN gold-edit failed ({e:#}) — omitting those slides"
-                ));
-            }
-        }
+        build::adult::bake_adult_definicion_cards_local(study, &model, root, false)?;
         content::verify_adult_section_images(study, &model, root)?;
 
         let out = paths::study_pptx_path(job.audience, study, &model.titulo)?;

@@ -490,38 +490,9 @@ fn verify_adult_deliverables(study: u32, root: &Path) -> Result<Deliverables> {
             media.display()
         );
     }
-    let mut missing_or_stub_def = Vec::new();
-    for (i, tema) in study_model.temas.iter().enumerate() {
-        if tema.definiciones.is_empty() {
-            continue;
-        }
-        let name = format!("definicion-{}.png", i + 1);
-        let p = media.join(&name);
-        if !p.exists() || crate::content::is_placeholder(&p) {
-            missing_or_stub_def.push(name);
-            continue;
-        }
-        if let Err(e) = crate::build::adult::assert_study_definicion_card(
-            &p,
-            tema.definiciones
-                .iter()
-                .map(|d| (d.termino.as_str(), d.texto.as_str())),
-        ) {
-            crate::progress::warn(format!(
-                "adult estudio {study}: {name} failed locked-layout QC ({e:#}) — \
-                 build will omit that Definición slide; fix with --gen-definicion \
-                 (OpenAI if key set, else local gold bake)"
-            ));
-            missing_or_stub_def.push(name);
-        }
-    }
-    if !missing_or_stub_def.is_empty() {
-        crate::progress::warn(format!(
-            "adult estudio {study}: definición card(s) not ready ({}) — \
-             deck omits those slides until `lamad prepare -n {study} \
-             --audience adult --gen-definicion` (Cursor gold-edit by default; \
-             OpenAI if openai_api_key is set)",
-            missing_or_stub_def.join(", ")
+    if let Err(err) = crate::content::verify_adult_section_images(study, &study_model, root) {
+        crate::progress::phase(format!(
+            "adult estudio {study}: definition cards will be rendered locally before build ({err})"
         ));
     }
     Ok(paths)

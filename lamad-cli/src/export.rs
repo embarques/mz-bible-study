@@ -1,4 +1,4 @@
-//! Export PPTX → PDF via Microsoft PowerPoint AppleScript (macOS).
+//! Export PPTX → PDF via PowerPoint or an explicitly selected headless renderer.
 
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
@@ -117,6 +117,10 @@ pub fn export_to(pptx: &Path, pdf: &Path) -> Result<PathBuf> {
         bail!("skip PowerPoint lock file: {}", pptx.display());
     }
 
+    if let Some(soffice) = std::env::var_os("LAMAD_SOFFICE").filter(|s| !s.is_empty()) {
+        return export_with_soffice(&pptx, pdf, &soffice);
+    }
+
     if !cfg!(target_os = "macos") {
         bail!(
             "PDF export requires macOS + Microsoft PowerPoint (osascript). \
@@ -165,6 +169,34 @@ end tell
     if meta.len() < 1000 {
         bail!("PDF missing or too small: {}", pdf.display());
     }
+    Ok(pdf.to_path_buf())
+}
+
+fn export_with_soffice(pptx: &Path, pdf: &Path, soffice: &std::ffi::OsStr) -> Result<PathBuf> {
+    let work = tempfile::tempdir().context("create LibreOffice export workspace")?;
+    let profile = reqwest::Url::from_directory_path(work.path().join("profile"))
+        .map_err(|_| anyhow::anyhow!("could not create LibreOffice profile URL"))?;
+    let output = Command::new(soffice)
+        .arg(format!("-env:UserInstallation={profile}"))
+        .args(["--headless", "--convert-to", "pdf:impress_pdf_Export", "--outdir"])
+        .arg(work.path())
+        .arg(pptx)
+        .output()
+        .context("could not start LibreOffice from LAMAD_SOFFICE")?;
+    let rendered = work.path().join(pptx.file_name().context("PPTX has no filename")?)
+        .with_extension("pdf");
+    if !output.status.success() || !std::fs::metadata(&rendered).is_ok_and(|m| m.len() >= 1000) {
+        bail!(
+            "LibreOffice PDF export failed for {}: {} {}",
+            pptx.display(),
+            String::from_utf8_lossy(&output.stderr).trim(),
+            String::from_utf8_lossy(&output.stdout).trim()
+        );
+    }
+    if let Some(parent) = pdf.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::copy(&rendered, pdf).with_context(|| format!("write {}", pdf.display()))?;
     Ok(pdf.to_path_buf())
 }
 

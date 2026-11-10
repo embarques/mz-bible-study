@@ -242,7 +242,7 @@ fn extract_cita_value(text: &str) -> Option<String> {
 }
 
 /// Agents often omit `CITA:` — citation alone on line 1, or glued onto the verse.
-fn ensure_cita_prefix(text: &str) -> String {
+pub(super) fn ensure_cita_prefix(text: &str) -> String {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return ensure_trailing_newline(text);

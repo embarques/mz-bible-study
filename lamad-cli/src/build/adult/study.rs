@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
 
+use super::definicion_card::{definicion_card_page, DEFINICION_ROWS};
 use crate::build::adult::ooxml::{
     apply_scenic_image, convert_video_tema_to_image_layout, ensure_intro_body_logo,
     fit_intro_body_box, remove_orphan_videos, set_ab_body_slide, set_ab_title_header,
@@ -423,34 +424,26 @@ fn fill_tema(
             .and_then(|imgs| imgs.get(idx))
             .map(|p| resolve_study_path(p))
             .transpose()?;
-        let card_ok = img_path.as_ref().is_some_and(|p| {
-            p.is_file()
-                && !crate::content::is_placeholder(p)
-                && crate::build::adult::assert_study_definicion_card(
-                    p,
-                    tema.definiciones
-                        .iter()
-                        .map(|d| (d.termino.as_str(), d.texto.as_str())),
-                )
-                .is_ok()
-        });
-        if card_ok {
-            let def_slide = if idx == 0 {
-                PROTO_DEFINICION
-            } else {
-                ooxml::duplicate_slide(build, PROTO_DEFINICION)?
-            };
-            set_definicion_image(build, def_slide, img_path.as_ref().unwrap())?;
-            order.push(def_slide);
+        if let Some(first) = img_path {
+            for (page, definitions) in tema.definiciones.chunks(DEFINICION_ROWS).enumerate() {
+                let path = definicion_card_page(&first, page);
+                crate::build::adult::assert_study_definicion_card(
+                    &path,
+                    definitions.iter().map(|d| (d.termino.as_str(), d.texto.as_str())),
+                )?;
+                let def_slide = if idx == 0 && page == 0 {
+                    PROTO_DEFINICION
+                } else {
+                    ooxml::duplicate_slide(build, PROTO_DEFINICION)?
+                };
+                set_definicion_image(build, def_slide, &path)?;
+                order.push(def_slide);
+            }
         } else {
             crate::progress::warn(format!(
-                "omitting Definición slide for tema {} — card not ready{} \
+                "omitting Definición slide for tema {} — card not ready \
                  (later: `lamad prepare -n {{N}} --audience adult --gen-definicion`)",
-                idx + 1,
-                img_path
-                    .as_ref()
-                    .map(|p| format!(" at {}", p.display()))
-                    .unwrap_or_default()
+                idx + 1
             ));
         }
     }
@@ -735,7 +728,7 @@ fn sanitize_ab_point_titulo(raw: &str) -> String {
 /// Drop leading `I.` / `II.` / `III.` from tema titulo — `TEMA I` is already in the label.
 fn strip_tema_roman_prefix(titulo: &str) -> String {
     use regex::Regex;
-    let re = Regex::new(r"(?i)^(I{1,3}|IV|VI{0,3}|IX|X)\.\s*").unwrap();
+    let re = Regex::new(r"(?i)^(?:(?:I{1,3}|IV|VI{0,3}|IX|X)\.|\d+\s*[-.–])\s*").unwrap();
     re.replace(titulo.trim(), "").into_owned().trim().to_string()
 }
 
