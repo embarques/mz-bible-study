@@ -18,15 +18,14 @@ use crate::paths;
 use crate::Audience;
 
 /// Soft cap per body paragraph on adult `Marcador de contenido 2` shapes.
-/// See `LAYOUT_GUIDE.md` — navy footer bar is ~bottom 8–10% of slide;
-/// content must stop above it (~360–400 chars per paragraph at ~42pt).
-/// Soft warn / QC ceiling. Prefer packing at [`ADULT_BODY_LOGO_BUDGET`] so
-/// body text stays **above the Mount Zion logo top** (or navy footer).
-pub const ADULT_BODY_PARA_BUDGET: usize = 400;
-/// Logo-safe pack budget for intro / A-B bodies. ~380 chars at body size
-/// usually ends above the logo top (`y≈6.19M` EMU). Over ~420 often clips
-/// (Estudio 5 intro had 494 and cut through the logo).
-pub const ADULT_BODY_LOGO_BUDGET: usize = 380;
+/// Soft warn / QC ceiling for adult `Marcador de contenido 2` body text.
+/// Prefer packing at [`ADULT_BODY_LOGO_BUDGET`] so text stays **above the
+/// Mount Zion logo top** (never on/below the logo edge).
+pub const ADULT_BODY_PARA_BUDGET: usize = 500;
+/// Logo-safe pack budget for intro / A-B bodies (gold estudio 8).
+/// Body band is ~4.75" above the logo (`y≈6.19M`); ~460 chars at ~42pt fills
+/// that band. Old 380 left large white gaps under short paragraphs.
+pub const ADULT_BODY_LOGO_BUDGET: usize = 460;
 
 #[derive(Debug, Clone, Copy)]
 pub enum AbRefShape {
@@ -571,6 +570,10 @@ fn ab_body_title_font_sz(title: &str) -> u32 {
 /// Unified A/B body chrome — **same boxes for 1.A–3.B**. Gold prototypes
 /// disagree (1.B title `cx` > slide width → no wrap; 2.A wraps). Force one
 /// geometry so only the text differs.
+///
+/// Body panel runs from under the title down to just **above the Mount Zion
+/// logo top** (`Imagen 8` at y≈6.196M). Pack denser text in that band; never
+/// draw below the logo edge.
 fn normalize_ab_body_panels(xml: &str) -> Result<String> {
     // Slide 13.333" × 7.5". Match clean 1.A panel inset from master.
     const PANEL_X: i64 = 162_730;
@@ -578,15 +581,12 @@ fn normalize_ab_body_panels(xml: &str) -> Result<String> {
     const TITLE_Y: i64 = 100_000;
     const TITLE_CY: i64 = 1_050_000; // two-line band at 32–40pt
     const GAP: i64 = 50_000;
-
-    let body = shape_xfrm(xml, "Marcador de contenido 2")
-        .context("A/B body slide missing Marcador de contenido 2 xfrm")?;
+    // Soft floor above logo top (logo off y=6_196_152). Same as intro BODY_FLOOR.
+    const BODY_FLOOR: i64 = 6_050_000;
 
     let title_bottom = TITLE_Y + TITLE_CY;
     let new_body_y = title_bottom + GAP;
-    // Keep the same bottom edge so the navy footer clearance stays.
-    let body_bottom = body.y + body.cy;
-    let new_body_cy = (body_bottom - new_body_y).max(3_500_000);
+    let new_body_cy = (BODY_FLOOR - new_body_y).max(3_500_000);
 
     let mut out = set_shape_xfrm(
         xml,
@@ -604,6 +604,10 @@ fn normalize_ab_body_panels(xml: &str) -> Result<String> {
         PANEL_CX,
         new_body_cy,
     )?;
+    // Top-align so dense packs fill downward toward the logo floor.
+    out = transform_shape(&out, "Marcador de contenido 2", |b| {
+        Ok(set_body_pr_anchor(b, "t"))
+    })?;
     Ok(out)
 }
 

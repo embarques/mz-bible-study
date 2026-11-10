@@ -50,7 +50,7 @@ Every text-heavy slide has a **hard floor** where content stops. Nothing may sit
 | Slide type | Guard rail | Approx. safe height |
 |------------|------------|---------------------|
 | `intro_body` | **Top edge of Mount Zion logo** (bottom-right) | Content box floor ≈ `y=6.05M` EMU — **never** put text on/below the logo top |
-| `ab_body` | Navy footer bar **or** logo top when present | Same idea: stop above the chrome; pack ≤360 chars so lines never clip |
+| `ab_body` | **Logo top** (Mount Zion `Imagen 8`) | Stop above the logo edge; pack denser (≤460 chars) so slides are not half-empty |
 | `lectura_antifonal` | Bottom of white/blue content panel | Pack whole verses; split slide before next verse crosses the floor |
 | `texto_biblico` | Empty black margin at bottom | Leave **~20–25%** of slide height below last verse line |
 | `tema_header` | Bottom gradient bar | Title + reference live **inside** the bar (~bottom 20–25% of slide) |
@@ -58,13 +58,13 @@ Every text-heavy slide has a **hard floor** where content stops. Nothing may sit
 **Packing (HARD — even distribute, logo floor):**
 
 1. Join the section’s body text (Introducción or one A/B point).  
-2. Compute how many slides are needed so each pack stays **≤380 chars** (logo top / footer floor).  
-3. Distribute **whole sentences** across those slides as evenly as possible (never mid-sentence; never below the logo top).  
+2. Compute how many slides are needed so each pack stays **≤460 chars** (logo-top floor — gold 8).  
+3. Distribute **whole sentences** evenly, then merge adjacent packs that still fit (no sparse half-empty slides). Never mid-sentence; never below the logo top.  
 4. Builder does this automatically via `pack_sentences_even` / `rebalance_body_slides` — JSON may be uneven; rebuild rebalances.
 
 | Shape | ~chars per slide / paragraph |
 |-------|------------------------------|
-| `Marcador de contenido 2` (body) | **≤380** logo-safe pack; warn if still >400 |
+| `Marcador de contenido 2` (body) | **≤460** logo-safe pack; warn if still >500 |
 | `CuadroTexto 5` (lectura) | **250–300** verse chars |
 | `TextBox 4` (texto bíblico) | **250–300** verse chars; split at whole verses |
 | Teaching body | Split at `(1)`, `(2)`, `(3)` **and** at sentence ends before the floor |

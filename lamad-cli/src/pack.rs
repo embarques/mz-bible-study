@@ -188,7 +188,29 @@ pub fn rebalance_body_slides(slides: &[String], budget: usize) -> Vec<String> {
     if joined.is_empty() {
         return Vec::new();
     }
-    pack_sentences_even(&joined, budget)
+    merge_adjacent_under_budget(pack_sentences_even(&joined, budget), budget)
+}
+
+/// Greedy forward merge so a short slide + next slide become one when they
+/// still fit above the logo floor (kills sparse half-empty body slides).
+fn merge_adjacent_under_budget(packs: Vec<String>, budget: usize) -> Vec<String> {
+    let budget = if budget == 0 { 380 } else { budget };
+    let mut out: Vec<String> = Vec::new();
+    for p in packs {
+        let p = p.trim();
+        if p.is_empty() {
+            continue;
+        }
+        if let Some(last) = out.last_mut() {
+            let trial = format!("{last} {p}");
+            if trial.chars().count() <= budget {
+                *last = trial;
+                continue;
+            }
+        }
+        out.push(p.to_string());
+    }
+    out
 }
 
 /// Split `text` into sentences, keeping the terminating punctuation
@@ -297,5 +319,17 @@ mod tests {
         for p in &out {
             assert!(p.chars().count() <= 360, "{} chars", p.chars().count());
         }
+    }
+
+    #[test]
+    fn merge_adjacent_fills_sparse_body_slides() {
+        let sparse = vec![
+            "Primera oración corta.".into(),
+            "Segunda oración también breve.".into(),
+            "Tercera que cierra el pensamiento.".into(),
+        ];
+        let out = merge_adjacent_under_budget(sparse, 200);
+        assert_eq!(out.len(), 1, "all three should merge under 200: {out:?}");
+        assert!(out[0].chars().count() <= 200);
     }
 }
