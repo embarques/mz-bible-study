@@ -42,6 +42,24 @@ Structural validation does not establish that the wording matches a printed sour
 Copy the [adult study preparation prompt](ADULT_STUDY_PREPARATION_PROMPT.md)
 when you want Codex to prepare the files for review before building.
 
+### Ask Codex to prepare and build the adult studies
+
+Attach the scan to Codex, or give it the scan’s path, and paste this command:
+
+> Prepare and build every complete adult study in this scan using `lamad`.
+> Proceed independently without waiting for batch confirmation or my review.
+> Identify each study by its printed title page and `RESUMEN GENERAL` boundary,
+> and use the next title page for Próximo when available. Prepare all the
+> required section files and unique scenic artwork. Compare the Spanish text
+> against the scan in a separate pass, correcting omissions, citations, and
+> text split across columns or pages. Run
+> `lamad validate-content -n N --audience adult` for each study, then run
+> `lamad build -n N --audience adult` to create the PowerPoint and PDF in the
+> configured output folder. Verify both files and spot-check the rendered PDF.
+> If a study remains incomplete, report the exact printed page and section
+> that needs attention and continue with the others. At the end, report the
+> studies completed and link to the output files.
+
 ### Python (legacy — [`python/mz_bible_study/`](python/mz_bible_study/))
 
 ```bash
