@@ -796,11 +796,19 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
     };
 
     let deliverables = if job.gen_definicion {
-        // Default: Cursor gold-PNG edit. OpenAI images/edits only when key is set.
+        // Sections are enough — materialize sidecar JSON when missing.
+        if job.audience == Audience::Adult && content::has_adult_sections(study) {
+            let model = content::load_adult_sections(study)?;
+            let json_path = agent::prepare::expected_paths(study, job.audience, root).json;
+            if let Ok(text) = serde_json::to_string_pretty(&model) {
+                let _ = std::fs::write(&json_path, text);
+            }
+        }
         let json = agent::prepare::try_resume_json_only(study, job.audience, root)
             .with_context(|| {
                 format!(
-                    "--gen-definicion needs studies/{}/{}.json first.",
+                    "--gen-definicion needs studies/adult/{study}/ section tree \
+                     (or studies/{}/{}.json).",
                     job.audience.as_str(),
                     study
                 )

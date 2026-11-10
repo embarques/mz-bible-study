@@ -4,10 +4,12 @@
 //! The builder still consumes `AdultStudy` / JSON; this module loads and writes
 //! the folder tree.
 
+pub mod adult_normalize;
 pub mod adult_sections;
 pub mod placeholders;
 pub mod scan_coverage;
 
+pub use adult_normalize::normalize_adult_section_tree;
 pub use adult_sections::{
     adult_resume_hint, adult_study_folder, expand_json_to_sections, has_adult_sections,
     load_adult_sections, missing_front_matter_kinds, present_section_dir_names,

@@ -309,6 +309,8 @@ pub fn write_adult_sections(study: &AdultStudy, study_dir: &Path) -> Result<()> 
 /// Load section tree → AdultStudy. Image paths stamped to `studies/adult/{N}/images/…`.
 pub fn load_adult_sections(study: u32) -> Result<AdultStudy> {
     let study_dir = adult_study_folder(study)?;
+    // Repair agent quirks (manifest shape, file names, dup CITA, próximo #) first.
+    let _ = crate::content::adult_normalize::normalize_adult_section_tree(study)?;
     let manifest_path = study_dir.join("manifest.toml");
     if !manifest_path.is_file() {
         bail!(
@@ -358,7 +360,22 @@ pub fn load_adult_sections(study: u32) -> Result<AdultStudy> {
                 }
             }
             "objetivos" => {
-                objetivos = read_nonempty_lines(&dir.join("content.txt"))?;
+                objetivos = read_nonempty_lines(&dir.join("content.txt"))?
+                    .into_iter()
+                    .map(|l| {
+                        let t = l.trim();
+                        let b = t.as_bytes();
+                        let mut i = 0usize;
+                        while i < b.len() && b[i].is_ascii_digit() {
+                            i += 1;
+                        }
+                        if i > 0 && i < b.len() && b[i] == b'.' {
+                            t[i + 1..].trim_start().to_string()
+                        } else {
+                            t.to_string()
+                        }
+                    })
+                    .collect();
             }
             "pensamiento" => {
                 pensamiento_central = read_trimmed(&dir.join("content.txt"))?;
@@ -378,13 +395,21 @@ pub fn load_adult_sections(study: u32) -> Result<AdultStudy> {
             }
             "proximo" => {
                 saw_proximo = true;
-                let n_txt = read_trimmed(&dir.join("numero.txt"))?;
-                proximo.numero = if let Ok(n) = n_txt.parse::<i64>() {
-                    Numero::Int(n)
+                // Folder numbering wins over printed scan badges.
+                let expected = (study + 1) as i64;
+                let n_txt = read_trimmed(&dir.join("numero.txt")).unwrap_or_default();
+                let parsed = n_txt.parse::<i64>().ok();
+                proximo.numero = Numero::Int(if manifest.omit_proximo {
+                    parsed.unwrap_or(expected)
                 } else {
-                    Numero::Text(n_txt)
+                    expected
+                });
+                let title_path = if dir.join("title.txt").is_file() {
+                    dir.join("title.txt")
+                } else {
+                    dir.join("titulo.txt")
                 };
-                proximo.titulo = read_trimmed(&dir.join("title.txt"))?;
+                proximo.titulo = read_trimmed(&title_path)?;
                 let base_path = dir.join("base_biblica.txt");
                 if base_path.is_file() {
                     let lines = read_nonempty_lines(&base_path)?;
@@ -398,7 +423,9 @@ pub fn load_adult_sections(study: u32) -> Result<AdultStudy> {
                     let tema_n: usize = n_str.parse().with_context(|| {
                         format!("bad tema point folder name: {other}")
                     })?;
-                    let title = read_trimmed(&dir.join("title.txt"))?;
+                    let title = crate::content::adult_normalize::sanitize_ab_point_titulo(
+                        &read_trimmed(&dir.join("title.txt"))?,
+                    );
                     let body = split_paragraphs(&read_trimmed(&dir.join("body.txt"))?);
                     let texto = parse_lectura(&fs::read_to_string(dir.join("texto-biblico.txt"))?)?;
                     puntos.push((
@@ -688,6 +715,7 @@ fn format_lectura(block: &Lectura) -> String {
 }
 
 fn parse_lectura(text: &str) -> Result<Lectura> {
+    let text = crate::content::adult_normalize::strip_duplicate_cita_line(text);
     let mut cita = String::new();
     let mut versiculos = Vec::new();
     for line in text.lines() {
@@ -703,6 +731,14 @@ fn parse_lectura(text: &str) -> Result<Lectura> {
     }
     if cita.is_empty() {
         bail!("lectura block missing CITA: line");
+    }
+    // Drop a leftover citation-only first verse (defense in depth).
+    if let Some(first) = versiculos.first() {
+        let a = first.replace(' ', "").to_lowercase();
+        let b = cita.replace(' ', "").to_lowercase();
+        if a == b || b.starts_with(&a) || a.starts_with(&b) {
+            versiculos.remove(0);
+        }
     }
     if versiculos.is_empty() {
         bail!("lectura block has no verses");
