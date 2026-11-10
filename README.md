@@ -39,15 +39,8 @@ locked definition cards from the definition text, validates the PowerPoint,
 and exports a PDF. Pass `--no-export-pdf` to build only the PowerPoint.
 Structural validation does not establish that the wording matches a printed source.
 
-#### Reusable Codex prompt
-
-Copy this prompt into Codex and attach the adult study scan:
-
-> Prepare the adult study content from this scan. Show me the printed page
-> boundaries first. After I confirm, transcribe each study verbatim into its
-> `studies/adult/{N}/` folder. Flag any wording or citations you can’t verify.
-> Prepare the scenic artwork, but stop before building the PowerPoints or PDFs
-> so I can review the files.
+Copy the [adult study preparation prompt](ADULT_STUDY_PREPARATION_PROMPT.md)
+when you want Codex to prepare the files for review before building.
 
 ### Python (legacy — [`python/mz_bible_study/`](python/mz_bible_study/))
 
