@@ -1797,11 +1797,15 @@ fn artifact_list_has_study_json(study: u32, artifacts: &[Artifact]) -> bool {
     })
 }
 
+/// Complete enough to skip section follow-ups: manifest + tema header + point.
+/// Front-matter-only stubs (title→texto-aureo) must NOT skip — that aborted
+/// estudio 11 after a title-page-only extract.
 fn artifact_list_has_adult_section_tree(study: u32, artifacts: &[Artifact]) -> bool {
     let prefix = format!("artifacts/{study}/");
     let prefix_alt = format!("{study}/");
     let mut has_manifest = false;
-    let mut has_section = false;
+    let mut has_tema_header = false;
+    let mut has_tema_point = false;
     for a in artifacts {
         let path = a.path.replace('\\', "/");
         let rel = path
@@ -1817,17 +1821,28 @@ fn artifact_list_has_adult_section_tree(study: u32, artifacts: &[Artifact]) -> b
         }
         if top == "manifest.toml" || rel.starts_with("manifest.toml") {
             has_manifest = true;
+            continue;
         }
         // Section folders look like `01-title/…` or `10-tema-1-A/body.txt`.
         let looks_section = top.len() >= 4
             && top.as_bytes().get(0).is_some_and(|c| c.is_ascii_digit())
             && top.as_bytes().get(1).is_some_and(|c| c.is_ascii_digit())
             && top.as_bytes().get(2) == Some(&b'-');
-        if looks_section {
-            has_section = true;
+        if !looks_section {
+            continue;
+        }
+        let Some((_, kind)) = top.split_once('-') else {
+            continue;
+        };
+        if let Some(rest) = kind.strip_prefix("tema-") {
+            if rest.contains('-') {
+                has_tema_point = true;
+            } else if !rest.is_empty() {
+                has_tema_header = true;
+            }
         }
     }
-    has_manifest || has_section
+    has_manifest && has_tema_header && has_tema_point
 }
 
 fn json_artifact_candidate_paths(study: u32) -> Vec<String> {
@@ -1961,14 +1976,16 @@ async fn ensure_adult_section_tree_artifact(
         );
         let nudge = format!(
             "STOP. Do **not** write artifacts/{study}.json.\n\n\
-             Adult deliverable is the **section folder tree**. Create these paths NOW \
-             (Write/Shell), one folder at a time:\n\
+             Adult deliverable is a **complete** section folder tree — front matter alone \
+             is NOT enough. Create these paths NOW (Write/Shell):\n\
              1. artifacts/{study}/manifest.toml\n\
-             2. artifacts/{study}/01-title/title.txt + base_biblica.txt\n\
-             3. artifacts/{study}/02-lectura/block-01.txt\n\
-             4. Continue 03-objetivos … 08-introduccion … tema folders.\n\n\
-             Currently listed: {listed:?}\n\
-             Chat text does not count. List Artifacts must show `artifacts/{study}/…` files.",
+             2. artifacts/{study}/01-title/ … through 08-introduccion/\n\
+             3. artifacts/{study}/NN-tema-1/header.txt (+ definicion-*.txt)\n\
+             4. artifacts/{study}/NN-tema-1-A/ (title.txt, body.txt, texto-biblico.txt) \
+                and remaining A/B points + temas through RESUMEN GENERAL.\n\
+             5. Lectura blocks MUST start with `CITA: …` then verse lines.\n\n\
+             Incomplete (title/lectura only) will be rejected. Currently listed: {listed:?}\n\
+             Chat text does not count. List Artifacts must show tema folders.",
         );
         let follow = client.create_followup(agent_id, &nudge).await?;
         println!("  section follow-up run {}", follow.run.id);
@@ -2307,6 +2324,24 @@ mod tests {
             .iter()
             .any(|(_, d)| d.ends_with("intro-header.png")));
         assert!(!resolved.iter().any(|(_, d)| d.ends_with("8.json")));
+    }
+
+    #[test]
+    fn adult_section_tree_complete_requires_tema_folders() {
+        let front_only = vec![
+            art("artifacts/11/manifest.toml"),
+            art("artifacts/11/01-title/title.txt"),
+            art("artifacts/11/02-lectura/block-01.txt"),
+            art("artifacts/11/05-texto-aureo/texto.txt"),
+        ];
+        assert!(!artifact_list_has_adult_section_tree(11, &front_only));
+
+        let with_temas = vec![
+            art("artifacts/11/manifest.toml"),
+            art("artifacts/11/09-tema-1/header.txt"),
+            art("artifacts/11/10-tema-1-A/body.txt"),
+        ];
+        assert!(artifact_list_has_adult_section_tree(11, &with_temas));
     }
 
     #[test]

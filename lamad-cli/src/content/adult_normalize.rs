@@ -166,20 +166,37 @@ fn normalize_lectura_blocks(root: &Path) -> Result<bool> {
     let Some(dir) = find_kind_dir(root, "lectura") else {
         return Ok(false);
     };
+    let mut paths: Vec<PathBuf> = fs::read_dir(&dir)?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.file_name()
+                .and_then(|s| s.to_str())
+                .map(|n| n.starts_with("block-") && n.ends_with(".txt"))
+                .unwrap_or(false)
+        })
+        .collect();
+    paths.sort();
+
+    // Fallback citation when every block is verse-only (common agent bug).
+    let mut last_cita = fallback_lectura_cita(root);
     let mut changed = false;
-    for entry in fs::read_dir(&dir)? {
-        let path = entry?.path();
-        let name = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_string();
-        if !name.starts_with("block-") || !name.ends_with(".txt") {
-            continue;
-        }
+    for path in paths {
         let text = fs::read_to_string(&path)?;
         let with_cita = ensure_cita_prefix(&text);
-        let cleaned = strip_duplicate_cita_line(&with_cita);
+        let mut cleaned = strip_duplicate_cita_line(&with_cita);
+        if !cleaned.lines().any(|l| l.trim_start().starts_with("CITA:")) {
+            if let Some(ref cita) = last_cita {
+                let body = cleaned.trim();
+                cleaned = if body.is_empty() {
+                    format!("CITA: {cita}\n")
+                } else {
+                    format!("CITA: {cita}\n\n{body}\n")
+                };
+            }
+        }
+        if let Some(c) = extract_cita_value(&cleaned) {
+            last_cita = Some(c);
+        }
         if cleaned != text {
             fs::write(&path, cleaned)?;
             changed = true;
@@ -188,7 +205,43 @@ fn normalize_lectura_blocks(root: &Path) -> Result<bool> {
     Ok(changed)
 }
 
-/// Agents often omit `CITA:` and put the citation on line 1.
+fn fallback_lectura_cita(root: &Path) -> Option<String> {
+    if let Ok(m) = fs::read_to_string(root.join("manifest.toml")) {
+        if let Ok(manifest) = toml::from_str::<AdultManifest>(&m) {
+            if let Some(b) = manifest.base_biblica.first() {
+                let c = b.trim().trim_end_matches(';').trim();
+                if !c.is_empty() {
+                    return Some(c.to_string());
+                }
+            }
+        }
+    }
+    if let Some(td) = find_kind_dir(root, "title") {
+        if let Ok(lines) = read_nonempty_lines(&td.join("base_biblica.txt")) {
+            if let Some(b) = lines.first() {
+                let c = b.trim().trim_end_matches(';').trim();
+                if !c.is_empty() {
+                    return Some(c.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn extract_cita_value(text: &str) -> Option<String> {
+    for line in text.lines() {
+        if let Some(rest) = line.trim_start().strip_prefix("CITA:") {
+            let c = rest.trim();
+            if !c.is_empty() {
+                return Some(c.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Agents often omit `CITA:` — citation alone on line 1, or glued onto the verse.
 fn ensure_cita_prefix(text: &str) -> String {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -203,20 +256,50 @@ fn ensure_cita_prefix(text: &str) -> String {
     if first.is_empty() {
         return ensure_trailing_newline(text);
     }
-    // Only promote a citation-looking first line (not a verse body).
-    let looks_like_cite = Regex::new(
+    // Pure citation line: "2 Crónicas 6:14-15" / "2 Samuel 6"
+    let cite_only = Regex::new(
         r"^(?:\d+\s+)?[A-Za-zÁÉÍÓÚáéíóúñÑ][A-Za-zÁÉÍÓÚáéíóúñÑ\.\s]+\d+(?::[\d,\-\s;]+)?$",
     )
-    .unwrap()
-    .is_match(first);
-    if !looks_like_cite {
-        return ensure_trailing_newline(text);
+    .unwrap();
+    if cite_only.is_match(first) {
+        return if rest.trim().is_empty() {
+            format!("CITA: {first}\n")
+        } else {
+            format!("CITA: {first}\n\n{}\n", rest.trim())
+        };
     }
-    if rest.trim().is_empty() {
-        format!("CITA: {first}\n")
-    } else {
-        format!("CITA: {first}\n\n{}\n", rest.trim())
+    // Glued cite + verse: "2 Crónicas 6:14 Jehová Dios…"
+    let glued = Regex::new(
+        r"^(?P<cita>(?:\d+\s+)?[A-Za-zÁÉÍÓÚáéíóúñÑ][A-Za-zÁÉÍÓÚáéíóúñÑ\.\s]*?\d+(?::\d+(?:\s*[-–]\s*\d+)?)?)\s+(?P<body>.+)$",
+    )
+    .unwrap();
+    if let Some(caps) = glued.captures(first) {
+        let cita = caps.name("cita").unwrap().as_str().trim();
+        let body_first = caps.name("body").unwrap().as_str().trim();
+        // Prefer verse-shaped body ("14 Jehová…") when the cite already includes :verse.
+        let verse_line = if Regex::new(r"^\d+")
+            .unwrap()
+            .is_match(body_first)
+        {
+            body_first.to_string()
+        } else if let Some(v) = cita.rsplit_once(':').map(|(_, v)| v.trim()) {
+            // "2 Crónicas 6:14" + "Jehová…" → "14 Jehová…"
+            if !v.is_empty() && v.chars().all(|c| c.is_ascii_digit()) {
+                format!("{v} {body_first}")
+            } else {
+                body_first.to_string()
+            }
+        } else {
+            body_first.to_string()
+        };
+        let mut body = verse_line;
+        if !rest.trim().is_empty() {
+            body.push('\n');
+            body.push_str(rest.trim());
+        }
+        return format!("CITA: {cita}\n\n{body}\n");
     }
+    ensure_trailing_newline(text)
 }
 
 /// Drop a bare citation line that repeats `CITA:` (causes double titles on slides).
@@ -723,6 +806,43 @@ mod tests {
         let out = ensure_cita_prefix(raw);
         assert!(out.starts_with("CITA: 2 Crónicas 6:14-15"));
         assert!(out.contains("14 Jehová"));
+    }
+
+    #[test]
+    fn ensure_cita_prefix_splits_glued_cite_and_verse() {
+        let raw = "2 Crónicas 6:14 Jehová Dios de Israel, no hay Dios semejante a ti\n";
+        let out = ensure_cita_prefix(raw);
+        assert!(out.starts_with("CITA: 2 Crónicas 6:14\n"), "{out}");
+        assert!(out.contains("14 Jehová Dios de Israel"), "{out}");
+    }
+
+    #[test]
+    fn normalize_lectura_carries_cita_across_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(
+            root.join("manifest.toml"),
+            "numero = 11\ntitulo = \"T\"\nbase_biblica = [\"2 Crónicas 6 y 7\"]\nomit_proximo = true\naudience = \"adult\"\n",
+        )
+        .unwrap();
+        let lec = root.join("02-lectura");
+        fs::create_dir_all(&lec).unwrap();
+        fs::write(
+            lec.join("block-01.txt"),
+            "2 Crónicas 6:14 Jehová Dios de Israel…\n",
+        )
+        .unwrap();
+        fs::write(
+            lec.join("block-02.txt"),
+            "15 que has guardado a tu siervo David…\n",
+        )
+        .unwrap();
+        assert!(normalize_lectura_blocks(root).unwrap());
+        let b1 = fs::read_to_string(lec.join("block-01.txt")).unwrap();
+        let b2 = fs::read_to_string(lec.join("block-02.txt")).unwrap();
+        assert!(b1.starts_with("CITA: 2 Crónicas 6:14"), "{b1}");
+        assert!(b2.starts_with("CITA: 2 Crónicas 6:14"), "{b2}");
+        assert!(b2.contains("15 que has guardado"), "{b2}");
     }
 
     #[test]

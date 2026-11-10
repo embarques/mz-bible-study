@@ -47,10 +47,44 @@ pub fn adult_study_folder(study: u32) -> Result<PathBuf> {
     Ok(paths::studies_dir(crate::job::Audience::Adult)?.join(study.to_string()))
 }
 
+/// True when a **loadable** adult tree is on disk (manifest + at least one tema).
+/// Manifest-only / front-matter stubs do **not** count — that caused prepare to
+/// skip follow-ups and then crash on incomplete estudio 11 extracts.
 pub fn has_adult_sections(study: u32) -> bool {
-    adult_study_folder(study)
-        .map(|d| d.join("manifest.toml").is_file())
-        .unwrap_or(false)
+    let Ok(dir) = adult_study_folder(study) else {
+        return false;
+    };
+    if !dir.join("manifest.toml").is_file() {
+        return false;
+    }
+    adult_tree_has_tema(&dir)
+}
+
+/// True when `studies/adult/{N}/` has at least one `NN-tema-N` header folder
+/// (e.g. `09-tema-1`). Point-only folders like `10-tema-1-A` do not count alone.
+pub fn adult_tree_has_tema(study_dir: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(study_dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        if !entry.path().is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(s) = name.to_str() else {
+            continue;
+        };
+        // After `NN-`: `tema-1` (header) vs `tema-1-A` (point).
+        let Some((_, kind)) = s.split_once('-') else {
+            continue;
+        };
+        if let Some(rest) = kind.strip_prefix("tema-") {
+            if !rest.is_empty() && !rest.contains('-') {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Fixed front-matter kinds (before variable `tema-*` folders), in order.

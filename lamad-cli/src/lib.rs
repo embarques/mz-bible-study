@@ -412,6 +412,17 @@ fn preflight_prepare_batch(
             "    · estudio {} · PDF sheets {}–{} · {prox} · {json_note}",
             s.study, s.pages.0, s.pages.1
         );
+        // Adult title-only window = no DESARROLLO/RESUMEN pages in the PDF.
+        // Spending a cloud agent on that always yields a stub tree then crashes.
+        if job.audience == Audience::Adult && s.pages.0 == s.pages.1 {
+            problems.push(format!(
+                "estudio {}: PDF content window is only sheet {} (title page only — \
+                 no pages through RESUMEN GENERAL). Add the missing scan pages for \
+                 this estudio to the PDF, then re-run. Do not re-run prepare until \
+                 the PDF includes the full study.",
+                s.study, s.pages.0
+            ));
+        }
     }
 
     if !problems.is_empty() {
