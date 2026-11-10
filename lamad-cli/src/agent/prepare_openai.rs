@@ -131,29 +131,40 @@ pub async fn generate_host_images(req: &PrepareRequest) -> Result<()> {
 }
 
 /// Force-regenerate only DEFINICIÓN cards (layout-locked reference edits). Keeps scenic PNGs.
+///
+/// **Default:** Cursor Cloud Agent edits the gold PNG (`cursor_api_key`).
+/// **If `openai_api_key` / image_api_key is set:** OpenAI `images/edits` instead.
 pub async fn regenerate_adult_definicion_cards(req: &PrepareRequest) -> Result<()> {
+    if req.audience != Audience::Adult {
+        bail!("--gen-definicion is adult-only");
+    }
+    let has_openai = req
+        .image_api_key
+        .as_deref()
+        .map(|k| !k.trim().is_empty())
+        .unwrap_or(false);
+    if !has_openai {
+        return crate::agent::prepare_cursor_definicion::regenerate_adult_definicion_cards_cursor(
+            req,
+        )
+        .await;
+    }
     let key = req
         .image_api_key
         .as_deref()
         .filter(|k| !k.is_empty())
-        .context(
-            "--gen-definicion needs openai_api_key / OPENAI_API_KEY \
-             (reference-edit path for the locked card layout)",
-        )?;
+        .context("openai_api_key empty")?;
     let client = OpenAiClient::new(key)?;
     let dest = expected_paths(req.study, req.audience, &req.root);
-    if req.audience != Audience::Adult {
-        bail!("--gen-definicion is adult-only");
-    }
     let study_json: Value = serde_json::from_str(&std::fs::read_to_string(&dest.json)?)
         .with_context(|| format!("parse {}", dest.json.display()))?;
     crate::progress::phase(format!(
-        "Regenerating DEFINICIÓN cards from locked gold reference (estudio {})…",
+        "Regenerating DEFINICIÓN cards via OpenAI images/edits (estudio {})…",
         req.study
     ));
     generate_adult_images(req, &client, &study_json, true).await?;
     stamp_adult_image_paths(&dest.json, req.study, &req.root)?;
-    crate::progress::ok("DEFINICIÓN cards regenerated (layout locked)");
+    crate::progress::ok("DEFINICIÓN cards regenerated (OpenAI gold edit)");
     Ok(())
 }
 

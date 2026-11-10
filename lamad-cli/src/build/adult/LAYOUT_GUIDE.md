@@ -14,6 +14,7 @@ These are enforced in `lamad-cli` build + QC. Do not “match gold” when gold 
 | Rule | Detail |
 |------|--------|
 | **No `()` on citations** | Image chrome (TEMA / A-B verse under gray line) and **Texto Bíblico** citation titles are plain: `MATEO 6:1-4` — never `(MATEO 6:1-4)`. Strip parens from JSON/`rango`/`cita` on fill. Inline body refs like `(Génesis 16:13)` stay bold with parens (body prose only). |
+| **Section vs TEMA verses (HARD — gold estudio 8)** | TEMA image chrome = tema `RANGO` only. Each A/B **image** and **Texto Bíblico** = that point’s verses only (same cita). Never put the full TEMA range on every A/B Texto (e.g. `2 Samuel 6:1,2` on 1.A — not `2 Samuel 6:1-11`). Title chrome: `TEMA I - …` / `1.A - …` (spaces around the dash). |
 | **Title = youth style** | No cyan `<a:highlight>` chip behind the study title (or próximo). Black Verlag title on white — strip all `a:highlight` on title/próximo fills. |
 | **Text too big → shrink** | If title/verse/diagram text overflows or collides, **decrease font** (TEMA/A-B image titles: 18–32pt; A/B **body** headers `Título 1`: 22–36pt by length, top-anchored, no orphan `1.B -` before a break). Never leave title overlapping the verse under the gray line or climbing off the top of the slide. |
 | **Scenic image visible** | After cloning youth section chrome, **remove** the full-bleed black `!!Rectangle`. Normalize pic to one `<a:stretch><a:fillRect/></a:stretch>` full-bleed. QC fails if `!!Rectangle` remains or `<p:pic>` is missing. |
@@ -49,7 +50,7 @@ Every text-heavy slide has a **hard floor** where content stops. Nothing may sit
 | Slide type | Guard rail | Approx. safe height |
 |------------|------------|---------------------|
 | `intro_body` | **Top edge of Mount Zion logo** (bottom-right) | Content box floor ≈ `y=6.05M` EMU — **never** put text on/below the logo top |
-| `ab_body` | Navy footer bar **or** logo top when present | Same idea: stop above the chrome; pack ≤360 chars so lines never clip |
+| `ab_body` | **Logo top** (Mount Zion `Imagen 8`) | Stop above the logo edge; pack denser (≤460 chars) so slides are not half-empty |
 | `lectura_antifonal` | Bottom of white/blue content panel | Pack whole verses; split slide before next verse crosses the floor |
 | `texto_biblico` | Empty black margin at bottom | Leave **~20–25%** of slide height below last verse line |
 | `tema_header` | Bottom gradient bar | Title + reference live **inside** the bar (~bottom 20–25% of slide) |
@@ -57,13 +58,13 @@ Every text-heavy slide has a **hard floor** where content stops. Nothing may sit
 **Packing (HARD — even distribute, logo floor):**
 
 1. Join the section’s body text (Introducción or one A/B point).  
-2. Compute how many slides are needed so each pack stays **≤380 chars** (logo top / footer floor).  
-3. Distribute **whole sentences** across those slides as evenly as possible (never mid-sentence; never below the logo top).  
+2. Compute how many slides are needed so each pack stays **≤460 chars** (logo-top floor — gold 8).  
+3. Distribute **whole sentences** evenly, then merge adjacent packs that still fit (no sparse half-empty slides). Never mid-sentence; never below the logo top.  
 4. Builder does this automatically via `pack_sentences_even` / `rebalance_body_slides` — JSON may be uneven; rebuild rebalances.
 
 | Shape | ~chars per slide / paragraph |
 |-------|------------------------------|
-| `Marcador de contenido 2` (body) | **≤380** logo-safe pack; warn if still >400 |
+| `Marcador de contenido 2` (body) | **≤460** logo-safe pack; warn if still >500 |
 | `CuadroTexto 5` (lectura) | **250–300** verse chars |
 | `TextBox 4` (texto bíblico) | **250–300** verse chars; split at whole verses |
 | Teaching body | Split at `(1)`, `(2)`, `(3)` **and** at sentence ends before the floor |

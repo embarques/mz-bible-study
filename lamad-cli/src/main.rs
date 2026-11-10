@@ -365,7 +365,15 @@ fn doctor(cfg: &Config) -> Result<()> {
     }
     match cfg.agent_provider {
         lamad::agent::AgentProvider::Cursor => {
-            println!("  active model: {}", cfg.cursor_model);
+            println!("  youth model: {}", cfg.cursor_model);
+            println!(
+                "  adult model: {}",
+                if cfg.adult_cursor_model.trim().is_empty() {
+                    cfg.cursor_model.as_str()
+                } else {
+                    cfg.adult_cursor_model.as_str()
+                }
+            );
         }
         lamad::agent::AgentProvider::ChatGpt => {
             println!(

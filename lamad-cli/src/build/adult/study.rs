@@ -401,55 +401,58 @@ fn fill_tema(
     if let Some(scenic) = study.scenic_images.as_ref() {
         apply_scenic_image(build, header, &resolve_study_path(&scenic.tema[idx])?, true)?;
     }
+    // Gold 8: `TEMA I - LAS COSAS…` — label carries the Roman; strip `I.` from titulo.
+    let tema_title = strip_tema_roman_prefix(&tema.titulo);
     set_tema_header_image(
         &ooxml::slide_path(build, header),
         &label,
-        &tema.titulo,
+        &tema_title,
         &tema.rango,
     )?;
     order.push(header);
     image_slides.push(header);
 
-    // Only emit a Definición slide when the printed study has a
-    // "Definiciones y etimología" box for this tema. Never invent terms.
+    // Only emit a Definición slide when the printed study has a box AND a
+    // QC-passing card PNG. Stubs / missing cards omit the slide (warn) so
+    // prepare can finish; fill via local gold bake or `--gen-definicion`
+    // (OpenAI only when openai_api_key is set).
     if !tema.definiciones.is_empty() {
-        let def_slide = if idx == 0 {
-            PROTO_DEFINICION
-        } else {
-            ooxml::duplicate_slide(build, PROTO_DEFINICION)?
-        };
-        if let Some(imgs) = study.definicion_images.as_ref() {
-            let img_path = resolve_study_path(&imgs[idx])?;
-            if img_path.is_file() {
-                // HARD: card must show THIS estudio's scan terms — never leftover
-                // gold / another study's Justicia/Hipócritas/Amalec art.
-                crate::build::adult::assert_study_definicion_card(
-                    &img_path,
+        let img_path = study
+            .definicion_images
+            .as_ref()
+            .and_then(|imgs| imgs.get(idx))
+            .map(|p| resolve_study_path(p))
+            .transpose()?;
+        let card_ok = img_path.as_ref().is_some_and(|p| {
+            p.is_file()
+                && !crate::content::is_placeholder(p)
+                && crate::build::adult::assert_study_definicion_card(
+                    p,
                     tema.definiciones
                         .iter()
                         .map(|d| (d.termino.as_str(), d.texto.as_str())),
-                )?;
-                set_definicion_image(build, def_slide, &img_path)?;
+                )
+                .is_ok()
+        });
+        if card_ok {
+            let def_slide = if idx == 0 {
+                PROTO_DEFINICION
             } else {
-                bail!(
-                    "missing definición card for tema {} ({}). \
-                     Generate studies/adult/.../definicion-{}.png from the printed \
-                     «Definiciones y etimología» box — do not use text fallback \
-                     or another study's card.",
-                    idx + 1,
-                    img_path.display(),
-                    idx + 1
-                );
-            }
+                ooxml::duplicate_slide(build, PROTO_DEFINICION)?
+            };
+            set_definicion_image(build, def_slide, img_path.as_ref().unwrap())?;
+            order.push(def_slide);
         } else {
-            bail!(
-                "tema {} has definiciones but JSON has no definicion_images[{}]. \
-                 Re-run prepare --gen-images or stamp definicion_images paths.",
+            crate::progress::warn(format!(
+                "omitting Definición slide for tema {} — card not ready{} \
+                 (later: `lamad prepare -n {{N}} --audience adult --gen-definicion`)",
                 idx + 1,
-                idx
-            );
+                img_path
+                    .as_ref()
+                    .map(|p| format!(" at {}", p.display()))
+                    .unwrap_or_default()
+            ));
         }
-        order.push(def_slide);
     }
 
     let point_n = idx + 1;
@@ -486,6 +489,7 @@ fn fill_tema(
             point_n,
             &punto.letra,
             &punto.as_bloque(),
+            &tema.rango,
             title_slide,
             texto_proto,
             &body_protos,
@@ -501,6 +505,7 @@ fn fill_ab_block(
     point: usize,
     letter: &str,
     block: &crate::model::adult_study::BloqueAdult,
+    tema_rango: &str,
     title_slide: u32,
     texto_proto: u32,
     body_slides: &[u32],
@@ -508,11 +513,31 @@ fn fill_ab_block(
     image_slides: &mut Vec<u32>,
 ) -> Result<()> {
     let label = format!("{point}.{letter}");
+    // Builder already prefixes `{N}.{Letter} - `.
+    // Strip agent leftovers: `A. …`, `2.A- …`, trailing `(6:12)`.
+    let titulo = sanitize_ab_point_titulo(&block.titulo);
+    if block.texto_biblico.cita.trim().is_empty() || block.texto_biblico.versiculos.is_empty()
+    {
+        bail!(
+            "{label}: texto_biblico missing section verses — each A/B point needs its own \
+             cita + verses (gold estudio 8). TEMA rango `{tema_rango}` is for the TEMA image \
+             only; do not reuse it as every point’s Texto Bíblico."
+        );
+    }
+    // Same cita on A/B image chrome and Texto Bíblico (section-only, not tema rango).
+    let section_cita = block.texto_biblico.cita.trim();
+    if cites_match(section_cita, tema_rango) {
+        bail!(
+            "{label}: texto_biblico.cita `{section_cita}` is the full TEMA rango — gold 8 \
+             requires the section verse only on A/B image + Texto Bíblico (e.g. `2 Samuel 6:1,2` \
+             not `2 Samuel 6:1-11`). Fix the point’s texto-biblico.txt / JSON."
+        );
+    }
     set_ab_title_header(
         &ooxml::slide_path(build, title_slide),
         &label,
-        &block.titulo,
-        &block.texto_biblico.cita,
+        &titulo,
+        section_cita,
         AbRefShape::CuadroTexto6,
     )?;
     order.push(title_slide);
@@ -533,7 +558,7 @@ fn fill_ab_block(
     }
     order.extend(&texto_nums);
 
-    let body_title = format!("{label} - {}", block.titulo);
+    let body_title = format!("{label} - {titulo}");
     // Even packs above the logo / navy-footer floor (same budget as intro).
     let body_packs = pack::rebalance_body_slides(&block.texto_slides, ADULT_BODY_LOGO_BUDGET);
     if body_packs.is_empty() {
@@ -684,10 +709,84 @@ pub fn apply_adult_study_value(build: &Path, study: &Value) -> Result<Vec<u32>> 
     apply_adult_study(build, &study)
 }
 
+/// A/B body + image titles: plain Spanish only.
+///
+/// Builder adds `{N}.{Letter} - ` itself. Agents often leave `A. … (6:12)` or
+/// nested `2.A- …` — strip those so we never ship `2.A - A. Title (6:12).`.
+fn sanitize_ab_point_titulo(raw: &str) -> String {
+    use regex::Regex;
+    let point = Regex::new(r"(?i)^\d+\.[A-Z]\s*[-–—]?\s*").unwrap();
+    let letter = Regex::new(r"(?i)^[A-Z]\.\s*").unwrap();
+    let verse_paren = Regex::new(r"\s*\(\s*\d+(?:\s*[,:\-–—]\s*\d+)*\s*\)\s*\.?\s*$").unwrap();
+    let mut t = raw.trim().to_string();
+    for _ in 0..6 {
+        let before = t.clone();
+        t = point.replace(&t, "").into_owned();
+        t = letter.replace(t.trim_start(), "").into_owned();
+        t = verse_paren.replace(t.trim_end(), "").into_owned();
+        t = t.trim().trim_end_matches('.').trim().to_string();
+        if t == before {
+            break;
+        }
+    }
+    t
+}
+
+/// Drop leading `I.` / `II.` / `III.` from tema titulo — `TEMA I` is already in the label.
+fn strip_tema_roman_prefix(titulo: &str) -> String {
+    use regex::Regex;
+    let re = Regex::new(r"(?i)^(I{1,3}|IV|VI{0,3}|IX|X)\.\s*").unwrap();
+    re.replace(titulo.trim(), "").into_owned().trim().to_string()
+}
+
+/// True when point cita is the **same** string as tema rango (tema-wide inject bug).
+/// Section cites that are a subset (e.g. `28:8` vs `28:8-10`) are fine.
+fn cites_match(a: &str, b: &str) -> bool {
+    let norm = |s: &str| {
+        s.chars()
+            .filter(|c| !c.is_whitespace())
+            .flat_map(|c| c.to_lowercase())
+            .collect::<String>()
+    };
+    let na = norm(a);
+    let nb = norm(b);
+    !na.is_empty() && na == nb
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::adult_study::AdultStudy;
+
+    #[test]
+    fn sanitize_ab_titulo_strips_letter_and_verse_paren() {
+        assert_eq!(
+            sanitize_ab_point_titulo("A. Hacer todo con gozo y una actitud reverente (6:12)."),
+            "Hacer todo con gozo y una actitud reverente"
+        );
+        assert_eq!(
+            sanitize_ab_point_titulo("A. 2.A- Recomendaciones generales a un pueblo elegido (28:8)."),
+            "Recomendaciones generales a un pueblo elegido"
+        );
+        assert_eq!(
+            sanitize_ab_point_titulo("Dios le dio Hebrón como capital de Judá"),
+            "Dios le dio Hebrón como capital de Judá"
+        );
+    }
+
+    #[test]
+    fn strip_tema_roman_and_cites_match_exact_only() {
+        assert_eq!(
+            strip_tema_roman_prefix("I. LAS COSAS DEBEN HACERSE COMO DIOS LAS ORDENA"),
+            "LAS COSAS DEBEN HACERSE COMO DIOS LAS ORDENA"
+        );
+        assert!(cites_match("2 Samuel 6:1-11", "2 Samuel 6:1-11"));
+        assert!(
+            !cites_match("2 Samuel 6:1,2", "2 Samuel 6:1-11"),
+            "section subset must not equal tema rango"
+        );
+        assert!(!cites_match("1 Crónicas 28:8", "1 Crónicas 28:8-10"));
+    }
 
     #[test]
     fn fixture_24_deserializes() {

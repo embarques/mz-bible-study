@@ -3,6 +3,7 @@
 use crate::agent::client::Artifact;
 use crate::job::Audience;
 use crate::progress;
+use std::collections::BTreeSet;
 
 /// Same basenames as [`crate::agent::prepare::adult_image_basenames`] (keep in sync).
 fn adult_image_basenames() -> &'static [&'static str] {
@@ -23,17 +24,20 @@ fn adult_image_basenames() -> &'static [&'static str] {
     ]
 }
 
-/// Tracks JSON + image artifacts and drives spinner / checklist updates.
+/// Tracks JSON / section folders + image artifacts and drives spinner updates.
 pub struct CloudAgentProgress {
     study: u32,
     audience: Audience,
-    /// When true, agent only writes JSON; host generates images afterward.
+    /// When true, agent only writes text (JSON or section tree); host may do images.
     json_only: bool,
     images_total: usize,
     json_done: bool,
     images_done: usize,
     last_announced_images: usize,
     plan_printed: bool,
+    /// Adult section folders already seen (e.g. `01-title`).
+    sections_seen: BTreeSet<String>,
+    last_section_count: usize,
 }
 
 impl CloudAgentProgress {
@@ -55,6 +59,8 @@ impl CloudAgentProgress {
             images_done: 0,
             last_announced_images: 0,
             plan_printed: false,
+            sections_seen: BTreeSet::new(),
+            last_section_count: 0,
         }
     }
 
@@ -64,49 +70,27 @@ impl CloudAgentProgress {
             return;
         }
         self.plan_printed = true;
-        if !progress::at_least(3) {
-            return;
-        }
         let aud = self.audience.as_str();
         let eta = progress::prepare_eta(self.audience, false, self.json_only);
         let (lo, hi) = eta.per_study_min;
-        progress::phase(format!(
-            "Cursor agent — estudio {} ({aud}). This step usually takes {}.",
+        progress::info(format!(
+            "Cursor agent — estudio {} ({aud}). Usually {}.",
             self.study, eta.agent_work
         ));
-        eprintln!("      What the agent is doing now:");
-        eprintln!("        1. Read the PDF page images (already uploaded)");
-        eprintln!(
-            "        2. Extract study text → artifacts/{}.json (temp; then expands to folders)",
-            self.study
-        );
-        if self.json_only {
-            eprintln!("        3. Finish the cloud run (no images — host does those next)");
-            eprintln!(
-                "      After that: host parallel images + build · whole study about {lo}–{hi} min."
-            );
-        } else {
-            match self.audience {
-                Audience::Youth => {
-                    eprintln!(
-                        "        3. Create 3 section images ({n}-section1.png … section3.png)",
-                        n = self.study
-                    );
-                }
-                Audience::Adult => {
-                    eprintln!(
-                        "        3. Create {} images (intro, tema, A/B, definición)",
-                        self.images_total
-                    );
-                }
+        match self.audience {
+            Audience::Adult => {
+                eprintln!("      Writes section folders one-by-one under artifacts/{}/ …", self.study);
+                eprintln!("        manifest.toml → 01-title → 02-lectura → … → temas → images");
+                eprintln!("      Spinner updates as each section folder appears (resume-safe).");
             }
-            eprintln!("        4. Finish the cloud run");
-            eprintln!(
-                "      After that: download + build ({}) · whole study about {lo}–{hi} min.",
-                eta.download_build
-            );
+            Audience::Youth => {
+                eprintln!(
+                    "      Extract study text → artifacts/{}.json, then 3 section images.",
+                    self.study
+                );
+            }
         }
-        eprintln!("      The spinner below shows which of these steps is active.");
+        eprintln!("      Whole study about {lo}–{hi} min after this step + build.");
     }
 
     /// Update from latest artifact list.
@@ -120,29 +104,53 @@ impl CloudAgentProgress {
         let mut json = false;
         let mut imgs = 0usize;
         let mut notes = Vec::new();
+        let prefix = format!("artifacts/{}/", self.study);
+        let prefix_alt = format!("{}/", self.study);
+        let mut found_sections = BTreeSet::new();
 
         for art in artifacts {
-            let base = art
-                .path
+            let path = art.path.replace('\\', "/");
+            let base = path
                 .rsplit('/')
                 .next()
-                .unwrap_or(art.path.as_str())
+                .unwrap_or(path.as_str())
                 .to_lowercase();
-            if base == json_name.to_lowercase() || art.path.ends_with(&format!("/{json_name}")) {
+            if base == json_name.to_lowercase() || path.ends_with(&format!("/{json_name}")) {
                 json = true;
             }
             if self.counts_as_image(&base) {
                 imgs += 1;
             }
+            if self.audience == Audience::Adult {
+                if let Some(rel) = path
+                    .strip_prefix(&prefix)
+                    .or_else(|| path.strip_prefix(&prefix_alt))
+                {
+                    let section = rel.split('/').next().unwrap_or("");
+                    if section == "manifest.toml" {
+                        found_sections.insert("manifest.toml".to_string());
+                    } else if !section.is_empty() && section != "images" && section.contains('-') {
+                        found_sections.insert(section.to_string());
+                    }
+                }
+            }
         }
         imgs = imgs.min(self.images_total);
 
+        if self.audience == Audience::Adult {
+            for s in found_sections.difference(&self.sections_seen) {
+                notes.push(format!("Step 3/4 · section ready: {s}"));
+            }
+            self.sections_seen = found_sections;
+            self.last_section_count = self.sections_seen.len();
+            if !self.sections_seen.is_empty() {
+                self.json_done = true;
+            }
+        }
+
         if json && !self.json_done {
             self.json_done = true;
-            notes.push(format!(
-                "Step 3/4 · JSON ready ({}.json)",
-                self.study
-            ));
+            notes.push(format!("Step 3/4 · JSON ready ({}.json)", self.study));
         }
         if imgs > self.last_announced_images {
             self.images_done = imgs;
@@ -160,7 +168,38 @@ impl CloudAgentProgress {
 
     pub fn spinner_label(&self, status: &str) -> String {
         let s = status.to_uppercase();
-        let sub = if self.json_only {
+        let sub = if self.audience == Audience::Adult {
+            if self.sections_seen.is_empty() && !self.json_done {
+                format!("writing sections → artifacts/{}/ …", self.study)
+            } else if !self.sections_seen.is_empty() {
+                let last = self.sections_seen.iter().next_back().map(|s| s.as_str()).unwrap_or("…");
+                if self.json_only || self.images_done >= self.images_total {
+                    format!(
+                        "sections {} done (latest {last})",
+                        self.sections_seen.len()
+                    )
+                } else {
+                    format!(
+                        "sections {} · images {}/{} (latest {last})",
+                        self.sections_seen.len(),
+                        self.images_done,
+                        self.images_total
+                    )
+                }
+            } else if self.json_only {
+                if !self.json_done {
+                    format!("extracting text → {}.json", self.study)
+                } else {
+                    "closing run (host images next)".to_string()
+                }
+            } else if !self.json_done {
+                format!("3a extracting text → {}.json", self.study)
+            } else if self.images_done < self.images_total {
+                format!("3b Cursor images {}/{}", self.images_done, self.images_total)
+            } else {
+                "3c closing run".to_string()
+            }
+        } else if self.json_only {
             if !self.json_done {
                 format!("extracting text → {}.json", self.study)
             } else {

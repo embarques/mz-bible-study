@@ -143,6 +143,36 @@ impl CursorClient {
         }
     }
 
+    /// Model ids accepted by Create Agent (`GET /v1/models`).
+    pub async fn list_model_ids(&self) -> Result<Vec<String>> {
+        let url = format!("{API_BASE}/v1/models");
+        let (status, text) = self
+            .send_with_retry("list models", || {
+                self.http.get(&url).header(AUTHORIZATION, self.auth_header())
+            })
+            .await?;
+        if !status.is_success() {
+            bail!("list models HTTP {status}: {text}");
+        }
+        let v: serde_json::Value =
+            serde_json::from_str(&text).with_context(|| format!("parse models: {text}"))?;
+        let mut ids = Vec::new();
+        if let Some(arr) = v.get("items").and_then(|x| x.as_array()) {
+            for item in arr {
+                if let Some(id) = item.get("id").and_then(|x| x.as_str()) {
+                    ids.push(id.to_string());
+                }
+            }
+        } else if let Some(arr) = v.get("models").and_then(|x| x.as_array()) {
+            for item in arr {
+                if let Some(id) = item.as_str() {
+                    ids.push(id.to_string());
+                }
+            }
+        }
+        Ok(ids)
+    }
+
     /// Create a no-repo cloud agent with initial run.
     pub async fn create_agent(
         &self,
@@ -177,6 +207,25 @@ impl CursorClient {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
         if !status.is_success() {
+            if text.contains("invalid_model") {
+                let hint = match self.list_model_ids().await {
+                    Ok(ids) if !ids.is_empty() => {
+                        let sample: Vec<&str> = ids.iter().map(|s| s.as_str()).take(12).collect();
+                        format!(
+                            " Model {model:?} is not a Cloud Agents id. \
+                             Set adult_cursor_model / cursor_model to an id from \
+                             GET /v1/models (examples: {}). Full list via `lamad doctor`.",
+                            sample.join(", ")
+                        )
+                    }
+                    _ => format!(
+                        " Model {model:?} is not a Cloud Agents id. \
+                         Run GET https://api.cursor.com/v1/models and set \
+                         adult_cursor_model to a returned `id` (not an IDE nickname)."
+                    ),
+                };
+                bail!("create agent HTTP {status}: {text}.{hint}");
+            }
             bail!("create agent HTTP {status}: {text}");
         }
         serde_json::from_str(&text).with_context(|| format!("parse create response: {text}"))

@@ -6,14 +6,15 @@ User-facing summary: [`README.md`](README.md). Template index: [`template/README
 
 **Deliverables every study:** after the `.pptx` is complete and validates, also export a **PDF** beside it (same name, `.pdf`). Do this automatically — do not ask.
 
-### Adult gold bar (HARD — match estudio 7)
+### Adult gold bar (HARD — match estudio 8)
 
-**Reference deck:** `bible-studies/adult/7/` (`EL TIEMPO DE DIOS SIEMPRE ES MEJOR`). Every adult estudio must feel like that one: precise structure, full verbatim Spanish, real scenic art, Mount Zion logo on body slides, clean validate + PDF. This is church teaching material — handle it with care and professionalism. Do **not** ship stub cartoons, missing logos, truncated extracts, or “good enough” decks.
+**Reference deck:** `bible-studies/adult/8/` (`HACIENDO LO BUENO DE MANERA INCORRECTA`). Every adult estudio must feel like that one: precise structure, full verbatim Spanish, real scenic art, Mount Zion logo on body slides, clean validate + PDF. This is church teaching material — handle it with care and professionalism. Do **not** ship stub cartoons, missing logos, truncated extracts, or “good enough” decks.
 
 | Gate | Required |
 |------|----------|
-| **Printed pages** | Bound by the **page number printed on the scan** (e.g. estudio 7 starts at **p.59**), not invented PDF sheet talk. Discover: title `ESTUDIO BÍBLICO N` → **`RESUMEN GENERAL`**. |
+| **Printed pages** | Bound by the **page number printed on the scan**, not invented PDF sheet talk. Discover: title `ESTUDIO BÍBLICO N` → **`RESUMEN GENERAL`**. |
 | **Verbatim folders** | Working source = `studies/adult/{N}/` section tree. Copy print Spanish **word-for-word**. Fix OCR only. Never paraphrase. See **Precise extract** below. |
+| **Section vs TEMA verses** | TEMA image = tema `RANGO`. Each A/B **image + Texto Bíblico** = that point’s verses only (same cita). Never copy the full TEMA range onto every A/B Texto. Chrome titles: `TEMA I - …` / `1.A - …` (spaces around the dash). |
 | **Scan coverage** | After expand/build, `lamad` scan-coverage must pass (section text covers the scan body). If it fails, fill gaps from the scan — do not deliver. |
 | **Real scenic art** | `intro-header`, each `tema-N`, each `ab-N{Letter}` = **unique** finished scenes (~1408×768), left text-safe treatment, one design family per study. **Forbidden to deliver:** slate/cartoon placeholders, ~40KB stubs, identical PNGs. Prefer Cursor (`cursor_api_key`) for images when `openai_api_key` is empty; OpenAI host path only when that key is set. |
 | **Definición cards** | Locked gold **layout** only. Baked terms = **this estudio’s** printed box only (folder `definicion-*.txt`). **Never** reuse another study’s PNG or copy the gold reference card (that bakes Amalec/Justicia/etc.). Build rejects gold byte-copies, placeholders, and missing/mismatched `.terms` sidecars. |
@@ -21,7 +22,7 @@ User-facing summary: [`README.md`](README.md). Template index: [`template/README
 | **CLI path** | Prefer `lamad prepare -n N --audience adult -g` (or build from a complete section tree). Output: `bible-studies/adult/{N}/powerpoint/` + `pdf/`. |
 | **Done means** | `lamad validate` **OK** + PDF exported + spot-check one scenic slide, one A/B body (logo present), one Definición card in the PDF. |
 
-If any gate fails, **fix before telling the user it is ready**. Estudios 8+ should match this bar by default — not as a special favor.
+If any gate fails, **fix before telling the user it is ready**.
 
 #### Precise extract (HARD — adult / Lectura / A–B bodies)
 
@@ -380,7 +381,7 @@ Do **not** call a helper that strips `b="1"` from every run with `bold=False` as
 
 These habits are why batch builds stay fast and clean — follow them; don’t reinvent:
 
-1. **Adult = estudio 7 bar** — see **Adult gold bar** above. Precise structure + real images + logos + coverage gate every time.
+1. **Adult = estudio 8 bar** — see **Adult gold bar** above. Precise structure + real images + logos + coverage gate every time.
 2. **Batch PDF workflow** — preview the whole PDF (printed page #s, titles, last study / no Próximo) → wait for OK → build all decks with the CLI (section tree → scenic art → validate → export PDF). Do not hand-craft each deck from scratch.
 3. **Clone, don’t invent layouts** — copy slide XML from `template/youth/master-template.pptx` / adult master / a recent good deck; only swap text/media.
 4. **Hard gates before “done”** — scan coverage OK (adult) + `lamad validate` / `mzbs validate` OK + export PDF + spot-check **logo on A/B body**, **scenic uniqueness**, **Definición gold**, **Propósitos 36pt** (youth), **Conclusión font**.

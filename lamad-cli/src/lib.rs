@@ -52,10 +52,13 @@ pub async fn run(mut job: PrepareJob, cfg: &Config) -> Result<()> {
         }
     }
 
+    let root = paths::project_root()?;
+    // Clear finished scans out of pending/ before auto-pick (otherwise old
+    // singles clutter the tray forever after a successful prepare).
+    archive_ready_pending_pdfs(job.audience, &root);
+
     let pdf = scans::normalize_pending_inbox(&job.resolve_pdf()?)?;
     let page_count = pdf_page_count(&pdf)?;
-
-    let root = paths::project_root()?;
     let mut errors: Vec<String> = Vec::new();
     let mut outputs: Vec<StudyOutput> = Vec::new();
 
@@ -127,13 +130,17 @@ pub async fn run(mut job: PrepareJob, cfg: &Config) -> Result<()> {
                 .collect::<Vec<_>>()
         } else {
             // Pre-resolve page slices (discover once for -n, or page-math for --from/--to).
-            if job.discover {
+            if job.discover || job.audience == Audience::Adult {
                 progress::now_step(
                     1,
                     4,
                     "Find pages (OCR)",
                     "Looking for this estudio inside the PDF (parallel OCR, usually under ~40s)…",
                 );
+                progress::info(format!(
+                    "Step 1/4 — finding estudios {}–{} in PDF ({page_count} pages; OCR can take ~30–90s)…",
+                    job.from, job.to
+                ));
             } else {
                 progress::now_step(
                     1,
@@ -154,6 +161,9 @@ pub async fn run(mut job: PrepareJob, cfg: &Config) -> Result<()> {
     };
 
     let total = slices.len();
+    // HARD: collect every mapping / on-disk conflict *before* extract or build.
+    preflight_prepare_batch(&job, &slices, &pdf, &root)?;
+
     progress::info(format!(
         "preparing {} estudio{} ({}–{}) from {}",
         total,
@@ -244,36 +254,210 @@ pub async fn run(mut job: PrepareJob, cfg: &Config) -> Result<()> {
         run_review(&study_nums, &pdf, !job.prepare_only, &job, cfg, &root).await?;
     }
 
-    // Archive the scan PDF only after a fully successful prepare.
-    let covered_through = slices
-        .last()
-        .map(|s| s.pages.1 as usize)
-        .unwrap_or(0);
-    let started_at_page_one = slices.first().map(|s| s.pages.0 == 1).unwrap_or(false);
-    let pdf_fully_prepared = started_at_page_one && covered_through >= page_count;
-    if pdf_fully_prepared {
-        scans::move_to_complete(&pdf)?;
-        progress::info(format!(
-            "done — {} prepared; PDF moved to scans/complete/",
+    // Archive when every estudio *named by the PDF* is now ready on disk.
+    // Do NOT require "started at PDF page 1" — that blocked `--from 8` on a
+    // Study 7–11 PDF and left leftover Próximo title pages keeping singles in pending/.
+    let _ = page_count;
+    match pdf_ready_to_archive(&pdf, job.audience, &root) {
+        Ok(true) => {
+            scans::move_to_complete(&pdf)?;
+            progress::info(format!(
+                "done — {} prepared; PDF moved to scans/complete/",
+                slices.len()
+            ));
+        }
+        Ok(false) => {
+            let remaining = pdf_named_estudios_missing(&pdf, job.audience, &root);
+            progress::info(format!(
+                "done — {} prepared; PDF stays in scans/pending/ ({})",
+                slices.len(),
+                if remaining.is_empty() {
+                    "filename has no estudio span — pass a full-span name or --force archive later"
+                        .to_string()
+                } else {
+                    format!(
+                        "still need estudio(s) {} on disk",
+                        remaining
+                            .iter()
+                            .map(|n| n.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                }
+            ));
+        }
+        Err(e) => progress::warn(format!(
+            "done — {} prepared; could not decide archive ({e:#}) — PDF left in pending/",
             slices.len()
-        ));
-    } else {
-        progress::info(format!(
-            "done — {} prepared; PDF stays in scans/pending/ (more estudios remain)",
-            slices.len()
-        ));
+        )),
     }
     Ok(())
 }
 
-/// True when this job did not consume the PDF through the last page (more estudios may remain).
-#[allow(dead_code)] // kept for future batch archive heuristics
-fn more_studies_pending_in_pdf(slices: &[StudySlice], page_count: usize) -> bool {
-    let covered_through = slices
-        .last()
-        .map(|s| s.pages.1 as usize)
-        .unwrap_or(0);
-    covered_through < page_count
+/// Estudios implied by the PDF filename (`Study 7-11` → 7..=11, `Study 5` → [5]).
+fn pdf_named_estudios(pdf: &Path) -> Option<Vec<u32>> {
+    if let Some((s, e)) = discover::estudio_span_from_filename(pdf) {
+        return Some((s..=e).collect());
+    }
+    discover::estudio_number_from_filename(pdf).map(|n| vec![n])
+}
+
+fn estudio_ready_on_disk(study: u32, audience: Audience, root: &Path) -> bool {
+    agent::prepare::try_resume_deliverables(study, audience, root).is_some()
+        || (audience == Audience::Adult && content::has_adult_sections(study))
+}
+
+/// True when every filename-named estudio is ready (section tree / JSON+images).
+fn pdf_ready_to_archive(pdf: &Path, audience: Audience, root: &Path) -> Result<bool> {
+    let Some(named) = pdf_named_estudios(pdf) else {
+        return Ok(false);
+    };
+    Ok(named
+        .iter()
+        .all(|&n| estudio_ready_on_disk(n, audience, root)))
+}
+
+fn pdf_named_estudios_missing(pdf: &Path, audience: Audience, root: &Path) -> Vec<u32> {
+    pdf_named_estudios(pdf)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|&n| !estudio_ready_on_disk(n, audience, root))
+        .collect()
+}
+
+/// Move any pending PDF whose filename-named estudios are already prepared.
+fn archive_ready_pending_pdfs(audience: Audience, root: &Path) {
+    let Ok(list) = scans::list_pending_pdfs() else {
+        return;
+    };
+    for pdf in list {
+        match pdf_ready_to_archive(&pdf, audience, root) {
+            Ok(true) => match scans::move_to_complete(&pdf) {
+                Ok(dest) => progress::ok(format!(
+                    "archived {} → scans/complete/ (estudios already prepared)",
+                    dest.file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("pdf")
+                )),
+                Err(e) => progress::warn(format!(
+                    "could not archive {}: {e:#}",
+                    pdf.display()
+                )),
+            },
+            Ok(false) => {}
+            Err(_) => {}
+        }
+    }
+}
+
+/// Print the full prepare plan and fail on any on-disk conflict **before**
+/// cloud extract / image gen / build starts.
+fn preflight_prepare_batch(
+    job: &PrepareJob,
+    slices: &[StudySlice],
+    pdf: &Path,
+    root: &Path,
+) -> Result<()> {
+    progress::phase("preflight — collect plan; fail before extract if anything is wrong");
+    let mut problems: Vec<String> = Vec::new();
+
+    if slices.is_empty() {
+        problems.push(format!(
+            "no estudios mapped for {}–{} in {}",
+            job.from,
+            job.to,
+            pdf.display()
+        ));
+    }
+
+    let expected: Vec<u32> = (job.from..=job.to).collect();
+    let mapped: Vec<u32> = slices.iter().map(|s| s.study).collect();
+    if mapped != expected {
+        problems.push(format!(
+            "mapped estudios {:?} do not match requested {}–{} ({:?})",
+            mapped, job.from, job.to, expected
+        ));
+    }
+
+    println!("  Preflight plan ({} estudio{}):", slices.len(), if slices.len() == 1 { "" } else { "s" });
+    for s in slices {
+        let json = agent::prepare::expected_paths(s.study, job.audience, root).json;
+        let (json_note, json_problem) = match read_existing_json_numero(&json) {
+            None => ("no JSON yet".to_string(), None),
+            Some(Ok(n)) if n == s.study => (format!("JSON ok (numero={n})"), None),
+            Some(Ok(n)) => {
+                let msg = format!(
+                    "{} has numero={n}, expected {} — delete that JSON (or --force-prepare) \
+                     so prepare does not resume the wrong estudio",
+                    json.display(),
+                    s.study
+                );
+                (format!("JSON CONFLICT numero={n}"), Some(msg))
+            }
+            Some(Err(e)) => {
+                let msg = format!("{}: {e}", json.display());
+                ("JSON unreadable".to_string(), Some(msg))
+            }
+        };
+        if let Some(p) = json_problem {
+            if !job.force_prepare {
+                problems.push(p);
+            }
+        }
+        let prox = s
+            .proximo_title_page
+            .map(|p| format!("próximo sheet {p}"))
+            .unwrap_or_else(|| "no Próximo".into());
+        println!(
+            "    · estudio {} · PDF sheets {}–{} · {prox} · {json_note}",
+            s.study, s.pages.0, s.pages.1
+        );
+        // Adult title-only window = no DESARROLLO/RESUMEN pages in the PDF.
+        // Spending a cloud agent on that always yields a stub tree then crashes.
+        if job.audience == Audience::Adult && s.pages.0 == s.pages.1 {
+            problems.push(format!(
+                "estudio {}: PDF content window is only sheet {} (title page only — \
+                 no pages through RESUMEN GENERAL). Add the missing scan pages for \
+                 this estudio to the PDF, then re-run. Do not re-run prepare until \
+                 the PDF includes the full study.",
+                s.study, s.pages.0
+            ));
+        }
+    }
+
+    if !problems.is_empty() {
+        eprintln!("Preflight failed — not starting extract/build:");
+        for (i, p) in problems.iter().enumerate() {
+            eprintln!("  {}. {p}", i + 1);
+        }
+        bail!(
+            "Preflight failed with {} problem(s). Fix the issues above, then re-run the same command.",
+            problems.len()
+        );
+    }
+    progress::ok(format!(
+        "preflight OK — {} estudio{} ready to prepare",
+        slices.len(),
+        if slices.len() == 1 { "" } else { "s" }
+    ));
+    Ok(())
+}
+
+fn read_existing_json_numero(path: &Path) -> Option<Result<u32, String>> {
+    if !path.is_file() {
+        return None;
+    }
+    Some((|| {
+        let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        let v: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| format!("invalid JSON ({e})"))?;
+        let n = v
+            .get("numero")
+            .or_else(|| v.get("estudio"))
+            .and_then(|x| x.as_u64().or_else(|| x.as_i64().map(|i| i as u64)))
+            .ok_or_else(|| "missing numero".to_string())?;
+        Ok(n as u32)
+    })())
 }
 
 /// Log failure; keep the PDF in `scans/pending/` so the user can retry.
@@ -458,130 +642,198 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
         pdftoppm_path: cfg.pdftoppm_path.clone(),
     };
 
-    // Adult without --generate: section folder on disk → build. No JSON file.
+    // Adult: if section tree (or salvable JSON) is already on disk, build it.
+    // `-g` means "generate when missing" — NOT "always re-run the cloud agent".
+    // Only `--force-prepare` forces a fresh agent.
     if job.audience == Audience::Adult
-        && !job.generate
         && !job.force_prepare
         && !job.gen_images
         && !job.gen_definicion
     {
+        let json_path = agent::prepare::expected_paths(study, job.audience, root).json;
+        if !content::has_adult_sections(study) && json_path.is_file() {
+            match content::expand_json_to_sections(&json_path, study) {
+                Ok(dir) => progress::ok(format!(
+                    "Expanded salvaged JSON → section tree {}",
+                    rel_from_root(root, &dir)
+                )),
+                Err(e) => progress::info(format!(
+                    "note: could not expand studies/adult/{study}.json ({e:#})"
+                )),
+            }
+        }
         if content::has_adult_sections(study) {
-            progress::ok(format!(
-                "Section content on disk (studies/adult/{study}/) — building from folder"
-            ));
-            // Folder builds also gate on scan coverage so truncated extracts
-            // cannot ship silently.
-            content::assert_adult_scan_coverage(
-                study,
-                pdf,
-                pages,
-                cfg.pdftoppm_path.as_deref(),
-            )?;
+            // Scan coverage needs real OCR page windows. The all-resumable path
+            // uses youth page-math stubs (1–3) — do not OCR-gate those rebuilds.
+            // When -g / force re-extract, pages come from discover and we gate.
+            if job.generate || job.force_prepare {
+                content::assert_adult_scan_coverage(
+                    study,
+                    pdf,
+                    pages,
+                    cfg.pdftoppm_path.as_deref(),
+                )?;
+            }
             let model = content::load_adult_sections(study)?;
             let _ = content::ensure_adult_placeholders(study, &model, root)?;
-            content::verify_adult_section_images(study, &model, root)?;
-            let study_dir = content::adult_study_folder(study)?;
-            if job.prepare_only {
-                progress::ok("prepare-only — section tree OK (no PowerPoint)");
+
+            // Scenic stubs → need Cursor/host art. Definición stubs alone do not
+            // block build (those slides are omitted until --gen-definicion).
+            if content::any_scenic_placeholders(study, &model, root) {
+                if host_image_key {
+                    progress::ok(format!(
+                        "Section text ready for estudio {study}; scenic are placeholders — \
+                         generating host images…"
+                    ));
+                    let creds = cfg.provider_creds_for(job.audience)?;
+                    agent::prepare_openai::generate_host_images(&make_req(creds)).await?;
+                } else if job.generate {
+                    progress::ok(format!(
+                        "Section text ready for estudio {study}; scenic are placeholders — \
+                         Cursor agent will generate unique images (set openai_api_key for host fast path)"
+                    ));
+                    // Fall through to cloud agent below (images), keep section tree on disk.
+                } else {
+                    bail!(
+                        "adult estudio {study}: section folders exist but scenic images are \
+                         PLACEHOLDERS. Re-run with -g so the Cursor agent generates unique \
+                         scenes, or set openai_api_key and use --gen-images."
+                    );
+                }
+            }
+
+            if !content::any_scenic_placeholders(study, &model, root) {
+                // DEFINICIÓN: Cursor gold-edit by default; OpenAI only when key is set.
+                let needs_def = content::adult_definicion_cards_need_regen(study, &model, root);
+                if needs_def {
+                    let creds = cfg.provider_creds_for(job.audience)?;
+                    if let Err(e) = agent::prepare_openai::regenerate_adult_definicion_cards(
+                        &make_req(creds),
+                    )
+                    .await
+                    {
+                        progress::warn(format!(
+                            "DEFINICIÓN gold-edit failed ({e:#}) — omitting those slides \
+                             (re-run --gen-definicion)"
+                        ));
+                    }
+                }
+                progress::ok(format!(
+                    "Section content + scenic art ready (studies/adult/{study}/) — building \
+                     (skipping cloud extract; use --force-prepare to re-extract text)"
+                ));
+                content::verify_adult_section_images(study, &model, root)?;
+                let study_dir = content::adult_study_folder(study)?;
+                if job.prepare_only {
+                    progress::ok("prepare-only — section tree OK (no PowerPoint)");
+                    return Ok(StudyOutput {
+                        study,
+                        json: study_dir,
+                        pptx: None,
+                        pdf: None,
+                    });
+                }
+                let out = paths::study_pptx_path(job.audience, study, &model.titulo)?;
+                let build_spin = progress::Spinner::start(format!(
+                    "Step 4/4 — Building PPTX{}… usually ~1–2 min",
+                    if job.export_pdf {
+                        " + exporting PDF"
+                    } else {
+                        ""
+                    }
+                ));
+                let template = job.template.clone().unwrap_or_else(|| {
+                    paths::master_template(job.audience).expect("template")
+                });
+                let build_result = tokio::task::spawn_blocking({
+                    let model = model.clone();
+                    let out = out.clone();
+                    let template = template.clone();
+                    let export_pdf = job.export_pdf;
+                    move || build::build_adult_from_model(&model, &out, Some(&template), export_pdf)
+                })
+                .await?;
+                match build_result {
+                    Ok(_) => build_spin.succeed(format!(
+                        "built {}",
+                        out.file_name().unwrap_or_default().to_string_lossy()
+                    )),
+                    Err(e) => {
+                        build_spin.fail("build failed");
+                        return Err(e);
+                    }
+                }
+                let pdf = if job.export_pdf {
+                    let p = export::default_pdf_path(&out);
+                    if p.exists() {
+                        Some(p)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                progress::info(format!("  PPTX → {}", rel_from_root(root, &out)));
+                if let Some(ref pdf_path) = pdf {
+                    progress::info(format!("  PDF  → {}", rel_from_root(root, pdf_path)));
+                }
                 return Ok(StudyOutput {
                     study,
                     json: study_dir,
-                    pptx: None,
-                    pdf: None,
+                    pptx: Some(out),
+                    pdf,
                 });
             }
-            let out = paths::study_pptx_path(job.audience, study, &model.titulo)?;
-            let build_spin = progress::Spinner::start(format!(
-                "Step 4/4 — Building PPTX{}… usually ~1–2 min",
-                if job.export_pdf {
-                    " + exporting PDF"
-                } else {
-                    ""
-                }
-            ));
-            let template = job.template.clone().unwrap_or_else(|| {
-                paths::master_template(job.audience).expect("template")
-            });
-            let build_result = tokio::task::spawn_blocking({
-                let model = model.clone();
-                let out = out.clone();
-                let template = template.clone();
-                let export_pdf = job.export_pdf;
-                move || build::build_adult_from_model(&model, &out, Some(&template), export_pdf)
-            })
-            .await?;
-            match build_result {
-                Ok(_) => build_spin.succeed(format!(
-                    "built {}",
-                    out.file_name().unwrap_or_default().to_string_lossy()
-                )),
-                Err(e) => {
-                    build_spin.fail("build failed");
-                    return Err(e);
-                }
-            }
-            if content::any_placeholders(study, &model, root) {
-                progress::warn(format!(
-                    "deck has PLACEHOLDER images — replace under studies/adult/{study}/images/ \
-                     or re-run -g (Cursor/cursor_api_key generates art; optional \
-                     openai_api_key + --gen-images for host fast path)"
-                ));
-            }
-            let pdf = if job.export_pdf {
-                let p = export::default_pdf_path(&out);
-                if p.exists() {
-                    Some(p)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            progress::info(format!("  PPTX → {}", rel_from_root(root, &out)));
-            if let Some(ref pdf_path) = pdf {
-                progress::info(format!("  PDF  → {}", rel_from_root(root, pdf_path)));
-            }
-            return Ok(StudyOutput {
-                study,
-                json: study_dir,
-                pptx: Some(out),
-                pdf,
-            });
+            // Placeholders remain + -g → continue into Cursor prepare for images.
         }
-        bail!(
-            "No section content at studies/adult/{study}/ (need manifest.toml).\n\
-             Either:\n\
-               • drop generated section files there (see GENERATE_STUDY_AGENT.md), then re-run\n\
-               • or pass --generate / -g to extract from the scan"
-        );
+        if !job.generate {
+            bail!(
+                "No section content at studies/adult/{study}/ (need manifest.toml).\n\
+                 Either:\n\
+                   • drop generated section files there (see GENERATE_STUDY_AGENT.md), then re-run\n\
+                   • or pass --generate / -g to extract from the scan"
+            );
+        }
+        // -g and nothing on disk → fall through to cloud agent below.
     }
 
-    let resumed = if job.force_prepare || job.gen_images || job.gen_definicion || job.generate {
+    // Resume complete deliverables unless --force-prepare (or image-only flags).
+    // `-g` alone does NOT wipe resume — but placeholders must NOT count as complete
+    // (verify_deliverables rejects `.placeholder` sidecars).
+    let resumed = if job.force_prepare || job.gen_images || job.gen_definicion {
         None
     } else {
         agent::prepare::try_resume_deliverables(study, job.audience, root)
     };
 
     let deliverables = if job.gen_definicion {
-        if !host_image_key {
-            bail!(
-                "--gen-definicion needs openai_api_key / OPENAI_API_KEY \
-                 (reference-edit of the locked DEFINICIÓN gold card)"
-            );
+        // Sections are enough — materialize sidecar JSON when missing.
+        if job.audience == Audience::Adult && content::has_adult_sections(study) {
+            let model = content::load_adult_sections(study)?;
+            let json_path = agent::prepare::expected_paths(study, job.audience, root).json;
+            if let Ok(text) = serde_json::to_string_pretty(&model) {
+                let _ = std::fs::write(&json_path, text);
+            }
         }
         let json = agent::prepare::try_resume_json_only(study, job.audience, root)
             .with_context(|| {
                 format!(
-                    "--gen-definicion needs studies/{}/{}.json first.",
+                    "--gen-definicion needs studies/adult/{study}/ section tree \
+                     (or studies/{}/{}.json).",
                     job.audience.as_str(),
                     study
                 )
             })?;
         progress::ok(format!(
-            "--gen-definicion — using {} (force-rebuild DEFINICIÓN cards from gold)",
+            "--gen-definicion — {} gold reference-edit ({})",
+            if host_image_key {
+                "OpenAI"
+            } else {
+                "Cursor (default)"
+            },
             json.display()
         ));
-        let creds = cfg.provider_creds()?;
+        let creds = cfg.provider_creds_for(job.audience)?;
         agent::prepare_openai::regenerate_adult_definicion_cards(&make_req(creds)).await?;
         agent::prepare::verify_deliverables(study, job.audience, root)?
     } else if job.gen_images {
@@ -655,7 +907,7 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
             agent::prepare::existing_inventory_summary(study, job.audience, root)
         ));
 
-        let creds = cfg.provider_creds()?;
+        let creds = cfg.provider_creds_for(job.audience)?;
         progress::phase(format!(
             "backend: {} (model={}){}",
             creds.provider.display_name(),
@@ -673,29 +925,43 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
         deliverables
     };
 
-    // After generate: expand adult agent JSON into the section folder tree.
-    // Keep `{N}.json` until host images finish (image prompts read it).
+    // Adult: prefer section folders downloaded from the agent; else expand JSON.
     let mut content_dir = deliverables.json.clone();
     if job.audience == Audience::Adult && (job.generate || job.force_prepare) {
-        match content::expand_json_to_sections(&deliverables.json, study) {
-            Ok(dir) => {
-                progress::ok(format!(
-                    "Wrote section tree → {}",
-                    rel_from_root(root, &dir)
-                ));
-                content::print_section_inventory(&dir)?;
-                content_dir = dir;
-                // HARD: extracted folders must cover the printed scan body.
-                content::assert_adult_scan_coverage(
-                    study,
-                    pdf,
-                    pages,
-                    cfg.pdftoppm_path.as_deref(),
-                )?;
+        if content::has_adult_sections(study) {
+            let dir = content::adult_study_folder(study)?;
+            progress::ok(format!(
+                "Section tree ready → {}",
+                rel_from_root(root, &dir)
+            ));
+            let _ = content::print_section_inventory(&dir);
+            content_dir = dir;
+            content::assert_adult_scan_coverage(
+                study,
+                pdf,
+                pages,
+                cfg.pdftoppm_path.as_deref(),
+            )?;
+        } else if deliverables.json.is_file() {
+            match content::expand_json_to_sections(&deliverables.json, study) {
+                Ok(dir) => {
+                    progress::ok(format!(
+                        "Expanded JSON → section tree {}",
+                        rel_from_root(root, &dir)
+                    ));
+                    content::print_section_inventory(&dir)?;
+                    content_dir = dir;
+                    content::assert_adult_scan_coverage(
+                        study,
+                        pdf,
+                        pages,
+                        cfg.pdftoppm_path.as_deref(),
+                    )?;
+                }
+                Err(e) => progress::info(format!(
+                    "note: could not expand section tree ({e:#}) — keeping agent JSON"
+                )),
             }
-            Err(e) => progress::info(format!(
-                "note: could not expand section tree ({e:#}) — keeping agent JSON"
-            )),
         }
     }
 
@@ -727,6 +993,17 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
     if job.audience == Audience::Adult && content::has_adult_sections(study) {
         let model = content::load_adult_sections(study)?;
         let _ = content::ensure_adult_placeholders(study, &model, root)?;
+        // DEFINICIÓN: Cursor gold-edit by default; OpenAI when key is set.
+        if content::adult_definicion_cards_need_regen(study, &model, root) {
+            let creds = cfg.provider_creds_for(job.audience)?;
+            if let Err(e) =
+                agent::prepare_openai::regenerate_adult_definicion_cards(&make_req(creds)).await
+            {
+                progress::warn(format!(
+                    "DEFINICIÓN gold-edit failed ({e:#}) — omitting those slides"
+                ));
+            }
+        }
         content::verify_adult_section_images(study, &model, root)?;
 
         let out = paths::study_pptx_path(job.audience, study, &model.titulo)?;
@@ -736,7 +1013,8 @@ async fn prepare_one_study(one: PrepareOne<'_>) -> Result<StudyOutput> {
             .unwrap_or_else(|| paths::master_template(job.audience).expect("template"));
 
         // Kick off host images while we build the first deck.
-        let image_join = if host_image_key && content::any_placeholders(study, &model, root)
+        // Only scenic stubs block / need host regen — definición is local-baked above.
+        let image_join = if host_image_key && content::any_scenic_placeholders(study, &model, root)
         {
             let creds = cfg.provider_creds()?;
             let req = make_req(creds);
@@ -922,7 +1200,7 @@ async fn run_review(
     cfg: &Config,
     root: &Path,
 ) -> Result<()> {
-    let creds = cfg.provider_creds()?;
+    let creds = cfg.provider_creds_for(job.audience)?;
 
     println!("\n=== Agent review ({}) ===", creds.provider.display_name());
     let report = agent::review::run_review_agent(

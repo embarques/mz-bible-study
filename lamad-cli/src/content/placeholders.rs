@@ -74,10 +74,49 @@ pub fn is_placeholder(png: &Path) -> bool {
 }
 
 pub fn any_placeholders(study: u32, model: &AdultStudy, root: &Path) -> bool {
+    any_scenic_placeholders(study, model, root)
+        || any_definicion_placeholders(study, model, root)
+}
+
+/// Scenic intro/tema/ab stubs — these block resume/build (must be unique real art).
+pub fn any_scenic_placeholders(study: u32, model: &AdultStudy, root: &Path) -> bool {
+    let media = adult_media_dir(study, root);
+    crate::agent::prepare::adult_scenic_basenames_for(model)
+        .into_iter()
+        .any(|n| is_placeholder(&media.join(n)))
+}
+
+/// DEFINICIÓN stubs — filled by local gold bake (no key) or OpenAI when set.
+pub fn any_definicion_placeholders(study: u32, model: &AdultStudy, root: &Path) -> bool {
     let media = adult_media_dir(study, root);
     adult_basenames_for_study(model)
         .into_iter()
+        .filter(|n| n.starts_with("definicion-"))
         .any(|n| is_placeholder(&media.join(n)))
+}
+
+/// True when any tema DEFINICIÓN card is missing, a stub, gold leftover, or
+/// fails layout/terms QC — i.e. needs bake or `--gen-definicion`.
+pub fn adult_definicion_cards_need_regen(study: u32, model: &AdultStudy, root: &Path) -> bool {
+    let media = adult_media_dir(study, root);
+    for (i, tema) in model.temas.iter().enumerate() {
+        if tema.definiciones.is_empty() {
+            continue;
+        }
+        let dest = media.join(format!("definicion-{}.png", i + 1));
+        if !dest.is_file() || is_placeholder(&dest) {
+            return true;
+        }
+        let fp = crate::build::adult::terms_fingerprint(
+            tema.definiciones
+                .iter()
+                .map(|d| (d.termino.as_str(), d.texto.as_str())),
+        );
+        if !crate::build::adult::keepable_definicion_card(&dest, &fp) {
+            return true;
+        }
+    }
+    false
 }
 
 pub fn clear_placeholder_mark(png: &Path) {
@@ -96,7 +135,20 @@ fn mark_placeholder(png: &Path) -> Result<()> {
 fn write_scenic_placeholder(path: &Path, label: &str) -> Result<()> {
     use image::{Rgb, RgbImage};
 
-    let mut img = RgbImage::from_pixel(SCENIC_W, SCENIC_H, Rgb([45, 55, 72]));
+    // Per-label tint so identical-byte uniqueness QC does not fire on stubs
+    // (stubs still carry `.placeholder` and must be replaced before delivery).
+    let mut h: u32 = 2166136261;
+    for b in label.as_bytes() {
+        h ^= u32::from(*b);
+        h = h.wrapping_mul(16777619);
+    }
+    let tint = Rgb([
+        40 + (h % 40) as u8,
+        50 + ((h >> 8) % 40) as u8,
+        60 + ((h >> 16) % 50) as u8,
+    ]);
+
+    let mut img = RgbImage::from_pixel(SCENIC_W, SCENIC_H, tint);
     // Left text-safe band (lighter) so title chrome stays readable.
     for y in 0..SCENIC_H {
         for x in 0..(SCENIC_W * 40 / 100) {
@@ -105,7 +157,12 @@ fn write_scenic_placeholder(path: &Path, label: &str) -> Result<()> {
             img.put_pixel(x, y, Rgb([v, v.saturating_sub(4), v.saturating_sub(8)]));
         }
     }
-    let _ = label;
+    // Encode label into a unique stripe so no two stubs share bytes.
+    let stripe_y = 40u32 + (h % (SCENIC_H.saturating_sub(80).max(1)));
+    for x in 0..SCENIC_W {
+        let c = (x.wrapping_add(h) % 200) as u8;
+        img.put_pixel(x, stripe_y, Rgb([c, 180, 90]));
+    }
     for y in (SCENIC_H - 24)..SCENIC_H {
         for x in 0..SCENIC_W {
             img.put_pixel(x, y, Rgb([230, 126, 34]));

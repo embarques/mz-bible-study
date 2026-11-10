@@ -327,6 +327,20 @@ pub fn bar(len: u64, msg: impl Into<Cow<'static, str>>) -> ProgressBar {
     pb
 }
 
+/// Progress bar that always draws (discover OCR / other long waits at default `-v0`).
+pub fn bar_always(len: u64, msg: impl Into<Cow<'static, str>>) -> ProgressBar {
+    let pb = ProgressBar::new(len);
+    pb.set_style(
+        ProgressStyle::with_template(
+            "  {msg} [{bar:30.cyan/blue}] {pos}/{len} ({elapsed_precise})",
+        )
+        .expect("bar template")
+        .progress_chars("=>-"),
+    );
+    pb.set_message(msg.into());
+    pb
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

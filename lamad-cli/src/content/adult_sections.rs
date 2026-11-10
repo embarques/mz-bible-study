@@ -1,7 +1,7 @@
 //! Adult section-folder layout under `studies/adult/{N}/`.
 //!
 //! ```text
-//! studies/adult/7/
+//! studies/adult/8/
 //!   manifest.toml
 //!   images/                  # scenic + definición PNGs (builder paths)
 //!   01-title/
@@ -47,10 +47,129 @@ pub fn adult_study_folder(study: u32) -> Result<PathBuf> {
     Ok(paths::studies_dir(crate::job::Audience::Adult)?.join(study.to_string()))
 }
 
+/// True when a **loadable** adult tree is on disk (manifest + at least one tema).
+/// Manifest-only / front-matter stubs do **not** count — that caused prepare to
+/// skip follow-ups and then crash on incomplete estudio 11 extracts.
 pub fn has_adult_sections(study: u32) -> bool {
-    adult_study_folder(study)
-        .map(|d| d.join("manifest.toml").is_file())
-        .unwrap_or(false)
+    let Ok(dir) = adult_study_folder(study) else {
+        return false;
+    };
+    if !dir.join("manifest.toml").is_file() {
+        return false;
+    }
+    adult_tree_has_tema(&dir)
+}
+
+/// True when `studies/adult/{N}/` has at least one `NN-tema-N` header folder
+/// (e.g. `09-tema-1`). Point-only folders like `10-tema-1-A` do not count alone.
+pub fn adult_tree_has_tema(study_dir: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(study_dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        if !entry.path().is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(s) = name.to_str() else {
+            continue;
+        };
+        // After `NN-`: `tema-1` (header) vs `tema-1-A` (point).
+        let Some((_, kind)) = s.split_once('-') else {
+            continue;
+        };
+        if let Some(rest) = kind.strip_prefix("tema-") {
+            if !rest.is_empty() && !rest.contains('-') {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Fixed front-matter kinds (before variable `tema-*` folders), in order.
+pub const ADULT_FRONT_MATTER: &[&str] = &[
+    "title",
+    "lectura",
+    "objetivos",
+    "pensamiento",
+    "texto-aureo",
+    "ensenanza",
+    "datos",
+    "introduccion",
+];
+
+/// Section folder names present on disk (e.g. `01-title`, `09-tema-1`), sorted.
+pub fn present_section_dir_names(study: u32) -> Result<Vec<String>> {
+    let dir = adult_study_folder(study)?;
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut names = list_section_dirs(&dir)?
+        .into_iter()
+        .map(|(_, _, path)| {
+            path.file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default()
+        })
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>();
+    names.sort();
+    Ok(names)
+}
+
+/// Front-matter kinds still missing (by suffix after `NN-`).
+pub fn missing_front_matter_kinds(study: u32) -> Result<Vec<&'static str>> {
+    let present = present_section_dir_names(study)?;
+    let kinds: Vec<String> = present
+        .iter()
+        .filter_map(|n| n.split_once('-').map(|(_, k)| k.to_string()))
+        .collect();
+    Ok(ADULT_FRONT_MATTER
+        .iter()
+        .copied()
+        .filter(|k| !kinds.iter().any(|have| have == k))
+        .collect())
+}
+
+/// Human-readable resume hint for the cloud agent (empty if nothing on disk yet).
+pub fn adult_resume_hint(study: u32) -> Result<String> {
+    let dir = adult_study_folder(study)?;
+    let mut lines = Vec::new();
+    if dir.join("manifest.toml").is_file() {
+        lines.push("manifest.toml".into());
+    }
+    for name in present_section_dir_names(study)? {
+        lines.push(format!("{name}/"));
+    }
+    if lines.is_empty() {
+        return Ok(String::new());
+    }
+    let missing = missing_front_matter_kinds(study)?;
+    let mut out = format!(
+        "## RESUME — already on host disk under studies/adult/{study}/ (do NOT rewrite these)\n"
+    );
+    for l in &lines {
+        out.push_str(&format!("- {l}\n"));
+    }
+    out.push_str(
+        "\nWrite **only** missing section folders under `artifacts/{study}/` \
+         (same layout). Keep numbers sequential after what already exists.\n",
+    );
+    if !missing.is_empty() {
+        out.push_str(&format!("Missing front-matter kinds: {:?}\n", missing));
+    }
+    out.push_str(
+        "If temas/points are incomplete, continue from the next tema/point after \
+         the last existing `NN-tema-*` folder. Prefer section folders over a monolith JSON.\n",
+    );
+    out.push_str(
+        "\n## Images — REPLACE any PLACEHOLDER scenic under `artifacts/{study}/images/`\n\
+         Write unique 16:9 PNGs: intro-header.png, tema-N.png, ab-N{{Letter}}.png \
+         (and definicion-N.png when that tema has printed Definiciones). \
+         Never reuse the same scene bytes across slots.\n",
+    );
+    Ok(out)
 }
 
 /// Images live under `{study_dir}/images/` (flat basenames the builder already expects).
@@ -224,6 +343,8 @@ pub fn write_adult_sections(study: &AdultStudy, study_dir: &Path) -> Result<()> 
 /// Load section tree → AdultStudy. Image paths stamped to `studies/adult/{N}/images/…`.
 pub fn load_adult_sections(study: u32) -> Result<AdultStudy> {
     let study_dir = adult_study_folder(study)?;
+    // Repair agent quirks (manifest shape, file names, dup CITA, próximo #) first.
+    let _ = crate::content::adult_normalize::normalize_adult_section_tree(study)?;
     let manifest_path = study_dir.join("manifest.toml");
     if !manifest_path.is_file() {
         bail!(
@@ -273,7 +394,22 @@ pub fn load_adult_sections(study: u32) -> Result<AdultStudy> {
                 }
             }
             "objetivos" => {
-                objetivos = read_nonempty_lines(&dir.join("content.txt"))?;
+                objetivos = read_nonempty_lines(&dir.join("content.txt"))?
+                    .into_iter()
+                    .map(|l| {
+                        let t = l.trim();
+                        let b = t.as_bytes();
+                        let mut i = 0usize;
+                        while i < b.len() && b[i].is_ascii_digit() {
+                            i += 1;
+                        }
+                        if i > 0 && i < b.len() && b[i] == b'.' {
+                            t[i + 1..].trim_start().to_string()
+                        } else {
+                            t.to_string()
+                        }
+                    })
+                    .collect();
             }
             "pensamiento" => {
                 pensamiento_central = read_trimmed(&dir.join("content.txt"))?;
@@ -293,13 +429,21 @@ pub fn load_adult_sections(study: u32) -> Result<AdultStudy> {
             }
             "proximo" => {
                 saw_proximo = true;
-                let n_txt = read_trimmed(&dir.join("numero.txt"))?;
-                proximo.numero = if let Ok(n) = n_txt.parse::<i64>() {
-                    Numero::Int(n)
+                // Folder numbering wins over printed scan badges.
+                let expected = (study + 1) as i64;
+                let n_txt = read_trimmed(&dir.join("numero.txt")).unwrap_or_default();
+                let parsed = n_txt.parse::<i64>().ok();
+                proximo.numero = Numero::Int(if manifest.omit_proximo {
+                    parsed.unwrap_or(expected)
                 } else {
-                    Numero::Text(n_txt)
+                    expected
+                });
+                let title_path = if dir.join("title.txt").is_file() {
+                    dir.join("title.txt")
+                } else {
+                    dir.join("titulo.txt")
                 };
-                proximo.titulo = read_trimmed(&dir.join("title.txt"))?;
+                proximo.titulo = read_trimmed(&title_path)?;
                 let base_path = dir.join("base_biblica.txt");
                 if base_path.is_file() {
                     let lines = read_nonempty_lines(&base_path)?;
@@ -313,7 +457,9 @@ pub fn load_adult_sections(study: u32) -> Result<AdultStudy> {
                     let tema_n: usize = n_str.parse().with_context(|| {
                         format!("bad tema point folder name: {other}")
                     })?;
-                    let title = read_trimmed(&dir.join("title.txt"))?;
+                    let title = crate::content::adult_normalize::sanitize_ab_point_titulo(
+                        &read_trimmed(&dir.join("title.txt"))?,
+                    );
                     let body = split_paragraphs(&read_trimmed(&dir.join("body.txt"))?);
                     let texto = parse_lectura(&fs::read_to_string(dir.join("texto-biblico.txt"))?)?;
                     puntos.push((
@@ -485,31 +631,32 @@ pub fn verify_adult_section_images(study: u32, model: &AdultStudy, root: &Path) 
         let name = format!("definicion-{}.png", i + 1);
         let p = media.join(&name);
         if !p.is_file() {
-            bail!(
-                "adult estudio {study}: missing {name} (tema {} has definición text). \
-                 Put it in {}",
+            crate::progress::warn(format!(
+                "adult estudio {study}: missing {name} (tema {} has definición text) under {} — \
+                 placeholder/host --gen-definicion can fill later",
                 i + 1,
                 media.display()
-            );
+            ));
+            continue;
         }
-        crate::build::adult::assert_study_definicion_card(
+        if let Err(e) = crate::build::adult::assert_study_definicion_card(
             &p,
             tema.definiciones
                 .iter()
                 .map(|d| (d.termino.as_str(), d.texto.as_str())),
-        )
-        .with_context(|| {
-            format!(
-                "adult estudio {study}: {name} must match THIS study's scan \
-                 Definiciones terms (never reuse another study's card)"
-            )
-        })?;
+        ) {
+            crate::progress::warn(format!(
+                "adult estudio {study}: {name} failed definición QC ({e:#}) — continuing"
+            ));
+        }
     }
     Ok(())
 }
 
 /// Expand an existing adult JSON (+ optional flat media dir) into the section tree.
 pub fn expand_json_to_sections(json_path: &Path, study: u32) -> Result<PathBuf> {
+    // Coerce agent quirks (estudio/lectura_slides/A-B without texto_biblico, …).
+    let _ = crate::agent::prepare::normalize_adult_agent_json(json_path)?;
     let text = fs::read_to_string(json_path)?;
     let model: AdultStudy = serde_json::from_str(&text)
         .with_context(|| format!("parse adult JSON {}", json_path.display()))?;
@@ -602,6 +749,7 @@ fn format_lectura(block: &Lectura) -> String {
 }
 
 fn parse_lectura(text: &str) -> Result<Lectura> {
+    let text = crate::content::adult_normalize::strip_duplicate_cita_line(text);
     let mut cita = String::new();
     let mut versiculos = Vec::new();
     for line in text.lines() {
@@ -617,6 +765,14 @@ fn parse_lectura(text: &str) -> Result<Lectura> {
     }
     if cita.is_empty() {
         bail!("lectura block missing CITA: line");
+    }
+    // Drop a leftover citation-only first verse (defense in depth).
+    if let Some(first) = versiculos.first() {
+        let a = first.replace(' ', "").to_lowercase();
+        let b = cita.replace(' ', "").to_lowercase();
+        if a == b || b.starts_with(&a) || a.starts_with(&b) {
+            versiculos.remove(0);
+        }
     }
     if versiculos.is_empty() {
         bail!("lectura block has no verses");

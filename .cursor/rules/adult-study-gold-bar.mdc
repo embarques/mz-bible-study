@@ -1,17 +1,18 @@
 ---
-description: Adult Bible studies must match estudio 7 quality — care, structure, real art
+description: Adult Bible studies must match estudio 8 quality — care, structure, real art
 alwaysApply: true
 ---
 
-# Adult study gold bar (estudio 7)
+# Adult study gold bar (estudio 8)
 
-Treat every adult estudio like finished **estudio 7** (`bible-studies/adult/7/` — *EL TIEMPO DE DIOS SIEMPRE ES MEJOR*): precise structure, full verbatim Spanish, beautiful unique scenic images, Mount Zion logo on body slides, validate + PDF. Church teaching — care and professionalism, not stubs or “good enough.”
+Treat every adult estudio like finished **estudio 8** (`bible-studies/adult/8/` — *HACIENDO LO BUENO DE MANERA INCORRECTA*): precise structure, full verbatim Spanish, beautiful unique scenic images, Mount Zion logo on body slides, validate + PDF. Church teaching — care and professionalism, not stubs or “good enough.”
 
 ## Always
 
-- Bound by **printed page numbers on the scan** (estudio 7 starts at **p.59**). Title → `RESUMEN GENERAL`. Do not invent PDF-sheet stories as the source of truth.
+- Bound by **printed page numbers on the scan**. Title → `RESUMEN GENERAL`. Do not invent PDF-sheet stories as the source of truth.
 - Working source: `studies/adult/{N}/` section folders. Verbatim print Spanish only.
-- **Precise extract:** two-column wraps and page cuts must be joined (never drop the right-column leftover, e.g. `…hora de Dios` + `para actuar.`). Lectura/Texto: keep printed **`5:1` / `16:1`** at chapter jumps — do not strip to bare `1`.
+- **Precise extract:** two-column wraps and page cuts must be joined (never drop the right-column leftover). Lectura/Texto: keep printed **`5:1` / `16:1`** at chapter jumps — do not strip to bare `1`.
+- **Section vs TEMA verses (HARD):** TEMA image = tema `RANGO`. Each A/B image + Texto Bíblico = **that point’s verses only** (same cita). Never copy the full TEMA range onto every A/B Texto. Title chrome: `TEMA I - …` / `1.A - …` (spaces around the dash).
 - **Scan coverage** must pass before calling a deck done. Spot-check last sentence of each A/B body + every chapter-change verse against the scan.
 - Real scenic PNGs for `intro-header`, each `tema-N`, each `ab-N{Letter}` — unique scenes, left text-safe treatment. Never deliver placeholder cartoons.
 - Images: Cursor (`cursor_api_key`) when OpenAI is unset; host OpenAI only when that key is set.

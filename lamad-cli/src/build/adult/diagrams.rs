@@ -26,9 +26,12 @@ pub fn set_objetivos(
     if objetivos.len() != 3 {
         bail!("objetivos must have 3 entries, got {}", objetivos.len());
     }
+    // SmartArt cascade already shows order — never bake "1. "/"2. "/"3. " into
+    // the boxes (agents copy numbered scan lines; gold estudio 7 is unnumbered).
+    let objetivos: Vec<String> = objetivos.iter().map(|o| strip_objetivo_number(o)).collect();
     let data = fs::read_to_string(data_path)
         .with_context(|| format!("read {}", data_path.display()))?;
-    let pairs = objetivos_srcord_replacements(&data, objetivos)?;
+    let pairs = objetivos_srcord_replacements(&data, &objetivos)?;
     let new_data = apply_model_id_text_replacements(&data, &pairs)?;
     fs::write(data_path, new_data).with_context(|| format!("write {}", data_path.display()))?;
 
@@ -38,12 +41,25 @@ pub fn set_objetivos(
         // Cached drawing shape Y order ≠ data srcOrd on this template. Write
         // top→bottom by Y so PDF export stays correct even before PowerPoint
         // regenerates SmartArt from data.
-        let new_drawing = apply_drawing_by_y_order(&drawing, objetivos)?;
+        let new_drawing = apply_drawing_by_y_order(&drawing, &objetivos)?;
         fs::write(drawing_path, &new_drawing)
             .with_context(|| format!("write {}", drawing_path.display()))?;
-        shrink_objetivos_runs(drawing_path, objetivos)?;
+        shrink_objetivos_runs(drawing_path, &objetivos)?;
     }
     Ok(())
+}
+
+fn strip_objetivo_number(raw: &str) -> String {
+    let t = raw.trim();
+    let bytes = t.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i > 0 && i < bytes.len() && bytes[i] == b'.' {
+        return t[i + 1..].trim_start().to_string();
+    }
+    t.to_string()
 }
 
 /// `(model_id, old_text, new_text)` in srcOrd order 0..2.
@@ -483,6 +499,18 @@ fn shrink_body_runs(drawing_path: &Path, pensamiento: &str, quote: &str) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strip_objetivo_number_removes_scan_prefixes() {
+        assert_eq!(
+            strip_objetivo_number("1. Imitar el júbilo y entusiasmo."),
+            "Imitar el júbilo y entusiasmo."
+        );
+        assert_eq!(
+            strip_objetivo_number("Reconocer la importancia de cumplir."),
+            "Reconocer la importancia de cumplir."
+        );
+    }
 
     #[test]
     fn objetivos_follow_srcord_not_document_order() {

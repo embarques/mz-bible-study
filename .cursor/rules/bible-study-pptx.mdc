@@ -34,9 +34,10 @@ If **2** is missing on a single non-final study, **ask** for próximo: number, t
 
 ## Adult (`--audience adult`) — HARD
 
-**Gold bar = estudio 7** (`bible-studies/adult/7/` — `EL TIEMPO DE DIOS SIEMPRE ES MEJOR`). Every adult deck must match that care: full verbatim section tree, real unique scenic art (not stubs), Mount Zion logo on intro + A/B bodies, scan-coverage gate, validate + PDF. Church teaching — professional, not “good enough.” Full playbook: **`AGENTS.md` → Adult gold bar**. Layout: `lamad-cli/src/build/adult/LAYOUT_GUIDE.md`.
+**Gold bar = estudio 8** (`bible-studies/adult/8/` — `HACIENDO LO BUENO DE MANERA INCORRECTA`). Every adult deck must match that care: full verbatim section tree, real unique scenic art (not stubs), Mount Zion logo on intro + A/B bodies, scan-coverage gate, validate + PDF. Church teaching — professional, not “good enough.” Full playbook: **`AGENTS.md` → Adult gold bar**. Layout: `lamad-cli/src/build/adult/LAYOUT_GUIDE.md`.
 
-- **Printed page #s** from the scan (e.g. estudio 7 @ p.59) — not invented PDF-sheet storytelling. Title → `RESUMEN GENERAL`.
+- **Printed page #s** from the scan — not invented PDF-sheet storytelling. Title → `RESUMEN GENERAL`.
+- **Section vs TEMA verses:** TEMA image = tema `RANGO`; each A/B image + Texto Bíblico = that point’s verses only. Chrome: `TEMA I - …` / `1.A - …` (spaces around dash).
 - **Precise extract:** join two-column wraps and page cuts (never drop the right-column leftover). Lectura/Texto keep printed `5:1` / `16:1` at chapter jumps — not bare `1`.
 - **No `()`** on Texto Bíblico citations or TEMA/A-B image verse lines (`MATEO 6:1-4`, not `(MATEO 6:1-4)`). Body inline refs may keep `(Libro …)`.
 - **Title/próximo:** strip `<a:highlight>` — no cyan chip behind the title (match youth).

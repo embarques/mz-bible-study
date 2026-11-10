@@ -115,8 +115,8 @@ pub fn assert_locked_definicion_card(path: &Path) -> Result<()> {
         bail!(
             "{} is not the locked DEFINICIÓN Y ETIMOLOGÍA layout ({reason}). \
              Layout is HARD-frozen — only term text, definition text, and icons may change. \
-             Delete the file and re-run with openai image gen (reference edit), \
-             or restore a gold card from lamad-cli/src/build/adult/reference/.",
+             Delete and re-run `lamad prepare --gen-definicion` (OpenAI when key \
+             set; otherwise local gold bake).",
             path.display()
         );
     }
@@ -131,9 +131,10 @@ pub fn terms_fingerprint<'a, I>(rows: I) -> String
 where
     I: IntoIterator<Item = (&'a str, &'a str)>,
 {
-    use std::collections::hash_map::DefaultHasher;
+    // Stable across processes — DefaultHasher is randomly seeded and would
+    // invalidate `.terms` sidecars on every CLI invoke.
     use std::hash::{Hash, Hasher};
-    let mut h = DefaultHasher::new();
+    let mut h = Fnv64::new();
     let mut n = 0u32;
     for (termino, texto) in rows {
         n += 1;
@@ -143,6 +144,26 @@ where
     }
     n.hash(&mut h);
     format!("{:016x}", h.finish())
+}
+
+struct Fnv64(u64);
+
+impl Fnv64 {
+    fn new() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+}
+
+impl std::hash::Hasher for Fnv64 {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 ^= u64::from(b);
+            self.0 = self.0.wrapping_mul(0x1000_0000_01b3);
+        }
+    }
 }
 
 fn terms_sidecar_path(png: &Path) -> PathBuf {
@@ -220,7 +241,7 @@ where
         bail!(
             "{} is still a PLACEHOLDER — not this estudio's scan terms. \
              Generate the card from the printed Definiciones box \
-             (`lamad prepare --gen-definicion` with openai_api_key).",
+             (`lamad prepare --gen-definicion`).",
             png.display()
         );
     }
@@ -336,6 +357,492 @@ fn frac_near_white(img: &image::RgbImage, x0: u32, y0: u32, x1: u32, y1: u32) ->
     }
 }
 
+/// Local bake (no OpenAI): start from the locked gold PNG, erase prior term/body
+/// text, draw **this estudio’s** Spanish terms, write `.terms` sidecar.
+///
+/// Used when `openai_api_key` is unset. Icons stay from gold (layout chrome);
+/// chevron + body text match the scan. Prefer OpenAI reference-edit when the
+/// key **is** set (`--gen-definicion` / host image path).
+pub fn bake_definicion_card_local<'a, I>(dest: &Path, rows: I) -> Result<()>
+where
+    I: IntoIterator<Item = (&'a str, &'a str)>,
+{
+    let rows: Vec<(String, String)> = rows
+        .into_iter()
+        .map(|(t, b)| (t.trim().to_string(), b.trim().to_string()))
+        .filter(|(t, b)| !t.is_empty() || !b.is_empty())
+        .collect();
+    if rows.is_empty() {
+        bail!("bake_definicion_card_local: no terms to bake");
+    }
+    if rows.len() > 3 {
+        bail!(
+            "bake_definicion_card_local: {} terms — locked card holds at most 3 rows",
+            rows.len()
+        );
+    }
+
+    let gold_path = primary_gold_reference()?;
+    let gold = image::open(&gold_path)
+        .with_context(|| format!("open gold {}", gold_path.display()))?
+        .to_rgb8();
+    let (w, h) = gold.dimensions();
+    if w != 1408 || h != 768 {
+        // Still OK — scale geometries below from 1408×768 reference.
+    }
+    let sx = w as f32 / 1408.0;
+    let sy = h as f32 / 768.0;
+    let mut img = gold.clone();
+
+    let layouts = scaled_row_layouts(sx, sy);
+    // Wipe the entire gold card body (all 3 rows + gaps) so Amalec/Agag never
+    // ghost — then redraw only this estudio's N rows.
+    wipe_card_body_with_scenic(&mut img, &gold, sx, sy);
+    let chevron_palette: [[u8; 3]; 3] = [
+        [0, 116, 129],  // teal
+        [20, 55, 110],  // navy
+        [90, 55, 130],  // purple
+    ];
+    for (i, (term, body)) in rows.iter().enumerate() {
+        let layout = &layouts[i];
+        paint_row_card(&mut img, layout);
+        blit_row_icons(&mut img, &gold, layout);
+        let chevron = chevron_palette[i % 3];
+        paint_chevron_plate(&mut img, layout, chevron);
+        draw_term_on_chevron(&mut img, layout, term, chevron)?;
+        draw_body_text(&mut img, layout, body)?;
+    }
+
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    img.save(dest)
+        .with_context(|| format!("write baked definición {}", dest.display()))?;
+
+    // Clear placeholder sidecar if present.
+    let _ = std::fs::remove_file(PathBuf::from(format!("{}.placeholder", dest.display())));
+    if is_byte_identical_to_any_gold(dest) {
+        bail!(
+            "local bake produced a gold byte-identical PNG at {} — refuse to ship",
+            dest.display()
+        );
+    }
+    assert_locked_definicion_card(dest)?;
+    let fp = terms_fingerprint(rows.iter().map(|(t, b)| (t.as_str(), b.as_str())));
+    write_terms_sidecar(dest, &fp)?;
+    Ok(())
+}
+
+/// Bake every missing/stub/wrong DEFINICIÓN card for an adult estudio (local, no API).
+pub fn bake_adult_definicion_cards_local(
+    study: u32,
+    model: &crate::model::adult_study::AdultStudy,
+    root: &Path,
+    force: bool,
+) -> Result<usize> {
+    let media = crate::agent::prepare::adult_media_dir(study, root);
+    std::fs::create_dir_all(&media)?;
+    let mut n = 0usize;
+    for (i, tema) in model.temas.iter().enumerate() {
+        if tema.definiciones.is_empty() {
+            continue;
+        }
+        let dest = media.join(format!("definicion-{}.png", i + 1));
+        let rows: Vec<(&str, &str)> = tema
+            .definiciones
+            .iter()
+            .map(|d| (d.termino.as_str(), d.texto.as_str()))
+            .collect();
+        let fp = terms_fingerprint(rows.iter().copied());
+        if !force && keepable_definicion_card(&dest, &fp) {
+            continue;
+        }
+        crate::progress::phase(format!(
+            "definición: local bake definicion-{}.png from locked gold ({} term(s)) — \
+             no openai_api_key",
+            i + 1,
+            rows.len()
+        ));
+        bake_definicion_card_local(&dest, rows)?;
+        n += 1;
+    }
+    if n > 0 {
+        crate::progress::ok(format!(
+            "DEFINICIÓN: baked {n} card(s) locally from gold layout (estudio {study})"
+        ));
+    }
+    Ok(n)
+}
+
+struct RowLayout {
+    /// Full vertical band (for scenic cover of unused rows).
+    band_y0: u32,
+    band_y1: u32,
+    band_x0: u32,
+    band_x1: u32,
+    /// Chevron label area.
+    term_x0: u32,
+    term_x1: u32,
+    term_y0: u32,
+    term_y1: u32,
+    /// Definition body on white card.
+    body_x0: u32,
+    body_x1: u32,
+    body_y0: u32,
+    body_y1: u32,
+}
+
+fn scaled_row_layouts(sx: f32, sy: f32) -> [RowLayout; 3] {
+    let s = |x: u32, scale: f32| (x as f32 * scale).round() as u32;
+    // Measured on 1408×768 estudio-4 gold (3-row card).
+    [
+        RowLayout {
+            band_y0: s(95, sy),
+            band_y1: s(250, sy),
+            band_x0: s(70, sx),
+            band_x1: s(1320, sx),
+            // Full chevron label plate (measured white-glyph bbox on gold).
+            term_x0: s(200, sx),
+            term_x1: s(520, sx),
+            term_y0: s(140, sy),
+            term_y1: s(230, sy),
+            body_x0: s(540, sx),
+            body_x1: s(1200, sx),
+            body_y0: s(145, sy),
+            body_y1: s(235, sy),
+        },
+        RowLayout {
+            band_y0: s(270, sy),
+            band_y1: s(430, sy),
+            band_x0: s(70, sx),
+            band_x1: s(1320, sx),
+            term_x0: s(200, sx),
+            term_x1: s(520, sx),
+            term_y0: s(330, sy),
+            term_y1: s(415, sy),
+            body_x0: s(540, sx),
+            body_x1: s(1200, sx),
+            body_y0: s(330, sy),
+            body_y1: s(415, sy),
+        },
+        RowLayout {
+            band_y0: s(450, sy),
+            band_y1: s(620, sy),
+            band_x0: s(70, sx),
+            band_x1: s(1320, sx),
+            term_x0: s(200, sx),
+            term_x1: s(520, sx),
+            term_y0: s(500, sy),
+            term_y1: s(590, sy),
+            body_x0: s(540, sx),
+            body_x1: s(1200, sx),
+            body_y0: s(500, sy),
+            body_y1: s(595, sy),
+        },
+    ]
+}
+
+fn sample_chevron_color(img: &image::RgbImage, layout: &RowLayout) -> [u8; 3] {
+    let mut samples: Vec<[u8; 3]> = Vec::new();
+    for y in layout.term_y0..layout.term_y1.min(img.height()) {
+        for x in layout.term_x0.saturating_sub(40)..layout.term_x0.min(img.width()) {
+            let p = img.get_pixel(x, y).0;
+            let max = p[0].max(p[1]).max(p[2]);
+            let min = p[0].min(p[1]).min(p[2]);
+            if max - min > 40 && p[0] < 180 {
+                samples.push(p);
+            }
+        }
+    }
+    if samples.is_empty() {
+        return [40, 110, 120];
+    }
+    samples.sort_by_key(|p| (p[0] as u32) << 16 | (p[1] as u32) << 8 | p[2] as u32);
+    samples[samples.len() / 2]
+}
+
+fn wipe_card_body_with_scenic(
+    img: &mut image::RgbImage,
+    gold: &image::RgbImage,
+    sx: f32,
+    sy: f32,
+) {
+    let (w, h) = img.dimensions();
+    // One continuous wipe over the whole white-card stack (rows 1–3 + gaps).
+    let x0 = ((50.0 * sx) as u32).saturating_sub(10);
+    let x1 = ((1360.0 * sx) as u32).min(w);
+    let y0 = ((85.0 * sy) as u32).saturating_sub(8);
+    // Past the third gold row + crown icons (~y 600–700 on 768 canvas).
+    let y1 = ((720.0 * sy) as u32).min(h);
+    let src_x0 = (w * 82 / 100).min(w.saturating_sub(40));
+    let src_x1 = w.saturating_sub(8).max(src_x0 + 1);
+    let src_y0 = 16u32;
+    let src_y1 = 140u32.min(h.saturating_sub(1)).max(src_y0 + 1);
+    let bw = (x1 - x0).max(1) as f32;
+    let bh = (y1 - y0).max(1) as f32;
+    let sw = (src_x1 - src_x0) as f32;
+    let sh = (src_y1 - src_y0) as f32;
+    for y in y0..y1 {
+        let ty = (y - y0) as f32 / bh;
+        let sy = (src_y0 as f32 + ty * sh).round() as u32;
+        let sy = sy.min(h - 1);
+        for x in x0..x1 {
+            let tx = (x - x0) as f32 / bw;
+            let sx = (src_x0 as f32 + tx * sw).round() as u32;
+            let sx = sx.min(w - 1);
+            img.put_pixel(x, y, *gold.get_pixel(sx, sy));
+        }
+    }
+}
+
+fn paint_row_card(img: &mut image::RgbImage, layout: &RowLayout) {
+    let (w, h) = img.dimensions();
+    let white = image::Rgb([252, 252, 252]);
+    let x0 = layout.band_x0.saturating_add(20).min(w);
+    let x1 = layout.band_x1.saturating_sub(20).min(w);
+    let y0 = layout.band_y0.saturating_add(8).min(h);
+    let y1 = layout.band_y1.saturating_sub(8).min(h);
+    for y in y0..y1 {
+        for x in x0..x1 {
+            img.put_pixel(x, y, white);
+        }
+    }
+}
+
+fn blit_row_icons(img: &mut image::RgbImage, gold: &image::RgbImage, layout: &RowLayout) {
+    let (w, h) = img.dimensions();
+    // Left circular icon ~x 95–210; right mini-icon ~x 1210–1285 (1408 ref).
+    let strips = [
+        (95u32, 215u32),
+        (1210u32, 1290u32),
+    ];
+    for (sx0, sx1) in strips {
+        let x0 = ((sx0 as f32) * (w as f32 / 1408.0)).round() as u32;
+        let x1 = ((sx1 as f32) * (w as f32 / 1408.0)).round() as u32;
+        for y in layout.band_y0..layout.band_y1.min(h) {
+            for x in x0..x1.min(w) {
+                img.put_pixel(x, y, *gold.get_pixel(x.min(gold.width() - 1), y.min(gold.height() - 1)));
+            }
+        }
+    }
+}
+
+fn paint_chevron_plate(img: &mut image::RgbImage, layout: &RowLayout, chevron: [u8; 3]) {
+    let (w, h) = img.dimensions();
+    let fill = image::Rgb(chevron);
+    let x0 = layout.term_x0;
+    let x1 = layout.term_x1.min(w);
+    let y0 = layout.term_y0;
+    let y1 = layout.term_y1.min(h);
+    let mid_y = (y0 + y1) / 2;
+    let tip = (x1 + 28).min(w);
+    for y in y0..y1 {
+        // Arrow tip: taper the right edge toward mid_y.
+        let taper = {
+            let dy = (y as i32 - mid_y as i32).unsigned_abs();
+            let half = ((y1 - y0) / 2).max(1);
+            let t = 1.0 - (dy as f32 / half as f32);
+            ((tip - x1) as f32 * t.max(0.0)).round() as u32
+        };
+        let row_x1 = (x1 + taper).min(w);
+        for x in x0..row_x1 {
+            img.put_pixel(x, y, fill);
+        }
+    }
+}
+
+fn font_path(bold: bool) -> Result<PathBuf> {
+    let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/fonts");
+    let bundled = if bold {
+        base.join("DejaVuSans-Bold.ttf")
+    } else {
+        base.join("DejaVuSans.ttf")
+    };
+    if bundled.is_file() {
+        return Ok(bundled);
+    }
+    let candidates: &[&str] = if bold {
+        &[
+            "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ]
+    } else {
+        &[
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ]
+    };
+    for c in candidates {
+        let p = PathBuf::from(c);
+        if p.is_file() {
+            return Ok(p);
+        }
+    }
+    bail!(
+        "no TTF for definición bake (expected {} or system Arial/DejaVu)",
+        bundled.display()
+    )
+}
+
+fn draw_term_on_chevron(
+    img: &mut image::RgbImage,
+    layout: &RowLayout,
+    term: &str,
+    _chevron: [u8; 3],
+) -> Result<()> {
+    use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
+
+    let font_data = std::fs::read(font_path(true)?)?;
+    let font = FontRef::try_from_slice(&font_data).context("parse bold font")?;
+    let max_w = (layout.term_x1 - layout.term_x0).saturating_sub(12) as f32;
+    let mut size = 28.0f32;
+    let scale = loop {
+        let sc = PxScale::from(size);
+        let w = text_width(&font, sc, term);
+        if w <= max_w || size <= 16.0 {
+            break sc;
+        }
+        size -= 2.0;
+    };
+    let scaled = font.as_scaled(scale);
+    let text_h = scaled.height();
+    let x = layout.term_x0 as f32 + 8.0;
+    let y = layout.term_y0 as f32 + ((layout.term_y1 - layout.term_y0) as f32 - text_h) / 2.0;
+    draw_text_line(img, &font, scale, x, y, term, [255, 255, 255]);
+    Ok(())
+}
+
+fn draw_body_text(img: &mut image::RgbImage, layout: &RowLayout, body: &str) -> Result<()> {
+    use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
+
+    let font_data = std::fs::read(font_path(false)?)?;
+    let font = FontRef::try_from_slice(&font_data).context("parse regular font")?;
+    let max_w = (layout.body_x1 - layout.body_x0).saturating_sub(8) as f32;
+    let mut size = 22.0f32;
+    let scale = PxScale::from(size);
+    let mut lines = wrap_text(&font, scale, body, max_w);
+    while lines.len() > 3 && size > 14.0 {
+        size -= 1.0;
+        lines = wrap_text(&font, PxScale::from(size), body, max_w);
+    }
+    let scale = PxScale::from(size);
+    let scaled = font.as_scaled(scale);
+    let line_h = scaled.height() + 4.0;
+    let mut y = layout.body_y0 as f32 + 6.0;
+    for line in lines.iter().take(3) {
+        draw_text_line(
+            img,
+            &font,
+            scale,
+            layout.body_x0 as f32 + 4.0,
+            y,
+            line,
+            [20, 20, 20],
+        );
+        y += line_h;
+    }
+    Ok(())
+}
+
+fn text_width(font: &ab_glyph::FontRef<'_>, scale: ab_glyph::PxScale, text: &str) -> f32 {
+    use ab_glyph::{Font, ScaleFont};
+    let scaled = font.as_scaled(scale);
+    let mut w = 0.0f32;
+    let mut prev: Option<ab_glyph::GlyphId> = None;
+    for ch in text.chars() {
+        let gid = font.glyph_id(ch);
+        if let Some(p) = prev {
+            w += scaled.kern(p, gid);
+        }
+        w += scaled.h_advance(gid);
+        prev = Some(gid);
+    }
+    w
+}
+
+fn wrap_text(
+    font: &ab_glyph::FontRef<'_>,
+    scale: ab_glyph::PxScale,
+    text: &str,
+    max_w: f32,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut cur = String::new();
+    for word in text.split_whitespace() {
+        let trial = if cur.is_empty() {
+            word.to_string()
+        } else {
+            format!("{cur} {word}")
+        };
+        if text_width(font, scale, &trial) <= max_w || cur.is_empty() {
+            cur = trial;
+        } else {
+            lines.push(cur);
+            cur = word.to_string();
+        }
+    }
+    if !cur.is_empty() {
+        lines.push(cur);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+fn draw_text_line(
+    img: &mut image::RgbImage,
+    font: &ab_glyph::FontRef<'_>,
+    scale: ab_glyph::PxScale,
+    x: f32,
+    y: f32,
+    text: &str,
+    color: [u8; 3],
+) {
+    use ab_glyph::{Font, Glyph, Point, ScaleFont};
+    let scaled = font.as_scaled(scale);
+    let mut caret = x;
+    let mut prev: Option<ab_glyph::GlyphId> = None;
+    for ch in text.chars() {
+        let gid = font.glyph_id(ch);
+        if let Some(p) = prev {
+            caret += scaled.kern(p, gid);
+        }
+        let glyph = Glyph {
+            id: gid,
+            scale,
+            position: Point { x: caret, y: y + scaled.ascent() },
+        };
+        if let Some(outlined) = font.outline_glyph(glyph) {
+            let bounds = outlined.px_bounds();
+            outlined.draw(|gx, gy, cov| {
+                if cov < 0.05 {
+                    return;
+                }
+                let px = bounds.min.x as i32 + gx as i32;
+                let py = bounds.min.y as i32 + gy as i32;
+                if px < 0 || py < 0 {
+                    return;
+                }
+                let (px, py) = (px as u32, py as u32);
+                if px >= img.width() || py >= img.height() {
+                    return;
+                }
+                let base = img.get_pixel(px, py).0;
+                let a = cov.clamp(0.0, 1.0);
+                let blended = [
+                    ((color[0] as f32) * a + (base[0] as f32) * (1.0 - a)).round() as u8,
+                    ((color[1] as f32) * a + (base[1] as f32) * (1.0 - a)).round() as u8,
+                    ((color[2] as f32) * a + (base[2] as f32) * (1.0 - a)).round() as u8,
+                ];
+                img.put_pixel(px, py, image::Rgb(blended));
+            });
+        }
+        caret += scaled.h_advance(gid);
+        prev = Some(gid);
+    }
+}
+
 /// Prompt block for image models — layout frozen; text + icons only.
 pub fn locked_layout_edit_prompt(tema_titulo: &str, rows_block: &str) -> String {
     format!(
@@ -425,6 +932,90 @@ mod tests {
             msg.contains("gold") || msg.contains("verbatim copy"),
             "expected gold rejection, got: {msg}"
         );
+    }
+
+    #[test]
+    fn local_bake_passes_study_terms_qc() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("definicion-1.png");
+        bake_definicion_card_local(
+            &dest,
+            [
+                (
+                    "Que mora entre los querubines",
+                    "Sobre el arca del pacto se colocaron dos querubines de oro.",
+                ),
+                (
+                    "Pérez-Uza",
+                    "Literalmente, significa el quebrantamiento de Uza.",
+                ),
+            ],
+        )
+        .expect("local bake");
+        assert_study_definicion_card(
+            &dest,
+            [
+                (
+                    "Que mora entre los querubines",
+                    "Sobre el arca del pacto se colocaron dos querubines de oro.",
+                ),
+                (
+                    "Pérez-Uza",
+                    "Literalmente, significa el quebrantamiento de Uza.",
+                ),
+            ],
+        )
+        .expect("study terms QC after bake");
+        assert!(!is_byte_identical_to_any_gold(&dest));
+    }
+
+    /// `LAMAD_BAKE_ESTUDIO=8 cargo test bake_estudio_definicion_env -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bake_estudio_definicion_env() {
+        let n: u32 = std::env::var("LAMAD_BAKE_ESTUDIO")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .expect("set LAMAD_BAKE_ESTUDIO");
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("repo root")
+            .to_path_buf();
+        let model = crate::content::load_adult_sections(n).expect("load sections");
+        bake_adult_definicion_cards_local(n, &model, &root, true).expect("bake");
+    }
+
+    /// Stamp `.terms` + assert QC for existing PNGs (no redraw).
+    /// `LAMAD_BAKE_ESTUDIO=8 cargo test stamp_estudio_definicion_terms -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn stamp_estudio_definicion_terms() {
+        let n: u32 = std::env::var("LAMAD_BAKE_ESTUDIO")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .expect("set LAMAD_BAKE_ESTUDIO");
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("repo root")
+            .to_path_buf();
+        let model = crate::content::load_adult_sections(n).expect("load sections");
+        let media = crate::agent::prepare::adult_media_dir(n, &root);
+        for (i, tema) in model.temas.iter().enumerate() {
+            if tema.definiciones.is_empty() {
+                continue;
+            }
+            let dest = media.join(format!("definicion-{}.png", i + 1));
+            let rows: Vec<(&str, &str)> = tema
+                .definiciones
+                .iter()
+                .map(|d| (d.termino.as_str(), d.texto.as_str()))
+                .collect();
+            let fp = terms_fingerprint(rows.iter().copied());
+            write_terms_sidecar(&dest, &fp).expect("terms");
+            crate::content::note_real_image(&dest);
+            assert_study_definicion_card(&dest, rows.iter().copied())
+                .unwrap_or_else(|e| panic!("{}: {e:#}", dest.display()));
+        }
     }
 
     #[test]

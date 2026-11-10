@@ -215,16 +215,21 @@ pub fn required_images_present(study: u32, audience: Audience, root: &Path) -> b
             p.img1.is_file() && p.img2.is_file() && p.img3.is_file()
         }
         Audience::Adult => {
-            let paths = expected_paths(study, Audience::Adult, root);
-            let _ = normalize_adult_agent_json(&paths.json);
-            let Ok(text) = std::fs::read_to_string(&paths.json) else {
+            let model = if crate::content::has_adult_sections(study) {
+                crate::content::load_adult_sections(study).ok()
+            } else {
+                let paths = expected_paths(study, Audience::Adult, root);
+                let _ = normalize_adult_agent_json(&paths.json);
+                std::fs::read_to_string(&paths.json)
+                    .ok()
+                    .and_then(|t| serde_json::from_str(&t).ok())
+            };
+            let Some(model) = model else {
                 return false;
             };
-            let Ok(model) =
-                serde_json::from_str::<crate::model::adult_study::AdultStudy>(&text)
-            else {
+            if crate::content::any_scenic_placeholders(study, &model, root) {
                 return false;
-            };
+            }
             let media = adult_media_dir(study, root);
             adult_scenic_basenames_for(&model)
                 .iter()
@@ -399,27 +404,34 @@ fn verify_youth_deliverables(study: u32, root: &Path) -> Result<Deliverables> {
 
 fn verify_adult_deliverables(study: u32, root: &Path) -> Result<Deliverables> {
     let paths = expected_paths(study, Audience::Adult, root);
-    if !paths.json.exists() {
-        bail!("deliverable missing: {}", paths.json.display());
-    }
-    let _ = normalize_adult_agent_json(&paths.json)?;
-    let text = std::fs::read_to_string(&paths.json)?;
-    let study_model: crate::model::adult_study::AdultStudy = serde_json::from_str(&text)
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "{} is not valid adult study JSON ({e}). \
-                 Need lectura_antifonal, objetivos, pensamiento_central, texto_aureo, \
-                 ensenanza, datos_generales, introduccion_slides, temas[1+] with \
-                 puntos A…N (or legacy A/B keys), proximo.",
+    // Prefer section folder tree (incremental prepare); fall back to JSON.
+    let study_model: crate::model::adult_study::AdultStudy =
+        if crate::content::has_adult_sections(study) {
+            crate::content::load_adult_sections(study)?
+        } else if paths.json.exists() {
+            let _ = normalize_adult_agent_json(&paths.json)?;
+            let text = std::fs::read_to_string(&paths.json)?;
+            serde_json::from_str(&text).map_err(|e| {
+                anyhow::anyhow!(
+                    "{} is not valid adult study JSON ({e}). \
+                     Need lectura_antifonal, objetivos, pensamiento_central, texto_aureo, \
+                     ensenanza, datos_generales, introduccion_slides, temas[1+] with \
+                     puntos A…N (or legacy A/B keys), proximo.",
+                    paths.json.display()
+                )
+            })?
+        } else {
+            bail!(
+                "adult estudio {study}: need studies/adult/{study}/ (section folders) \
+                 or {}",
                 paths.json.display()
-            )
-        })?;
+            );
+        };
     if study_model.numero.to_string() != study.to_string()
         && !study_model.numero.to_string().contains(&study.to_string())
     {
         bail!(
-            "{} numero is {:?}, expected {study}",
-            paths.json.display(),
+            "adult estudio {study}: numero is {:?}, expected {study}",
             study_model.numero
         );
     }
@@ -468,50 +480,61 @@ fn verify_adult_deliverables(study: u32, root: &Path) -> Result<Deliverables> {
             missing_scenic.join("\n  ")
         );
     }
-    let mut missing_def = Vec::new();
+    // Scenic stubs block resume (need Cursor/host art). Definición stubs do NOT —
+    // local gold bake / --gen-definicion fills them (OpenAI only if key set).
+    if crate::content::any_scenic_placeholders(study, &study_model, root) {
+        bail!(
+            "adult estudio {study}: PLACEHOLDER scenic image(s) remain under {} — \
+             not ready to resume/build. Re-run with -g (Cursor generates unique scenes) \
+             or set openai_api_key and --gen-images.",
+            media.display()
+        );
+    }
+    let mut missing_or_stub_def = Vec::new();
     for (i, tema) in study_model.temas.iter().enumerate() {
         if tema.definiciones.is_empty() {
             continue;
         }
         let name = format!("definicion-{}.png", i + 1);
         let p = media.join(&name);
-        if !p.exists() {
-            missing_def.push(name);
+        if !p.exists() || crate::content::is_placeholder(&p) {
+            missing_or_stub_def.push(name);
             continue;
         }
-        crate::build::adult::assert_study_definicion_card(
+        if let Err(e) = crate::build::adult::assert_study_definicion_card(
             &p,
             tema.definiciones
                 .iter()
                 .map(|d| (d.termino.as_str(), d.texto.as_str())),
-        )
-        .with_context(|| {
-            format!(
-                "adult estudio {study}: {name} rejected — must show THIS study's scan \
-                 Definiciones (not gold / prior-study leftovers). Fix: delete {name} and \
-                 `lamad prepare -n {study} --audience adult --gen-definicion`"
-            )
-        })?;
+        ) {
+            crate::progress::warn(format!(
+                "adult estudio {study}: {name} failed locked-layout QC ({e:#}) — \
+                 build will omit that Definición slide; fix with --gen-definicion \
+                 (OpenAI if key set, else local gold bake)"
+            ));
+            missing_or_stub_def.push(name);
+        }
     }
-    if !missing_def.is_empty() {
+    if !missing_or_stub_def.is_empty() {
         crate::progress::warn(format!(
-            "adult estudio {study}: definición cards missing on disk ({}) — \
-             OK only if that tema has no «Definiciones y etimología» box (then \
-             clear definiciones in JSON); otherwise generate the card PNG",
-            missing_def.join(", ")
+            "adult estudio {study}: definición card(s) not ready ({}) — \
+             deck omits those slides until `lamad prepare -n {study} \
+             --audience adult --gen-definicion` (Cursor gold-edit by default; \
+             OpenAI if openai_api_key is set)",
+            missing_or_stub_def.join(", ")
         ));
     }
     Ok(paths)
 }
 
-/// Strip / coerce agent-authored image path quirks **before** schema parse.
+/// Strip / coerce agent-authored quirks **before** schema parse.
 ///
-/// Cloud agents often invent:
-/// - `definicion_images` as `{"1":"…","2":"…"}` instead of an array
-/// - `scenic_images` as a flat basename map (`intro-header`, `ab-1A`, …)
+/// Cloud agents often invent shapes that are content-complete but schema-wrong:
+/// - `estudio` instead of `numero`; `lectura_slides` instead of `lectura_antifonal`
+/// - legacy `A`/`B`/`C` blocks missing `texto_biblico` (lives on tema as slides)
+/// - `definiciones` as bare strings; image maps instead of arrays
+/// - youth leftovers (`section_images`, `packed_slides`, …)
 ///
-/// Host [`stamp_adult_image_paths`] writes the canonical shapes. Removing junk
-/// here keeps prepare from failing on mature content that is otherwise valid.
 /// Returns `true` when the file was rewritten.
 pub fn normalize_adult_agent_json(json_path: &Path) -> Result<bool> {
     let text = std::fs::read_to_string(json_path)?;
@@ -520,6 +543,51 @@ pub fn normalize_adult_agent_json(json_path: &Path) -> Result<bool> {
         bail!("{} root must be an object", json_path.display());
     };
     let mut changed = false;
+
+    // estudio → numero
+    if obj.get("numero").is_none() {
+        if let Some(est) = obj.remove("estudio") {
+            obj.insert("numero".into(), est);
+            changed = true;
+        }
+    } else if obj.remove("estudio").is_some() {
+        changed = true;
+    }
+
+    // lectura_slides → lectura_antifonal [{cita, versiculos}]
+    if obj.get("lectura_antifonal").is_none() {
+        if let Some(slides) = obj.remove("lectura_slides") {
+            if let Some(block) = coerce_slide_strings_to_lectura(&slides) {
+                obj.insert(
+                    "lectura_antifonal".into(),
+                    serde_json::Value::Array(vec![block]),
+                );
+                changed = true;
+            }
+        }
+    } else if obj.remove("lectura_slides").is_some() {
+        changed = true;
+    }
+
+    // Clean datos_generales of agent extras (enseñanza duplicated under ensenanza).
+    if let Some(serde_json::Value::Object(datos)) = obj.get_mut("datos_generales") {
+        for junk in ["enseñanza", "ensenanza", "enseñaza"] {
+            if datos.remove(junk).is_some() {
+                changed = true;
+            }
+        }
+    }
+
+    if let Some(serde_json::Value::Array(temas)) = obj.get_mut("temas") {
+        for tema in temas.iter_mut() {
+            let Some(tema_obj) = tema.as_object_mut() else {
+                continue;
+            };
+            if coerce_tema_agent_shape(tema_obj) {
+                changed = true;
+            }
+        }
+    }
 
     if let Some(def) = obj.get("definicion_images") {
         match def {
@@ -561,8 +629,12 @@ pub fn normalize_adult_agent_json(json_path: &Path) -> Result<bool> {
         }
     }
 
-    // Youth leftovers some agents paste into adult JSON — harmless but noisy.
-    for junk in ["section_images", "section_style"] {
+    for junk in [
+        "section_images",
+        "section_style",
+        "packed_slides",
+        "tema_trimestral",
+    ] {
         if obj.remove(junk).is_some() {
             changed = true;
         }
@@ -572,6 +644,201 @@ pub fn normalize_adult_agent_json(json_path: &Path) -> Result<bool> {
         std::fs::write(json_path, serde_json::to_string_pretty(&v)?)?;
     }
     Ok(changed)
+}
+
+/// Convert agent slide strings / verse arrays into `{cita, versiculos}`.
+fn coerce_slide_strings_to_lectura(v: &serde_json::Value) -> Option<serde_json::Value> {
+    match v {
+        serde_json::Value::Object(o)
+            if o.contains_key("cita") && o.contains_key("versiculos") =>
+        {
+            Some(v.clone())
+        }
+        serde_json::Value::Array(arr) if !arr.is_empty() => {
+            let mut cita = String::new();
+            let mut versiculos: Vec<String> = Vec::new();
+            for item in arr {
+                match item {
+                    serde_json::Value::String(s) => {
+                        for line in s.lines().map(str::trim).filter(|l| !l.is_empty()) {
+                            let starts_verse = line
+                                .chars()
+                                .next()
+                                .map(|c| c.is_ascii_digit())
+                                .unwrap_or(false);
+                            if cita.is_empty() && !starts_verse {
+                                cita = line.to_string();
+                            } else {
+                                versiculos.push(line.to_string());
+                            }
+                        }
+                    }
+                    serde_json::Value::Object(o) => {
+                        if cita.is_empty() {
+                            if let Some(c) = o.get("cita").and_then(|x| x.as_str()) {
+                                cita = c.to_string();
+                            }
+                        }
+                        if let Some(vs) = o.get("versiculos").and_then(|x| x.as_array()) {
+                            for v in vs {
+                                if let Some(s) = v.as_str() {
+                                    versiculos.push(s.to_string());
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if cita.is_empty() && versiculos.is_empty() {
+                return None;
+            }
+            if cita.is_empty() {
+                cita = versiculos
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "Texto".into());
+            }
+            Some(serde_json::json!({ "cita": cita, "versiculos": versiculos }))
+        }
+        _ => None,
+    }
+}
+
+fn coerce_definicion_entry(v: &serde_json::Value) -> Option<serde_json::Value> {
+    match v {
+        serde_json::Value::Object(o)
+            if o.get("termino").and_then(|x| x.as_str()).is_some()
+                && o.get("texto").and_then(|x| x.as_str()).is_some() =>
+        {
+            Some(v.clone())
+        }
+        serde_json::Value::String(s) => {
+            let s = s.trim();
+            // `"Term". Body…` or `Term. Body…`
+            let (termino, texto) = if let Some(rest) = s.strip_prefix('"') {
+                if let Some(end) = rest.find('"') {
+                    let term = rest[..end].trim().to_string();
+                    let body = rest[end + 1..]
+                        .trim()
+                        .trim_start_matches('.')
+                        .trim()
+                        .to_string();
+                    (term, body)
+                } else {
+                    (s.to_string(), String::new())
+                }
+            } else if let Some((term, body)) = s.split_once('.') {
+                (term.trim().to_string(), body.trim().to_string())
+            } else {
+                (s.to_string(), String::new())
+            };
+            Some(serde_json::json!({ "termino": termino, "texto": texto }))
+        }
+        _ => None,
+    }
+}
+
+/// Rewrite one tema object: string defs; coerce A–F / puntos texto_biblico.
+///
+/// **HARD (gold estudio 8):** never copy tema-wide Lectura into every point.
+/// TEMA image uses `rango`; each A/B image + Texto Bíblico uses that point’s
+/// own verses only.
+fn coerce_tema_agent_shape(tema: &mut serde_json::Map<String, serde_json::Value>) -> bool {
+    let mut changed = false;
+
+    // definiciones: string[] → {termino,texto}[]
+    if let Some(serde_json::Value::Array(defs)) = tema.get("definiciones").cloned() {
+        let mut out = Vec::new();
+        let mut any = false;
+        for d in &defs {
+            if let Some(c) = coerce_definicion_entry(d) {
+                if !d.is_object()
+                    || d.get("termino").is_none()
+                    || d.get("texto").is_none()
+                {
+                    any = true;
+                }
+                out.push(c);
+            }
+        }
+        if any || out.len() != defs.len() {
+            tema.insert("definiciones".into(), serde_json::Value::Array(out));
+            changed = true;
+        }
+    }
+
+    // Tema-level texto_biblico / slides are not part of TemaAdult — drop them.
+    // Do **not** inject into A/B (that made every Texto Bíblico show the full
+    // TEMA range, e.g. `2 Samuel 6:1-11` on 1.A instead of `6:1,2`).
+    if tema.remove("texto_biblico_slides").is_some() {
+        changed = true;
+    }
+    match tema.get("texto_biblico") {
+        Some(serde_json::Value::Object(_)) | Some(serde_json::Value::Array(_)) => {
+            tema.remove("texto_biblico");
+            changed = true;
+        }
+        _ => {}
+    }
+
+    let empty_tb = serde_json::json!({ "cita": "", "versiculos": [] });
+
+    // Legacy A–F blocks: coerce shape only — never fill from tema rango.
+    for letter in ["A", "B", "C", "D", "E", "F"] {
+        let Some(block) = tema.get_mut(letter) else {
+            continue;
+        };
+        let Some(bobj) = block.as_object_mut() else {
+            continue;
+        };
+        match bobj.get("texto_biblico") {
+            Some(serde_json::Value::Object(_)) => {}
+            Some(other) => {
+                if let Some(c) = coerce_slide_strings_to_lectura(other) {
+                    bobj.insert("texto_biblico".into(), c);
+                } else {
+                    bobj.insert("texto_biblico".into(), empty_tb.clone());
+                }
+                changed = true;
+            }
+            None => {
+                bobj.insert("texto_biblico".into(), empty_tb.clone());
+                changed = true;
+            }
+        }
+    }
+
+    // puntos[]: same — coerce only, no tema-wide inject.
+    if let Some(serde_json::Value::Array(puntos)) = tema.get_mut("puntos") {
+        for p in puntos.iter_mut() {
+            let Some(pobj) = p.as_object_mut() else {
+                continue;
+            };
+            match pobj.get("texto_biblico") {
+                Some(serde_json::Value::Object(_)) => {}
+                Some(other) => {
+                    if let Some(c) = coerce_slide_strings_to_lectura(other) {
+                        pobj.insert("texto_biblico".into(), c);
+                    } else {
+                        pobj.insert("texto_biblico".into(), empty_tb.clone());
+                    }
+                    changed = true;
+                }
+                None => {
+                    pobj.insert("texto_biblico".into(), empty_tb.clone());
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    // Drop tema.numero (not in schema)
+    if tema.remove("numero").is_some() {
+        changed = true;
+    }
+
+    changed
 }
 
 /// Write `scenic_images` + `definicion_images` paths into adult JSON after PNGs land.
@@ -939,7 +1206,7 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
                     "Cloud agent is writing JSON + 3 section images (~3–8 min)…"
                 }
                 Audience::Adult => {
-                    "Cloud agent is writing JSON + scenic/definición images (~5–15 min)…"
+                    "Cloud agent is writing section folders (then images) — progress per section…"
                 }
             }
         },
@@ -989,7 +1256,23 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
         );
     }
 
-    if !artifact_list_has_study_json(req.study, &artifacts) {
+    // Adult: NEVER nudge for monolith JSON. Section folders are the deliverable.
+    if req.audience == Audience::Adult {
+        if !artifact_list_has_adult_section_tree(req.study, &artifacts) {
+            artifacts = ensure_adult_section_tree_artifact(
+                &client,
+                &created.agent.id,
+                req.study,
+                &artifacts,
+                req.stream,
+            )
+            .await?;
+        } else {
+            crate::progress::info(
+                "adult section tree present in artifacts — skipping JSON follow-up",
+            );
+        }
+    } else if !artifact_list_has_study_json(req.study, &artifacts) {
         artifacts = ensure_study_json_artifact(
             &client,
             &created.agent.id,
@@ -1012,34 +1295,31 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
         .map(|k| !k.trim().is_empty())
         .unwrap_or(false);
 
-    let resolved = if host_images {
-        // OpenAI host path: never wait on Cursor for image files.
-        vec![resolve_json_artifact(req.study, &artifacts, &dest)?]
-    } else {
-        match req.audience {
-            Audience::Youth => match resolve_artifacts(req.study, &artifacts, &dest) {
-                Ok(r) => r,
-                Err(e) => {
-                    if can_host && artifact_list_has_study_json(req.study, &artifacts) {
-                        crate::progress::warn(format!(
-                            "agent section images incomplete ({e:#}); \
-                             downloading JSON and generating images via OpenAI…"
-                        ));
-                        vec![resolve_json_artifact(req.study, &artifacts, &dest)?]
-                    } else if artifact_list_has_study_json(req.study, &artifacts) {
-                        crate::progress::warn(format!(
-                            "agent section images incomplete ({e:#}); \
-                             downloading JSON — placeholders will fill gaps"
-                        ));
-                        vec![resolve_json_artifact(req.study, &artifacts, &dest)?]
-                    } else {
-                        return Err(e);
-                    }
-                }
-            },
-            // Cursor image path: take whatever art Cursor returned; placeholders fill gaps.
-            Audience::Adult => resolve_adult_artifacts(req.study, &artifacts, &req.root)?,
+    let resolved = match req.audience {
+        Audience::Adult => resolve_adult_artifacts(req.study, &artifacts, &req.root)?,
+        Audience::Youth if host_images => {
+            vec![resolve_json_artifact(req.study, &artifacts, &dest)?]
         }
+        Audience::Youth => match resolve_artifacts(req.study, &artifacts, &dest) {
+            Ok(r) => r,
+            Err(e) => {
+                if can_host && artifact_list_has_study_json(req.study, &artifacts) {
+                    crate::progress::warn(format!(
+                        "agent section images incomplete ({e:#}); \
+                         downloading JSON and generating images via OpenAI…"
+                    ));
+                    vec![resolve_json_artifact(req.study, &artifacts, &dest)?]
+                } else if artifact_list_has_study_json(req.study, &artifacts) {
+                    crate::progress::warn(format!(
+                        "agent section images incomplete ({e:#}); \
+                         downloading JSON — placeholders will fill gaps"
+                    ));
+                    vec![resolve_json_artifact(req.study, &artifacts, &dest)?]
+                } else {
+                    return Err(e);
+                }
+            }
+        },
     };
 
     crate::progress::now_step(
@@ -1065,15 +1345,46 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
     )
     .await?;
 
-    stamp_audience(&dest.json, req.audience)?;
     if req.audience == Audience::Adult {
-        let _ = normalize_adult_agent_json(&dest.json)?;
-        stamp_adult_image_paths(&dest.json, req.study, &req.root)?;
-        // Placeholders first → deck can build immediately; host art optional.
-        let text = std::fs::read_to_string(&dest.json)?;
-        let model: crate::model::adult_study::AdultStudy = serde_json::from_str(&text)
-            .with_context(|| format!("parse {} for placeholders", dest.json.display()))?;
-        crate::content::ensure_adult_placeholders(req.study, &model, &req.root)?;
+        if crate::content::has_adult_sections(req.study) {
+            let model = crate::content::load_adult_sections(req.study).with_context(|| {
+                format!(
+                    "adult estudio {}: section folders on disk but failed to load — \
+                     check studies/adult/{}/",
+                    req.study, req.study
+                )
+            })?;
+            crate::content::ensure_adult_placeholders(req.study, &model, &req.root)?;
+            // Sidecar JSON from sections (overwrite broken agent JSON).
+            if let Ok(text) = serde_json::to_string_pretty(&model) {
+                let _ = std::fs::write(&dest.json, text);
+            }
+        } else if dest.json.is_file() {
+            // Legacy JSON path only when no section tree landed.
+            let _ = normalize_adult_agent_json(&dest.json)?;
+            stamp_audience(&dest.json, req.audience)?;
+            stamp_adult_image_paths(&dest.json, req.study, &req.root)?;
+            let text = std::fs::read_to_string(&dest.json)?;
+            let model: crate::model::adult_study::AdultStudy = serde_json::from_str(&text)
+                .with_context(|| {
+                    format!(
+                        "parse {} for placeholders — prefer section folders under \
+                         studies/adult/{}/ (delete this JSON and re-run to resume)",
+                        dest.json.display(),
+                        req.study
+                    )
+                })?;
+            crate::content::ensure_adult_placeholders(req.study, &model, &req.root)?;
+        } else {
+            bail!(
+                "adult estudio {}: no section tree under studies/adult/{}/ and no JSON. \
+                 Re-run prepare to resume.",
+                req.study,
+                req.study
+            );
+        }
+    } else {
+        stamp_audience(&dest.json, req.audience)?;
     }
 
     // Youth: host images here when configured.
@@ -1102,12 +1413,20 @@ async fn run_prepare_cursor(req: PrepareRequest) -> Result<Deliverables> {
 
 fn json_followup_nudge(study: u32, audience: Audience, host_images: bool) -> String {
     if host_images {
-        return format!(
-            "STOP. Zero artifacts listed. Write **only** `artifacts/{study}.json` \
-             (valid {aud} schema). Do **not** generate images — the host CLI does that. \
-             Use Write/Shell tools; chat text does not count.",
-            aud = audience.as_str()
-        );
+        return match audience {
+            Audience::Adult => format!(
+                "STOP. Zero artifacts listed. Write the adult **section folder tree** under \
+                 `artifacts/{study}/` (`manifest.toml`, then `01-title/`, `02-lectura/`, … \
+                 one folder at a time). Do **not** generate images — the host CLI does that. \
+                 Use Write/Shell tools; chat text does not count."
+            ),
+            Audience::Youth => format!(
+                "STOP. Zero artifacts listed. Write **only** `artifacts/{study}.json` \
+                 (valid {aud} schema). Do **not** generate images — the host CLI does that. \
+                 Use Write/Shell tools; chat text does not count.",
+                aud = audience.as_str()
+            ),
+        };
     }
     match audience {
         Audience::Youth => format!(
@@ -1120,8 +1439,10 @@ fn json_followup_nudge(study: u32, audience: Audience, host_images: bool) -> Str
              Use Write/Shell/image tools — chat text does not count."
         ),
         Audience::Adult => format!(
-            "STOP. Zero artifacts listed. Write `artifacts/{study}.json` (adult schema) \
-             plus these exact PNG basenames under `artifacts/`: {names}. \
+            "STOP. Zero artifacts listed. Write the adult **section folder tree** under \
+             `artifacts/{study}/` starting with `manifest.toml` then `01-title/`, \
+             `02-lectura/`, … (one folder at a time). Also scenic PNGs under \
+             `artifacts/{study}/images/` or flat `artifacts/`: {names}. \
              Use Write/Shell/image tools — chat text does not count.",
             names = adult_image_basenames().join(", ")
         ),
@@ -1216,7 +1537,7 @@ async fn download_resolved_artifacts(
                             }
                             crate::progress::warn(
                                 "Cursor DEFINICIÓN was a gold-reference copy (wrong-study \
-                                 terms) — deleted; stub/placeholder until --gen-definicion",
+                                 terms) — deleted; local gold bake will fill from this scan",
                             );
                             bar.inc(1);
                             return Ok(());
@@ -1232,20 +1553,20 @@ async fn download_resolved_artifacts(
                             }
                             crate::progress::warn(format!(
                                 "Cursor DEFINICIÓN art rejected by locked-layout QC ({}) — \
-                                 stub will fill it; regenerate with --gen-definicion \
-                                 (needs openai_api_key) from THIS estudio's scan terms",
+                                 deleted; local gold bake (or OpenAI --gen-definicion if key set) \
+                                 will fill from THIS estudio's scan terms",
                                 short_err(&e)
                             ));
                             bar.inc(1);
                             return Ok(());
                         }
                         // Layout OK from Cursor still has no proven term match —
-                        // do NOT stamp .terms here. Build requires --gen-definicion
-                        // (OpenAI edit + sidecar) or an explicit verified stamp.
+                        // remove so local bake / --gen-definicion writes correct
+                        // scan terms + .terms sidecar (never trust agent text alone).
+                        let _ = std::fs::remove_file(&dest_path);
                         crate::progress::warn(format!(
-                            "{} passed layout QC but has no terms sidecar yet — \
-                             run --gen-definicion so baked text matches this scan \
-                             (never reuse prior-study cards)",
+                            "Cursor {} passed layout QC but has no terms proof — \
+                             removed; local bake will redraw this estudio's Definiciones",
                             dest_path
                                 .file_name()
                                 .and_then(|n| n.to_str())
@@ -1286,8 +1607,55 @@ fn resolve_adult_artifacts(
 ) -> Result<Vec<(String, PathBuf)>> {
     let dest_json = expected_paths(study, Audience::Adult, root).json;
     let media = adult_media_dir(study, root);
+    let study_dir = crate::content::adult_study_folder(study)?;
     let mut out: Vec<(String, PathBuf)> = Vec::new();
     let mut used = vec![false; artifacts.len()];
+
+    // Prefer incremental section tree: artifacts/{N}/manifest.toml + NN-kind/…
+    let tree_prefix = format!("artifacts/{study}/");
+    let tree_prefix_alt = format!("{study}/");
+    let mut section_files = 0usize;
+    for (idx, art) in artifacts.iter().enumerate() {
+        let path = art.path.replace('\\', "/");
+        let rel = path
+            .strip_prefix(&tree_prefix)
+            .or_else(|| path.strip_prefix(&tree_prefix_alt));
+        let Some(rel) = rel else {
+            continue;
+        };
+        if rel.is_empty() || rel.ends_with('/') {
+            continue;
+        }
+        used[idx] = true;
+        section_files += 1;
+        out.push((art.path.clone(), study_dir.join(rel)));
+    }
+    if section_files > 0 {
+        crate::progress::info(format!(
+            "adult prepare: downloading {section_files} section-tree file(s) → studies/adult/{study}/"
+        ));
+        // Also map any flat scenic/definición images still under artifacts/.
+        for (idx, art) in artifacts.iter().enumerate() {
+            if used[idx] {
+                continue;
+            }
+            let basename = art.path.rsplit('/').next().unwrap_or(&art.path);
+            let lower = basename.to_lowercase();
+            let (file_stem, ext) = match lower.rsplit_once('.') {
+                Some(pair) => pair,
+                None => continue,
+            };
+            if !matches!(ext, "png" | "jpg" | "jpeg" | "webp") {
+                continue;
+            }
+            let Some(dest_name) = adult_media_dest_from_stem(file_stem, study) else {
+                continue;
+            };
+            used[idx] = true;
+            out.push((art.path.clone(), media.join(dest_name)));
+        }
+        return Ok(out);
+    }
 
     let json_name = format!("{study}.json");
     for (idx, art) in artifacts.iter().enumerate() {
@@ -1301,7 +1669,8 @@ fn resolve_adult_artifacts(
     }
     if out.is_empty() {
         bail!(
-            "adult prepare missing artifacts/{study}.json (found {} artifacts)",
+            "adult prepare missing section tree artifacts/{study}/… \
+             (or legacy artifacts/{study}.json). Found {} artifacts.",
             artifacts.len()
         );
     }
@@ -1417,6 +1786,54 @@ fn artifact_list_has_study_json(study: u32, artifacts: &[Artifact]) -> bool {
     })
 }
 
+/// Complete enough to skip section follow-ups: manifest + tema header + point.
+/// Front-matter-only stubs (title→texto-aureo) must NOT skip — that aborted
+/// estudio 11 after a title-page-only extract.
+fn artifact_list_has_adult_section_tree(study: u32, artifacts: &[Artifact]) -> bool {
+    let prefix = format!("artifacts/{study}/");
+    let prefix_alt = format!("{study}/");
+    let mut has_manifest = false;
+    let mut has_tema_header = false;
+    let mut has_tema_point = false;
+    for a in artifacts {
+        let path = a.path.replace('\\', "/");
+        let rel = path
+            .strip_prefix(&prefix)
+            .or_else(|| path.strip_prefix(&prefix_alt));
+        let Some(rel) = rel else {
+            continue;
+        };
+        // images/ alone is NOT a section tree (was falsely skipping text follow-ups).
+        let top = rel.split('/').next().unwrap_or(rel);
+        if top == "images" {
+            continue;
+        }
+        if top == "manifest.toml" || rel.starts_with("manifest.toml") {
+            has_manifest = true;
+            continue;
+        }
+        // Section folders look like `01-title/…` or `10-tema-1-A/body.txt`.
+        let looks_section = top.len() >= 4
+            && top.as_bytes().get(0).is_some_and(|c| c.is_ascii_digit())
+            && top.as_bytes().get(1).is_some_and(|c| c.is_ascii_digit())
+            && top.as_bytes().get(2) == Some(&b'-');
+        if !looks_section {
+            continue;
+        }
+        let Some((_, kind)) = top.split_once('-') else {
+            continue;
+        };
+        if let Some(rest) = kind.strip_prefix("tema-") {
+            if rest.contains('-') {
+                has_tema_point = true;
+            } else if !rest.is_empty() {
+                has_tema_header = true;
+            }
+        }
+    }
+    has_manifest && has_tema_header && has_tema_point
+}
+
 fn json_artifact_candidate_paths(study: u32) -> Vec<String> {
     vec![
         format!("artifacts/{study}.json"),
@@ -1503,6 +1920,7 @@ fn json_followup_prompt(study: u32, artifacts: &[Artifact], attempt: u32) -> Str
 }
 
 /// Follow-up until `{study}.json` is listable or downloadable (up to 3 nudges + polling).
+/// Youth only — adult uses [`ensure_adult_section_tree_artifact`].
 async fn ensure_study_json_artifact(
     client: &CursorClient,
     agent_id: &str,
@@ -1523,6 +1941,60 @@ async fn ensure_study_json_artifact(
         println!("  JSON follow-up run {}", follow.run.id);
         client.wait_run(agent_id, &follow.run.id, stream).await?;
         artifacts = poll_artifacts_for_json(client, agent_id, study, 8, 3).await?;
+    }
+    Ok(artifacts)
+}
+
+/// Adult follow-up: require section folders under `artifacts/{study}/`, never monolith JSON.
+async fn ensure_adult_section_tree_artifact(
+    client: &CursorClient,
+    agent_id: &str,
+    study: u32,
+    artifacts: &[Artifact],
+    stream: bool,
+) -> Result<Vec<Artifact>> {
+    let mut artifacts = artifacts.to_vec();
+    for attempt in 1..=3u32 {
+        if artifact_list_has_adult_section_tree(study, &artifacts) {
+            return Ok(artifacts);
+        }
+        let listed: Vec<&str> = artifacts.iter().map(|a| a.path.as_str()).collect();
+        eprintln!(
+            "  Artifacts present but missing section tree artifacts/{study}/ — \
+             section follow-up {attempt}/3…"
+        );
+        let nudge = format!(
+            "STOP. Do **not** write artifacts/{study}.json.\n\n\
+             Adult deliverable is a **complete** section folder tree — front matter alone \
+             is NOT enough. Create these paths NOW (Write/Shell):\n\
+             1. artifacts/{study}/manifest.toml\n\
+             2. artifacts/{study}/01-title/ … through 08-introduccion/\n\
+             3. artifacts/{study}/NN-tema-1/header.txt (+ definicion-*.txt)\n\
+             4. artifacts/{study}/NN-tema-1-A/ (title.txt, body.txt, texto-biblico.txt) \
+                and remaining A/B points + temas through RESUMEN GENERAL.\n\
+             5. Lectura blocks MUST start with `CITA: …` then verse lines.\n\n\
+             Incomplete (title/lectura only) will be rejected. Currently listed: {listed:?}\n\
+             Chat text does not count. List Artifacts must show tema folders.",
+        );
+        let follow = client.create_followup(agent_id, &nudge).await?;
+        println!("  section follow-up run {}", follow.run.id);
+        client.wait_run(agent_id, &follow.run.id, stream).await?;
+        artifacts = client.list_artifacts(agent_id).await?;
+        for _ in 0..6 {
+            if artifact_list_has_adult_section_tree(study, &artifacts) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            artifacts = client.list_artifacts(agent_id).await?;
+        }
+    }
+    if !artifact_list_has_adult_section_tree(study, &artifacts) {
+        bail!(
+            "adult prepare: cloud agent never wrote section folders under \
+             artifacts/{study}/ (after 3 follow-ups). Re-run the same command to resume. \
+             Listed: {:?}",
+            artifacts.iter().map(|a| a.path.as_str()).collect::<Vec<_>>()
+        );
     }
     Ok(artifacts)
 }
@@ -1664,152 +2136,84 @@ When finished, confirm the four artifact paths and `section_style.id`.
 fn build_adult_cloud_prepare_prompt(req: &PrepareRequest, host_images: bool) -> Result<String> {
     let study = req.study;
     let proximo_block = proximo_prompt_block(req)?;
+    let resume = crate::content::adult_resume_hint(study).unwrap_or_default();
+    let resume_block = if resume.is_empty() {
+        String::new()
+    } else {
+        format!("\n{resume}\n")
+    };
 
-    let schema = r#"## Adult JSON schema (required keys)
-```json
-{
-  "audience": "adult",
-  "numero": STUDY,
-  "titulo": "…",
-  "base_biblica": ["Cita 1;", "Cita 2;", "Cita 3"],
-  "lectura_antifonal": [{"cita":"…","versiculos":["1 …","2 …"]}],
-  "objetivos": ["…","…","…"],
-  "pensamiento_central": "…",
-  "texto_aureo": {"texto":"…","cita":"Libro N:N"},
-  "ensenanza": "…",
-  "datos_generales": {"autor":"…","personajes":"…","fecha":"…","lugar":"…"},
-  "introduccion_slides": ["para 1","para 2"],
-  "temas": [
-    {
-      "titulo": "…",
-      "rango": "Libro N:N-N",
-      "definiciones": [{"termino":"…","texto":"…","referencia":"(Libro N:N)"}],
-      "A": {"titulo":"…","texto_slides":["…"],"texto_biblico":{"cita":"…","versiculos":["…"]}},
-      "B": {"titulo":"…","texto_slides":["…"],"texto_biblico":{"cita":"…","versiculos":["…"]}},
-      "C": {"titulo":"…","texto_slides":["…"],"texto_biblico":{"cita":"…","versiculos":["…"]}}
-    }
-  ],
-  "proximo": {"numero":0,"titulo":"…","base_biblica":["…"]}
-}
+    let layout = format!(
+        r#"## Deliverable — SECTION FOLDERS (not a monolith JSON first)
+Write files **incrementally** under `artifacts/{study}/` so the host can resume
+after a failure and show progress per section.
+
+Exact layout (same as GENERATE_STUDY_AGENT / studies/adult/7):
+
 ```
-**Variable structure (HARD):**
-- `temas`: **1+** (not fixed to 3). One object per printed `I.` / `II.` / … until **RESUMEN GENERAL** (RESUMEN body is **not** in the deck — stop there).
-- Each tema: lettered points **A…N** as keys `A`,`B`,`C`,… (or a `puntos` array with `letra`). Count varies — stop at **Afianzamiento y aplicación** (skip that section and Ideas/Preguntas).
-- Every lettered point needs **non-empty** `texto_slides` (~360–400 chars each).
-- Scans may be **1-up or 2-up** — treat each half of a two-up spread as its own printed page when reading order. **Do not** assume 3 PDF pages per estudio.
-- **Content window:** start at this estudio’s title page (`ESTUDIO BÍBLICO N`); \
-read through **DESARROLLO DEL ESTUDIO**; use **`RESUMEN GENERAL`** only as the \
-end fence (do not copy RESUMEN / Preguntas / Afianzamiento bodies).
-- **Próximo:** only from the **next** estudio’s title page when attached; if no \
-next title page is present → omit `proximo` (do not invent).
-- **OMIT** `scenic_images` and `definicion_images` entirely — the host CLI stamps \
-canonical paths after images land. Do **not** invent path arrays, index maps \
-(`{\"1\":\"…\"}`), or flat basename maps (`intro-header` / `ab-1A`)."#;
-    let schema = schema.replace("STUDY", &study.to_string());
+artifacts/{study}/
+  manifest.toml
+  images/                    ← scenic + definición PNGs (flat basenames)
+  01-title/                  ← title.txt + base_biblica.txt
+  02-lectura/                ← block-01.txt …
+  03-objetivos/content.txt
+  04-pensamiento/content.txt
+  05-texto-aureo/            ← texto.txt + cita.txt
+  06-ensenanza/content.txt
+  07-datos/content.txt
+  08-introduccion/slides.txt
+  09-tema-1/                 ← titulo.txt, rango.txt, definicion-*.txt when printed
+  10-tema-1-A/               ← titulo.txt, body.txt (or slides.txt), texto_biblico…
+  …
+  NN-proximo/                ← omit if last study / no next title
+```
 
-    // Append HARD rule about Definiciones — never invent.
-    let schema = format!(
-        "{schema}
+**HARD order:** create `manifest.toml`, then `01-title`, then `02-lectura`, …
+Finish each folder (Write the .txt files) **before** starting the next.
+Do **not** wait until the end to dump everything — the host polls List Artifacts
+and shows each section as it appears.
 
-## Definiciones y etimología — HARD (never invent + LOCKED card design)
-- `temas[].definiciones` MUST come **only** from the printed sidebar box titled \
-**«Definiciones y etimología»** on the scans. **Every TEMA (I, II, …) that has \
-that box must have a non-empty `definiciones` array** — do not leave TEMA II+ empty.
-- Copy `termino` + `texto` (+ any citation in that box) **verbatim**. Do **not** \
-paraphrase, expand with Hebrew/Greek roots, or pull phrases from the body prose.
-- If a tema section has **no** such box → `\"definiciones\": []` (empty array). \
-Do **not** invent Rebelión / Anatema / Unción / etc. from the commentary.
-- Definición **card images** MUST match the **HARD-locked gold layout** exactly \
-(open-book header + white rows + coloured chevron + left circular icon + right icon \
-on soft lake/mountain). Change **ONLY** term text, definition text, and icons. \
-**FORBIDDEN invents:** parchment essay, centered white title pill, cartoon green hills, \
-play-button triangles, vertical book/tab chrome, cream title-only, any new card style. \
-Prefer omitting card PNGs when the host will generate them via OpenAI reference-edit.
-- Card images must render **only** those verbatim terms — never add quotes, extra \
-verses, or footer disclaimers not in the box."
+Optional: also write `artifacts/{study}.json` at the very end if easy — not required
+when the section tree is complete.
+"#
     );
 
-    if host_images {
-        return Ok(format!(
-            r#"You are a no-repo Cursor Cloud Agent preparing a Mount Zion Church **adult** Bible study.
-
-Follow AGENTS.md adult HARD rules. Do **NOT** build a .pptx.
-Do **NOT** generate images — the host CLI generates all scenic/definición PNGs after you finish.
-Adult JSON is **not** the youth schema (youth uses top-level `puntos` 1/2/3; adult uses \
-`temas[].A/B/C…` or `temas[].puntos` — no `section_images` / `section_style`).
-
-## Inputs
-- Estudio **{study}** (audience=adult)
-- Content pages **{p0}–{p1}** are attached as images (in order).
-- Some attachments may be **vertical multi-page composites** (top→bottom = reading order; yellow tick marks the page band). Read **every** band — do not skip stacked pages.
-- {proximo_block}
-
-## Deliverable — ONE file only
-Use Write/Shell to create:
-1. `artifacts/{study}.json`  ← required adult schema
-
-{schema}
-
-## Rules
-- {verbatim}
-- Merge cross-page cuts; skip Ideas para el maestro / Preguntas / Afianzamiento / RESUMEN GENERAL body.
-- Lectura/Texto = whole verses.
-- End as soon as `artifacts/{study}.json` exists. Speed matters — JSON only, no images.
-
----
-# AGENTS.md (rules)
-
-{agents}
-"#,
-            p0 = req.pages.0,
-            p1 = req.pages.1,
-            agents = AGENTS_MD,
-            verbatim = VERBATIM_HARD,
-        ));
-    }
+    let images_block = if host_images {
+        "Do **NOT** generate images — the host CLI generates scenic/definición PNGs after text sections exist.".to_string()
+    } else {
+        format!(
+            r#"## Images — under `artifacts/{study}/images/` (after text sections)
+16:9 ≈1408×768. Unique scene per file. Basenames:
+intro-header.png, tema-N.png, ab-N{{Letter}}.png, definicion-N.png (when that tema has a printed box).
+"#
+        )
+    };
 
     Ok(format!(
         r#"You are a no-repo Cursor Cloud Agent preparing a Mount Zion Church **adult** Bible study.
 
-Follow AGENTS.md adult HARD rules and LAYOUT_GUIDE ideas below. Do **NOT** build a .pptx.
-Adult JSON is **not** the youth schema (youth uses top-level `puntos` 1/2/3; adult uses \
-`temas[].A/B/C…` — no `section_images` / `section_style`).
+Follow AGENTS.md adult HARD rules. Do **NOT** build a .pptx.
+Adult source of truth is the **section folder tree** (not youth JSON).
 
 ## Inputs
 - Estudio **{study}** (audience=adult)
-- Content pages **{p0}–{p1}** are attached as images (in order).
-- Some attachments may be **vertical multi-page composites** (top→bottom = reading order; yellow tick marks the page band). Read **every** band — do not skip stacked pages.
+- Content pages **{p0}–{p1}** attached as images (order). Composites = top→bottom bands.
 - {proximo_block}
+{resume_block}
+{layout}
 
-## Deliverables — write under `artifacts/` (mandatory)
-Use Write / Shell / image tools. Host CLI downloads via List Artifacts.
-
-1. `artifacts/{study}.json`  ← required adult schema (see below)
-2. Scenic + definición PNGs named from the JSON (see Images below)
-
-Image paths may also be `artifacts/assets/<name>.png` **or `.jpg`** (host converts to PNG).
-Prefer PNG; JPG is accepted. **Scenic images (intro/tema/ab) are required**; definición cards are strongly preferred when that tema has a printed box.
-
-{schema}
-
-## Images — HARD (variable count; exact basenames)
-16:9 ≈1408×768. No text/letters/logos/watermarks/yellow dashed arcs.
-**UNIQUE SCENES (HARD):** every scenic PNG must be a **different** illustration \
-(intro ≠ tema-1 ≠ tema-2 ≠ ab-1A ≠ ab-1B ≠ …). Do **not** copy/reuse the same \
-image for multiple sections. Same design family OK; identical photos FAIL host QC.
-- `intro-header.png` — cinematic intro full-bleed
-- `tema-{{n}}.png` — one **distinct** scenic per tema in order
-- `ab-{{n}}{{letra}}.png` — one **distinct** scenic per lettered point (e.g. `ab-1A.png`, `ab-1C.png`, `ab-2B.png`)
-- `definicion-{{n}}.png` — DEFINICIÓN Y ETIMOLOGÍA **locked card design** for each tema \
-  with a printed box (white rows + coloured chevrons + icons on soft landscape). \
-  **FORBIDDEN:** parchment / centered essay / plain text dump. One card per TEMA that has the box.
+{images_block}
 
 ## Rules
 - {verbatim}
-- Merge cross-page cuts; skip Ideas / Afianzamiento / Preguntas / RESUMEN body.
-- **Definiciones y etimología:** copy ONLY from that printed box; empty array if the tema has no box — never invent terms or etymologies.
-- Lectura/Texto = whole verses; body slides ~360–400 chars when packing **verbatim** print text (do not shorten by rewriting).
-- End only after `{study}.json` + all required scenic PNGs exist under `artifacts/`.
+- Merge two-column / cross-page cuts; skip Ideas / Afianzamiento / Preguntas / RESUMEN body.
+- Lectura chapter jumps keep printed `5:1` (not bare `1`).
+- Definiciones: only from printed «Definiciones y etimología» boxes; else omit those files.
+- Variable temas/points: one folder per printed TEMA and lettered point — do not invent or drop.
+- **Texto Bíblico (HARD — gold estudio 8):** TEMA image chrome uses tema `RANGO` only. \
+Each `tema-N-X/texto-biblico.txt` must be **that point’s verses only** (same cita as the \
+A/B image under the gray line). Never copy the full TEMA range into every A/B Texto.
+- End when the section tree under `artifacts/{study}/` is complete{img_end}.
 
 ---
 # AGENTS.md (rules)
@@ -1820,6 +2224,11 @@ image for multiple sections. Same design family OK; identical photos FAIL host Q
         p1 = req.pages.1,
         agents = AGENTS_MD,
         verbatim = VERBATIM_HARD,
+        img_end = if host_images {
+            ""
+        } else {
+            " and required scenic PNGs exist under images/"
+        },
     ))
 }
 
@@ -1879,10 +2288,52 @@ mod tests {
     }
 
     #[test]
-    fn adult_without_json_still_errors() {
+    fn adult_without_json_or_sections_still_errors() {
         let root = PathBuf::from("/repo");
         let arts = vec![art("artifacts/assets/intro-header.jpg")];
         assert!(resolve_adult_artifacts(7, &arts, &root).is_err());
+    }
+
+    #[test]
+    fn maps_adult_section_tree_without_json() {
+        let root = PathBuf::from("/repo");
+        let arts = vec![
+            art("artifacts/8/manifest.toml"),
+            art("artifacts/8/01-title/title.txt"),
+            art("artifacts/8/01-title/base_biblica.txt"),
+            art("artifacts/8/02-lectura/block-01.txt"),
+            art("artifacts/assets/intro-header.png"),
+        ];
+        let resolved = resolve_adult_artifacts(8, &arts, &root).expect("section tree");
+        assert!(resolved
+            .iter()
+            .any(|(_, d)| d.ends_with("studies/adult/8/manifest.toml")
+                || d.ends_with("adult/8/manifest.toml")));
+        assert!(resolved
+            .iter()
+            .any(|(_, d)| d.ends_with("01-title/title.txt")));
+        assert!(resolved
+            .iter()
+            .any(|(_, d)| d.ends_with("intro-header.png")));
+        assert!(!resolved.iter().any(|(_, d)| d.ends_with("8.json")));
+    }
+
+    #[test]
+    fn adult_section_tree_complete_requires_tema_folders() {
+        let front_only = vec![
+            art("artifacts/11/manifest.toml"),
+            art("artifacts/11/01-title/title.txt"),
+            art("artifacts/11/02-lectura/block-01.txt"),
+            art("artifacts/11/05-texto-aureo/texto.txt"),
+        ];
+        assert!(!artifact_list_has_adult_section_tree(11, &front_only));
+
+        let with_temas = vec![
+            art("artifacts/11/manifest.toml"),
+            art("artifacts/11/09-tema-1/header.txt"),
+            art("artifacts/11/10-tema-1-A/body.txt"),
+        ];
+        assert!(artifact_list_has_adult_section_tree(11, &with_temas));
     }
 
     #[test]
@@ -1937,6 +2388,67 @@ mod tests {
         assert!(v.get("scenic_images").is_none());
         assert!(v.get("section_images").is_none());
         assert!(v.get("section_style").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn normalize_adult_agent_json_salvages_legacy_a_b_without_texto_biblico() {
+        let dir = std::env::temp_dir().join(format!(
+            "lamad-normalize-adult-legacy-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("8.json");
+        let raw = serde_json::json!({
+            "estudio": 8,
+            "titulo": "T",
+            "base_biblica": "2 S 6",
+            "lectura_slides": ["2 Samuel 6\n\n1 David reunió…"],
+            "objetivos": ["a", "b", "c"],
+            "pensamiento_central": "p",
+            "texto_aureo": {"texto": "q", "cita": "Jn 15:7"},
+            "ensenanza": "e",
+            "datos_generales": {
+                "autor": "a",
+                "personajes": "p",
+                "fecha": "f",
+                "lugar": "l",
+                "enseñanza": "dup"
+            },
+            "introduccion_slides": ["intro"],
+            "packed_slides": {"introduccion": ["x"]},
+            "temas": [{
+                "titulo": "I. TEMA",
+                "rango": "2 S 6:1-11",
+                "definiciones": ["\"Arca\". Caja sagrada."],
+                "texto_biblico_slides": ["2 Samuel 6:1-11\n\n1 David reunió…"],
+                "A": {
+                    "titulo": "A. Point",
+                    "texto_slides": ["body A"]
+                },
+                "B": {
+                    "titulo": "B. Point",
+                    "texto_slides": ["body B"]
+                }
+            }],
+            "proximo": {"numero": 9, "titulo": "N", "base_biblica": "x"}
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&raw).unwrap()).unwrap();
+        assert!(normalize_adult_agent_json(&path).unwrap());
+        let text = std::fs::read_to_string(&path).unwrap();
+        let study: crate::model::adult_study::AdultStudy =
+            serde_json::from_str(&text).expect("parse after normalize");
+        assert_eq!(study.numero.to_string(), "8");
+        assert_eq!(study.lectura_antifonal.len(), 1);
+        assert_eq!(study.temas.len(), 1);
+        assert_eq!(study.temas[0].puntos.len(), 2);
+        // Must NOT copy tema-wide `2 S 6:1-11` into every point (gold 8).
+        assert!(
+            study.temas[0].puntos[0].texto_biblico.cita.is_empty(),
+            "legacy salvage must not inject tema-wide texto_biblico into A/B"
+        );
+        assert_eq!(study.temas[0].definiciones[0].termino, "Arca");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
