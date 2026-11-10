@@ -106,3 +106,4 @@ config.toml
 archive/**
 !archive/.gitkeep
 !archive/README.md
+bin/
