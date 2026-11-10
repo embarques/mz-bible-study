@@ -218,11 +218,33 @@ async fn real_main() -> Result<()> {
         Some(Commands::Build(args)) => {
             let audience: Audience = args.audience.into();
             let template = args.template.clone().or(args.base.clone());
+            if let Some(number) = args.study {
+                if audience != Audience::Adult {
+                    bail!("local section builds require --audience adult");
+                }
+                return tokio::task::spawn_blocking(move || {
+                    let model = lamad::content::validate_local_adult_study(number)?;
+                    let output = match args.output {
+                        Some(path) => path,
+                        None => paths::study_pptx_path(audience, number, &model.titulo)?,
+                    };
+                    let root = paths::project_root()?;
+                    build::adult::bake_adult_definicion_cards_local(number, &model, &root, false)?;
+                    lamad::content::verify_adult_section_images(number, &model, &root)?;
+                    let pptx = build::build_adult_from_model(&model, &output, template.as_deref(), false)?;
+                    if !args.no_export_pdf {
+                        let pdf = export::export_one(&pptx)?;
+                        println!("PDF: {}", pdf.display());
+                    }
+                    Ok(())
+                }).await?;
+            }
+            let json = args.json.expect("clap requires JSON or --study");
             let output = match args.output {
                 Some(o) => o,
                 None => {
                     let data: serde_json::Value =
-                        serde_json::from_str(&std::fs::read_to_string(&args.json)?)?;
+                        serde_json::from_str(&std::fs::read_to_string(&json)?)?;
                     let n: u32 = data
                         .get("numero")
                         .and_then(|v| v.as_u64().map(|n| n as u32).or_else(|| {
@@ -238,7 +260,6 @@ async fn real_main() -> Result<()> {
                 }
             };
             let tmpl = template;
-            let json = args.json.clone();
             let export_pdf = args.export_pdf;
             tokio::task::spawn_blocking(move || {
                 build::build_study(
@@ -250,6 +271,14 @@ async fn real_main() -> Result<()> {
                 )
             })
             .await??;
+            Ok(())
+        }
+        Some(Commands::ValidateContent { study, audience }) => {
+            if Audience::from(audience) != Audience::Adult {
+                bail!("section validation currently supports adult studies");
+            }
+            lamad::content::validate_local_adult_study(study)?;
+            println!("OK: adult study {study} section files and scenic images");
             Ok(())
         }
         Some(Commands::Validate { pptx }) => {

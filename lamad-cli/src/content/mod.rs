@@ -13,7 +13,8 @@ pub use adult_normalize::normalize_adult_section_tree;
 pub use adult_sections::{
     adult_resume_hint, adult_study_folder, expand_json_to_sections, has_adult_sections,
     load_adult_sections, missing_front_matter_kinds, present_section_dir_names,
-    print_section_inventory, verify_adult_section_images, write_adult_sections, ADULT_FRONT_MATTER,
+    print_section_inventory, validate_local_adult_study, verify_adult_section_images,
+    write_adult_sections, ADULT_FRONT_MATTER,
 };
 pub use placeholders::{
     adult_definicion_cards_need_regen, any_definicion_placeholders, any_placeholders,

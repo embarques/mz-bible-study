@@ -19,6 +19,47 @@ cargo run --release -- prepare --from 20 --to 22
 
 PDF export uses Microsoft PowerPoint by default. For an unattended run with LibreOffice installed, set `LAMAD_SOFFICE` to the path of its `soffice` executable before running `lamad prepare` or `lamad export-pdf`. Check the rendered PDFs for font substitutions and layout differences.
 
+### Build from manually supplied adult content
+
+Put the manifest, numbered section folders, and scenic PNGs under
+`studies/adult/N/`. Follow the [adult section file format](GENERATE_STUDY_AGENT.md).
+Use explicit `CITA:` lines and one numbered verse per line. Keep chapter changes
+such as `5:1`. For the last study, set `omit_proximo = true` and leave out the
+Próximo folder.
+
+```bash
+lamad validate-content -n 7 --audience adult
+lamad build -n 7 --audience adult
+```
+
+Both commands work from the local section tree without a scan, API key, or
+agent. Validation checks the content structure and verifies that scenic PNGs
+are readable, unique, and free of placeholder markers. The build renders the
+locked definition cards from the definition text, validates the PowerPoint,
+and exports a PDF. Pass `--no-export-pdf` to build only the PowerPoint.
+Structural validation does not establish that the wording matches a printed source.
+
+Copy the [adult study preparation prompt](ADULT_STUDY_PREPARATION_PROMPT.md)
+when you want Codex to prepare the files for review before building.
+
+### Ask Codex to prepare and build the adult studies
+
+Attach the scan to Codex, or give it the scan’s path, and paste this command:
+
+> Prepare and build every complete adult study in this scan using `lamad`.
+> Proceed independently without waiting for batch confirmation or my review.
+> Identify each study by its printed title page and `RESUMEN GENERAL` boundary,
+> and use the next title page for Próximo when available. Prepare all the
+> required section files and unique scenic artwork. Compare the Spanish text
+> against the scan in a separate pass, correcting omissions, citations, and
+> text split across columns or pages. Run
+> `lamad validate-content -n N --audience adult` for each study, then run
+> `lamad build -n N --audience adult` to create the PowerPoint and PDF in the
+> configured output folder. Verify both files and spot-check the rendered PDF.
+> If a study remains incomplete, report the exact printed page and section
+> that needs attention and continue with the others. At the end, report the
+> studies completed and link to the output files.
+
 ### Python (legacy — [`python/mz_bible_study/`](python/mz_bible_study/))
 
 ```bash

@@ -68,8 +68,16 @@ pub enum Commands {
     /// Without `--from`/`--to`/`-n` on a TTY, opens the interactive form.
     Prepare(PrepareArgs),
 
-    /// Build a PPTX from study JSON + section images.
+    /// Build from study JSON or locally supplied adult section files.
     Build(BuildArgs),
+
+    /// Check local adult section files and scenic images without building.
+    ValidateContent {
+        #[arg(short = 'n', long)]
+        study: u32,
+        #[arg(long, value_enum, default_value_t = AudienceCli::Adult)]
+        audience: AudienceCli,
+    },
 
     /// Validate a PPTX package (must print OK).
     Validate {
@@ -205,7 +213,12 @@ pub struct ExportPdfArgs {
 #[derive(Debug, Clone, Parser)]
 pub struct BuildArgs {
     /// Path to study JSON
-    pub json: PathBuf,
+    #[arg(required_unless_present = "study", conflicts_with = "study")]
+    pub json: Option<PathBuf>,
+
+    /// Build from the local adult section folder without a scan or agent.
+    #[arg(short = 'n', long)]
+    pub study: Option<u32>,
 
     /// Output PPTX path
     #[arg(short, long)]
@@ -220,8 +233,12 @@ pub struct BuildArgs {
     #[arg(long = "base")]
     pub base: Option<PathBuf>,
 
-    #[arg(long, default_value_t = false)]
+    #[arg(long, conflicts_with = "no_export_pdf")]
     pub export_pdf: bool,
+
+    /// Skip PDF export for a local section build.
+    #[arg(long, requires = "study")]
+    pub no_export_pdf: bool,
 }
 
 #[derive(Debug, Clone, Parser)]
