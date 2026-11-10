@@ -19,6 +19,26 @@ cargo run --release -- prepare --from 20 --to 22
 
 PDF export uses Microsoft PowerPoint by default. For an unattended run with LibreOffice installed, set `LAMAD_SOFFICE` to the path of its `soffice` executable before running `lamad prepare` or `lamad export-pdf`. Check the rendered PDFs for font substitutions and layout differences.
 
+### Build from manually supplied adult content
+
+Put the manifest, numbered section folders, and scenic PNGs under
+`studies/adult/N/`. Follow the [adult section file format](GENERATE_STUDY_AGENT.md).
+Use explicit `CITA:` lines and one numbered verse per line. Keep chapter changes
+such as `5:1`. For the last study, set `omit_proximo = true` and leave out the
+Próximo folder.
+
+```bash
+lamad validate-content -n 7 --audience adult
+lamad build -n 7 --audience adult
+```
+
+Both commands work from the local section tree without a scan, API key, or
+agent. Validation checks the content structure and verifies that scenic PNGs
+are readable, unique, and free of placeholder markers. The build renders the
+locked definition cards from the definition text, validates the PowerPoint,
+and exports a PDF. Pass `--no-export-pdf` to build only the PowerPoint.
+Structural validation does not establish that the wording matches a printed source.
+
 ### Python (legacy — [`python/mz_bible_study/`](python/mz_bible_study/))
 
 ```bash

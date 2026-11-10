@@ -342,9 +342,13 @@ pub fn write_adult_sections(study: &AdultStudy, study_dir: &Path) -> Result<()> 
 
 /// Load section tree → AdultStudy. Image paths stamped to `studies/adult/{N}/images/…`.
 pub fn load_adult_sections(study: u32) -> Result<AdultStudy> {
-    let study_dir = adult_study_folder(study)?;
     // Repair agent quirks (manifest shape, file names, dup CITA, próximo #) first.
     let _ = crate::content::adult_normalize::normalize_adult_section_tree(study)?;
+    read_adult_sections(study)
+}
+
+fn read_adult_sections(study: u32) -> Result<AdultStudy> {
+    let study_dir = adult_study_folder(study)?;
     let manifest_path = study_dir.join("manifest.toml");
     if !manifest_path.is_file() {
         bail!(
@@ -355,6 +359,9 @@ pub fn load_adult_sections(study: u32) -> Result<AdultStudy> {
     }
     let manifest: AdultManifest = toml::from_str(&fs::read_to_string(&manifest_path)?)
         .with_context(|| format!("parse {}", manifest_path.display()))?;
+    if study == 0 || manifest.numero != study {
+        bail!("{}: numero must match positive study number {study}", manifest_path.display());
+    }
 
     let mut sections = list_section_dirs(&study_dir)?;
     sections.sort_by(|a, b| a.0.cmp(&b.0));
@@ -382,15 +389,20 @@ pub fn load_adult_sections(study: u32) -> Result<AdultStudy> {
         base_biblica: None,
     };
     let mut saw_proximo = false;
+    let mut seen_kinds = std::collections::HashSet::new();
 
     for (_ord, kind, dir) in &sections {
+        if !seen_kinds.insert(kind) {
+            bail!("duplicate section kind {kind} under {}", study_dir.display());
+        }
         match kind.as_str() {
             "title" => { /* title/base come from manifest */ }
             "lectura" => {
                 let mut blocks = list_files_with_prefix(dir, "block-")?;
                 blocks.sort();
                 for b in blocks {
-                    lectura_antifonal.push(parse_lectura(&fs::read_to_string(&b)?)?);
+                    lectura_antifonal.push(parse_lectura(&fs::read_to_string(&b)?)
+                        .with_context(|| format!("parse {}", b.display()))?);
                 }
             }
             "objetivos" => {
@@ -433,11 +445,10 @@ pub fn load_adult_sections(study: u32) -> Result<AdultStudy> {
                 let expected = (study + 1) as i64;
                 let n_txt = read_trimmed(&dir.join("numero.txt")).unwrap_or_default();
                 let parsed = n_txt.parse::<i64>().ok();
-                proximo.numero = Numero::Int(if manifest.omit_proximo {
-                    parsed.unwrap_or(expected)
-                } else {
-                    expected
-                });
+                if parsed != Some(expected) || manifest.omit_proximo {
+                    bail!("{}: Próximo requires numero.txt containing {expected} and omit_proximo=false", dir.display());
+                }
+                proximo.numero = Numero::Int(expected);
                 let title_path = if dir.join("title.txt").is_file() {
                     dir.join("title.txt")
                 } else {
@@ -448,6 +459,11 @@ pub fn load_adult_sections(study: u32) -> Result<AdultStudy> {
                 if base_path.is_file() {
                     let lines = read_nonempty_lines(&base_path)?;
                     proximo.base_biblica = Some(StringOrList::Many(lines));
+                }
+                if proximo.titulo.is_empty() || proximo.base_biblica.as_ref()
+                    .is_none_or(|base| base.as_lines().is_empty())
+                {
+                    bail!("{}: Próximo requires title.txt and base_biblica.txt", dir.display());
                 }
             }
             other if other.starts_with("tema-") => {
@@ -469,7 +485,7 @@ pub fn load_adult_sections(study: u32) -> Result<AdultStudy> {
                         tema_n,
                         letra.to_string(),
                         PuntoAdult {
-                            letra: letra.to_string(),
+                            letra: letra.to_ascii_uppercase(),
                             titulo: title,
                             texto_slides: body,
                             texto_biblico: texto,
@@ -505,6 +521,11 @@ pub fn load_adult_sections(study: u32) -> Result<AdultStudy> {
     }
 
     temas.sort_by_key(|(n, _)| *n);
+    for (index, (number, _)) in temas.iter().enumerate() {
+        if *number != index + 1 {
+            bail!("missing tema-{} header under {}", index + 1, study_dir.display());
+        }
+    }
     puntos.sort_by(|(a_n, a_l, _), (b_n, b_l, _)| a_n.cmp(b_n).then(a_l.cmp(b_l)));
 
     let mut tema_models: Vec<TemaAdult> = temas.into_iter().map(|(_, t)| t).collect();
@@ -524,6 +545,12 @@ pub fn load_adult_sections(study: u32) -> Result<AdultStudy> {
         if t.puntos.is_empty() {
             bail!("tema {} has no points (need tema-N-A …)", i + 1);
         }
+        for (index, point) in t.puntos.iter().enumerate() {
+            let expected = (b'A' + index.min(25) as u8) as char;
+            if index >= 26 || !point.letra.eq_ignore_ascii_case(&expected.to_string()) {
+                bail!("tema {}: expected point {expected}, found {}", i + 1, point.letra);
+            }
+        }
     }
 
     if manifest.omit_proximo && !saw_proximo {
@@ -535,7 +562,8 @@ pub fn load_adult_sections(study: u32) -> Result<AdultStudy> {
         );
     }
 
-    let rel_images = format!("studies/adult/{study}/images");
+    let images = adult_images_dir(&study_dir);
+    let rel_images = images.to_string_lossy();
     let mut ab_paths = Vec::new();
     for (ti, t) in tema_models.iter().enumerate() {
         for p in &t.puntos {
@@ -553,7 +581,7 @@ pub fn load_adult_sections(study: u32) -> Result<AdultStudy> {
         .map(|i| format!("{rel_images}/definicion-{i}.png"))
         .collect();
 
-    Ok(AdultStudy {
+    let model = AdultStudy {
         numero: Numero::Int(manifest.numero as i64),
         titulo: manifest.titulo,
         base_biblica: StringOrList::Many(manifest.base_biblica),
@@ -570,7 +598,76 @@ pub fn load_adult_sections(study: u32) -> Result<AdultStudy> {
         audience: Some("adult".into()),
         definicion_images: Some(definicion_images),
         scenic_images: Some(scenic),
-    })
+    };
+    validate_section_content(&model)?;
+    Ok(model)
+}
+
+fn validate_section_content(model: &AdultStudy) -> Result<()> {
+    let fields = [
+        ("manifest titulo", model.titulo.as_str()),
+        ("pensamiento/content.txt", model.pensamiento_central.as_str()),
+        ("texto-aureo/texto.txt", model.texto_aureo.texto.as_str()),
+        ("texto-aureo/cita.txt", model.texto_aureo.cita.as_str()),
+        ("ensenanza/content.txt", model.ensenanza.as_str()),
+        ("datos autor", model.datos_generales.autor.as_str()),
+        ("datos personajes", model.datos_generales.personajes.as_str()),
+        ("datos fecha", model.datos_generales.fecha.as_str()),
+        ("datos lugar", model.datos_generales.lugar.as_str()),
+    ];
+    let mut errors: Vec<String> = fields.iter()
+        .filter(|(_, value)| value.trim().is_empty())
+        .map(|(name, _)| format!("{name} is required"))
+        .collect();
+    if model.titulo.contains(['/', '\\']) {
+        errors.push("manifest titulo cannot contain a path separator".into());
+    }
+    let base = model.base_biblica.as_lines();
+    if base.is_empty() || base.iter().any(|line| line.trim().is_empty()) {
+        errors.push("manifest base_biblica needs nonempty citations".into());
+    }
+    if model.objetivos.len() != 3 || model.objetivos.iter().any(|s| s.trim().is_empty()) {
+        errors.push("objetivos/content.txt needs exactly three nonempty objectives".into());
+    }
+    if model.lectura_antifonal.is_empty() {
+        errors.push("lectura needs at least one block-*.txt".into());
+    }
+    if model.introduccion_slides.is_empty() {
+        errors.push("introduccion/slides.txt needs text".into());
+    }
+    for (index, tema) in model.temas.iter().enumerate() {
+        for point in &tema.puntos {
+            if point.titulo.trim().is_empty() || point.texto_slides.is_empty() {
+                errors.push(format!("tema-{}-{} needs a title and body", index + 1, point.letra));
+            }
+        }
+    }
+    if !errors.is_empty() {
+        bail!("invalid adult study content:\n  {}", errors.join("\n  "));
+    }
+    Ok(())
+}
+
+/// Validate a manually supplied section tree without rewriting its source files.
+pub fn validate_local_adult_study(study: u32) -> Result<AdultStudy> {
+    let model = read_adult_sections(study)
+        .with_context(|| format!("validate adult study {study}"))?;
+    let scenic = model.scenic_images.as_ref().expect("section loader sets scenic paths");
+    let paths: Vec<PathBuf> = std::iter::once(&scenic.intro_header)
+        .chain(&scenic.tema).chain(&scenic.ab).map(PathBuf::from).collect();
+    for path in &paths {
+        if crate::content::is_placeholder(path) {
+            bail!("{} is placeholder artwork", path.display());
+        }
+        let image = image::ImageReader::open(path)
+            .with_context(|| format!("open scenic PNG {}", path.display()))?;
+        if image.format() != Some(image::ImageFormat::Png) {
+            bail!("{} must be a PNG", path.display());
+        }
+        image.decode().with_context(|| format!("decode scenic PNG {}", path.display()))?;
+    }
+    crate::build::assert_unique_image_files(&paths, "adult scenic images")?;
+    Ok(model)
 }
 
 /// Print a short inventory of what lives under a study section folder.
@@ -769,6 +866,16 @@ fn parse_lectura(text: &str) -> Result<Lectura> {
     }
     if versiculos.is_empty() {
         bail!("lectura block has no verses");
+    }
+    for line in &versiculos {
+        let Some((marker, words)) = line.split_once(char::is_whitespace) else {
+            bail!("expected a verse number followed by text: {line}");
+        };
+        if words.trim().is_empty() || !marker.split(':').all(|part| {
+            part.parse::<u32>().is_ok_and(|number| number > 0)
+        }) || marker.matches(':').count() > 1 {
+            bail!("expected a verse number or chapter:verse followed by text: {line}");
+        }
     }
     Ok(Lectura { cita, versiculos })
 }

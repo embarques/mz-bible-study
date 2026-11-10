@@ -67,10 +67,9 @@ pub struct Deliverables {
 
 /// Adult scenic / definición PNGs live under `studies/adult/{N}/`.
 pub fn adult_media_dir(study: u32, root: &Path) -> PathBuf {
-    let study_dir = root
-        .join("studies")
-        .join(Audience::Adult.as_str())
-        .join(study.to_string());
+    let study_dir = crate::content::adult_study_folder(study).unwrap_or_else(|_| {
+        root.join("studies").join(Audience::Adult.as_str()).join(study.to_string())
+    });
     let images = study_dir.join("images");
     // New layout: studies/adult/{N}/images/. Keep legacy flat dir only when
     // images already live beside the folder (no images/ yet).
