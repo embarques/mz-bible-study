@@ -375,7 +375,7 @@ where
     if rows.is_empty() {
         bail!("bake_definicion_card_local: no terms to bake");
     }
-    if rows.len() > 3 {
+    if rows.len() > DEFINICION_ROWS {
         bail!(
             "bake_definicion_card_local: {} terms — locked card holds at most 3 rows",
             rows.len()
@@ -387,30 +387,15 @@ where
         .with_context(|| format!("open gold {}", gold_path.display()))?
         .to_rgb8();
     let (w, h) = gold.dimensions();
-    if w != 1408 || h != 768 {
-        // Still OK — scale geometries below from 1408×768 reference.
-    }
-    let sx = w as f32 / 1408.0;
-    let sy = h as f32 / 768.0;
-    let mut img = gold.clone();
-
-    let layouts = scaled_row_layouts(sx, sy);
-    // Wipe the entire gold card body (all 3 rows + gaps) so Amalec/Agag never
-    // ghost — then redraw only this estudio's N rows.
-    wipe_card_body_with_scenic(&mut img, &gold, sx, sy);
-    let chevron_palette: [[u8; 3]; 3] = [
-        [0, 116, 129],  // teal
-        [20, 55, 110],  // navy
-        [90, 55, 130],  // purple
-    ];
-    for (i, (term, body)) in rows.iter().enumerate() {
-        let layout = &layouts[i];
-        paint_row_card(&mut img, layout);
-        blit_row_icons(&mut img, &gold, layout);
-        let chevron = chevron_palette[i % 3];
-        paint_chevron_plate(&mut img, layout, chevron);
-        draw_term_on_chevron(&mut img, layout, term, chevron)?;
-        draw_body_text(&mut img, layout, body)?;
+    let layouts = scaled_row_layouts(w as f32 / 850.0, h as f32 / 464.0);
+    let mut img = gold;
+    for (i, layout) in layouts.iter().enumerate() {
+        clear_text_area(&mut img, layout.term);
+        clear_text_area(&mut img, layout.body);
+        if let Some((term, body)) = rows.get(i) {
+            draw_term_on_chevron(&mut img, layout, term)?;
+            draw_body_text(&mut img, layout, body)?;
+        }
     }
 
     if let Some(parent) = dest.parent() {
@@ -433,6 +418,17 @@ where
     Ok(())
 }
 
+pub(crate) const DEFINICION_ROWS: usize = 3;
+
+pub(crate) fn definicion_card_page(first: &Path, page: usize) -> PathBuf {
+    if page == 0 {
+        return first.to_path_buf();
+    }
+    let mut stem = first.file_stem().unwrap_or_default().to_os_string();
+    stem.push(format!("-{}.png", page + 1));
+    first.with_file_name(stem)
+}
+
 /// Bake every missing/stub/wrong DEFINICIÓN card for an adult estudio (local, no API).
 pub fn bake_adult_definicion_cards_local(
     study: u32,
@@ -447,24 +443,17 @@ pub fn bake_adult_definicion_cards_local(
         if tema.definiciones.is_empty() {
             continue;
         }
-        let dest = media.join(format!("definicion-{}.png", i + 1));
-        let rows: Vec<(&str, &str)> = tema
-            .definiciones
-            .iter()
-            .map(|d| (d.termino.as_str(), d.texto.as_str()))
-            .collect();
-        let fp = terms_fingerprint(rows.iter().copied());
-        if !force && keepable_definicion_card(&dest, &fp) {
-            continue;
+        let first = media.join(format!("definicion-{}.png", i + 1));
+        for (page, definitions) in tema.definiciones.chunks(DEFINICION_ROWS).enumerate() {
+            let dest = definicion_card_page(&first, page);
+            let rows = || definitions.iter().map(|d| (d.termino.as_str(), d.texto.as_str()));
+            let fp = terms_fingerprint(rows());
+            if !force && keepable_definicion_card(&dest, &fp) {
+                continue;
+            }
+            bake_definicion_card_local(&dest, rows())?;
+            n += 1;
         }
-        crate::progress::phase(format!(
-            "definición: local bake definicion-{}.png from locked gold ({} term(s)) — \
-             no openai_api_key",
-            i + 1,
-            rows.len()
-        ));
-        bake_definicion_card_local(&dest, rows)?;
-        n += 1;
     }
     if n > 0 {
         crate::progress::ok(format!(
@@ -475,178 +464,39 @@ pub fn bake_adult_definicion_cards_local(
 }
 
 struct RowLayout {
-    /// Full vertical band (for scenic cover of unused rows).
-    band_y0: u32,
-    band_y1: u32,
-    band_x0: u32,
-    band_x1: u32,
-    /// Chevron label area.
-    term_x0: u32,
-    term_x1: u32,
-    term_y0: u32,
-    term_y1: u32,
-    /// Definition body on white card.
-    body_x0: u32,
-    body_x1: u32,
-    body_y0: u32,
-    body_y1: u32,
+    term: TextArea,
+    body: TextArea,
+}
+
+#[derive(Clone, Copy)]
+struct TextArea {
+    x0: u32,
+    y0: u32,
+    x1: u32,
+    y1: u32,
 }
 
 fn scaled_row_layouts(sx: f32, sy: f32) -> [RowLayout; 3] {
-    let s = |x: u32, scale: f32| (x as f32 * scale).round() as u32;
-    // Measured on 1408×768 estudio-4 gold (3-row card).
+    let area = |x0: u32, y0: u32, x1: u32, y1: u32| TextArea {
+        x0: (x0 as f32 * sx).round() as u32,
+        y0: (y0 as f32 * sy).round() as u32,
+        x1: (x1 as f32 * sx).round() as u32,
+        y1: (y1 as f32 * sy).round() as u32,
+    };
+    // Text rectangles on the locked reference, measured at 850 × 464.
     [
-        RowLayout {
-            band_y0: s(95, sy),
-            band_y1: s(250, sy),
-            band_x0: s(70, sx),
-            band_x1: s(1320, sx),
-            // Full chevron label plate (measured white-glyph bbox on gold).
-            term_x0: s(200, sx),
-            term_x1: s(520, sx),
-            term_y0: s(140, sy),
-            term_y1: s(230, sy),
-            body_x0: s(540, sx),
-            body_x1: s(1200, sx),
-            body_y0: s(145, sy),
-            body_y1: s(235, sy),
-        },
-        RowLayout {
-            band_y0: s(270, sy),
-            band_y1: s(430, sy),
-            band_x0: s(70, sx),
-            band_x1: s(1320, sx),
-            term_x0: s(200, sx),
-            term_x1: s(520, sx),
-            term_y0: s(330, sy),
-            term_y1: s(415, sy),
-            body_x0: s(540, sx),
-            body_x1: s(1200, sx),
-            body_y0: s(330, sy),
-            body_y1: s(415, sy),
-        },
-        RowLayout {
-            band_y0: s(450, sy),
-            band_y1: s(620, sy),
-            band_x0: s(70, sx),
-            band_x1: s(1320, sx),
-            term_x0: s(200, sx),
-            term_x1: s(520, sx),
-            term_y0: s(500, sy),
-            term_y1: s(590, sy),
-            body_x0: s(540, sx),
-            body_x1: s(1200, sx),
-            body_y0: s(500, sy),
-            body_y1: s(595, sy),
-        },
+        RowLayout { term: area(162, 113, 282, 164), body: area(334, 108, 718, 170) },
+        RowLayout { term: area(160, 240, 352, 274), body: area(380, 225, 726, 287) },
+        RowLayout { term: area(160, 350, 336, 401), body: area(380, 342, 726, 405) },
     ]
 }
 
-fn sample_chevron_color(img: &image::RgbImage, layout: &RowLayout) -> [u8; 3] {
-    let mut samples: Vec<[u8; 3]> = Vec::new();
-    for y in layout.term_y0..layout.term_y1.min(img.height()) {
-        for x in layout.term_x0.saturating_sub(40)..layout.term_x0.min(img.width()) {
-            let p = img.get_pixel(x, y).0;
-            let max = p[0].max(p[1]).max(p[2]);
-            let min = p[0].min(p[1]).min(p[2]);
-            if max - min > 40 && p[0] < 180 {
-                samples.push(p);
-            }
-        }
-    }
-    if samples.is_empty() {
-        return [40, 110, 120];
-    }
-    samples.sort_by_key(|p| (p[0] as u32) << 16 | (p[1] as u32) << 8 | p[2] as u32);
-    samples[samples.len() / 2]
-}
-
-fn wipe_card_body_with_scenic(
-    img: &mut image::RgbImage,
-    gold: &image::RgbImage,
-    sx: f32,
-    sy: f32,
-) {
-    let (w, h) = img.dimensions();
-    // One continuous wipe over the whole white-card stack (rows 1–3 + gaps).
-    let x0 = ((50.0 * sx) as u32).saturating_sub(10);
-    let x1 = ((1360.0 * sx) as u32).min(w);
-    let y0 = ((85.0 * sy) as u32).saturating_sub(8);
-    // Past the third gold row + crown icons (~y 600–700 on 768 canvas).
-    let y1 = ((720.0 * sy) as u32).min(h);
-    let src_x0 = (w * 82 / 100).min(w.saturating_sub(40));
-    let src_x1 = w.saturating_sub(8).max(src_x0 + 1);
-    let src_y0 = 16u32;
-    let src_y1 = 140u32.min(h.saturating_sub(1)).max(src_y0 + 1);
-    let bw = (x1 - x0).max(1) as f32;
-    let bh = (y1 - y0).max(1) as f32;
-    let sw = (src_x1 - src_x0) as f32;
-    let sh = (src_y1 - src_y0) as f32;
-    for y in y0..y1 {
-        let ty = (y - y0) as f32 / bh;
-        let sy = (src_y0 as f32 + ty * sh).round() as u32;
-        let sy = sy.min(h - 1);
-        for x in x0..x1 {
-            let tx = (x - x0) as f32 / bw;
-            let sx = (src_x0 as f32 + tx * sw).round() as u32;
-            let sx = sx.min(w - 1);
-            img.put_pixel(x, y, *gold.get_pixel(sx, sy));
-        }
-    }
-}
-
-fn paint_row_card(img: &mut image::RgbImage, layout: &RowLayout) {
-    let (w, h) = img.dimensions();
-    let white = image::Rgb([252, 252, 252]);
-    let x0 = layout.band_x0.saturating_add(20).min(w);
-    let x1 = layout.band_x1.saturating_sub(20).min(w);
-    let y0 = layout.band_y0.saturating_add(8).min(h);
-    let y1 = layout.band_y1.saturating_sub(8).min(h);
-    for y in y0..y1 {
-        for x in x0..x1 {
-            img.put_pixel(x, y, white);
-        }
-    }
-}
-
-fn blit_row_icons(img: &mut image::RgbImage, gold: &image::RgbImage, layout: &RowLayout) {
-    let (w, h) = img.dimensions();
-    // Left circular icon ~x 95–210; right mini-icon ~x 1210–1285 (1408 ref).
-    let strips = [
-        (95u32, 215u32),
-        (1210u32, 1290u32),
-    ];
-    for (sx0, sx1) in strips {
-        let x0 = ((sx0 as f32) * (w as f32 / 1408.0)).round() as u32;
-        let x1 = ((sx1 as f32) * (w as f32 / 1408.0)).round() as u32;
-        for y in layout.band_y0..layout.band_y1.min(h) {
-            for x in x0..x1.min(w) {
-                img.put_pixel(x, y, *gold.get_pixel(x.min(gold.width() - 1), y.min(gold.height() - 1)));
-            }
-        }
-    }
-}
-
-fn paint_chevron_plate(img: &mut image::RgbImage, layout: &RowLayout, chevron: [u8; 3]) {
-    let (w, h) = img.dimensions();
-    let fill = image::Rgb(chevron);
-    let x0 = layout.term_x0;
-    let x1 = layout.term_x1.min(w);
-    let y0 = layout.term_y0;
-    let y1 = layout.term_y1.min(h);
-    let mid_y = (y0 + y1) / 2;
-    let tip = (x1 + 28).min(w);
-    for y in y0..y1 {
-        // Arrow tip: taper the right edge toward mid_y.
-        let taper = {
-            let dy = (y as i32 - mid_y as i32).unsigned_abs();
-            let half = ((y1 - y0) / 2).max(1);
-            let t = 1.0 - (dy as f32 / half as f32);
-            ((tip - x1) as f32 * t.max(0.0)).round() as u32
-        };
-        let row_x1 = (x1 + taper).min(w);
-        for x in x0..row_x1 {
-            img.put_pixel(x, y, fill);
+fn clear_text_area(img: &mut image::RgbImage, area: TextArea) {
+    // Copy each column's own background from just above the old lettering.
+    for x in area.x0..area.x1 {
+        let background = *img.get_pixel(x, area.y0);
+        for y in area.y0 + 1..area.y1 {
+            img.put_pixel(x, y, background);
         }
     }
 }
@@ -684,64 +534,45 @@ fn font_path(bold: bool) -> Result<PathBuf> {
     )
 }
 
-fn draw_term_on_chevron(
-    img: &mut image::RgbImage,
-    layout: &RowLayout,
-    term: &str,
-    _chevron: [u8; 3],
-) -> Result<()> {
-    use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
-
-    let font_data = std::fs::read(font_path(true)?)?;
-    let font = FontRef::try_from_slice(&font_data).context("parse bold font")?;
-    let max_w = (layout.term_x1 - layout.term_x0).saturating_sub(12) as f32;
-    let mut size = 28.0f32;
-    let scale = loop {
-        let sc = PxScale::from(size);
-        let w = text_width(&font, sc, term);
-        if w <= max_w || size <= 16.0 {
-            break sc;
-        }
-        size -= 2.0;
-    };
-    let scaled = font.as_scaled(scale);
-    let text_h = scaled.height();
-    let x = layout.term_x0 as f32 + 8.0;
-    let y = layout.term_y0 as f32 + ((layout.term_y1 - layout.term_y0) as f32 - text_h) / 2.0;
-    draw_text_line(img, &font, scale, x, y, term, [255, 255, 255]);
-    Ok(())
+fn draw_term_on_chevron(img: &mut image::RgbImage, layout: &RowLayout, term: &str) -> Result<()> {
+    draw_fitted_text(img, layout.term, term, true, 28.0, [255, 255, 255])
 }
 
 fn draw_body_text(img: &mut image::RgbImage, layout: &RowLayout, body: &str) -> Result<()> {
+    draw_fitted_text(img, layout.body, body, false, 22.0, [20, 20, 20])
+}
+
+fn draw_fitted_text(
+    img: &mut image::RgbImage,
+    area: TextArea,
+    text: &str,
+    bold: bool,
+    mut size: f32,
+    color: [u8; 3],
+) -> Result<()> {
     use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
 
-    let font_data = std::fs::read(font_path(false)?)?;
-    let font = FontRef::try_from_slice(&font_data).context("parse regular font")?;
-    let max_w = (layout.body_x1 - layout.body_x0).saturating_sub(8) as f32;
-    let mut size = 22.0f32;
-    let scale = PxScale::from(size);
-    let mut lines = wrap_text(&font, scale, body, max_w);
-    while lines.len() > 3 && size > 14.0 {
+    let font_data = std::fs::read(font_path(bold)?)?;
+    let font = FontRef::try_from_slice(&font_data).context("parse definition font")?;
+    let max_w = (area.x1 - area.x0).saturating_sub(8) as f32;
+    let max_h = (area.y1 - area.y0).saturating_sub(8) as f32;
+    loop {
+        let scale = PxScale::from(size);
+        let line_h = font.as_scaled(scale).height() + 3.0;
+        let lines = wrap_text(&font, scale, text, max_w);
+        let height = lines.len() as f32 * line_h;
+        if height <= max_h && lines.iter().all(|line| text_width(&font, scale, line) <= max_w) {
+            let y = area.y0 as f32 + (max_h - height) / 2.0 + 4.0;
+            for (i, line) in lines.iter().enumerate() {
+                draw_text_line(img, &font, scale, area.x0 as f32 + 4.0, y + i as f32 * line_h, line, color);
+            }
+            return Ok(());
+        }
+        if size <= 12.0 {
+            bail!("definition text does not fit the locked card: {text}");
+        }
         size -= 1.0;
-        lines = wrap_text(&font, PxScale::from(size), body, max_w);
     }
-    let scale = PxScale::from(size);
-    let scaled = font.as_scaled(scale);
-    let line_h = scaled.height() + 4.0;
-    let mut y = layout.body_y0 as f32 + 6.0;
-    for line in lines.iter().take(3) {
-        draw_text_line(
-            img,
-            &font,
-            scale,
-            layout.body_x0 as f32 + 4.0,
-            y,
-            line,
-            [20, 20, 20],
-        );
-        y += line_h;
-    }
-    Ok(())
 }
 
 fn text_width(font: &ab_glyph::FontRef<'_>, scale: ab_glyph::PxScale, text: &str) -> f32 {

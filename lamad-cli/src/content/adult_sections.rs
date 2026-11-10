@@ -461,7 +461,10 @@ pub fn load_adult_sections(study: u32) -> Result<AdultStudy> {
                         &read_trimmed(&dir.join("title.txt"))?,
                     );
                     let body = split_paragraphs(&read_trimmed(&dir.join("body.txt"))?);
-                    let texto = parse_lectura(&fs::read_to_string(dir.join("texto-biblico.txt"))?)?;
+                    let texto_path = dir.join("texto-biblico.txt");
+                    let texto_raw = fs::read_to_string(&texto_path)?;
+                    let texto = parse_lectura(&super::adult_normalize::ensure_cita_prefix(&texto_raw))
+                        .with_context(|| format!("parse {}", texto_path.display()))?;
                     puntos.push((
                         tema_n,
                         letra.to_string(),
@@ -478,7 +481,8 @@ pub fn load_adult_sections(study: u32) -> Result<AdultStudy> {
                         format!("bad tema folder name: {other}")
                     })?;
                     let header = read_trimmed(&dir.join("header.txt"))?;
-                    let (titulo, rango) = parse_tema_header(&header)?;
+                    let (titulo, rango) = parse_tema_header(&header, dir)
+                        .with_context(|| format!("parse {}", dir.join("header.txt").display()))?;
                     let mut defs = Vec::new();
                     let mut def_files = list_files_with_prefix(dir, "definicion-")?;
                     def_files.sort();
@@ -630,24 +634,13 @@ pub fn verify_adult_section_images(study: u32, model: &AdultStudy, root: &Path) 
         }
         let name = format!("definicion-{}.png", i + 1);
         let p = media.join(&name);
-        if !p.is_file() {
-            crate::progress::warn(format!(
-                "adult estudio {study}: missing {name} (tema {} has definición text) under {} — \
-                 placeholder/host --gen-definicion can fill later",
-                i + 1,
-                media.display()
-            ));
-            continue;
-        }
-        if let Err(e) = crate::build::adult::assert_study_definicion_card(
-            &p,
-            tema.definiciones
-                .iter()
-                .map(|d| (d.termino.as_str(), d.texto.as_str())),
-        ) {
-            crate::progress::warn(format!(
-                "adult estudio {study}: {name} failed definición QC ({e:#}) — continuing"
-            ));
+        use crate::build::adult::{assert_study_definicion_card, definicion_card_page, DEFINICION_ROWS};
+        for (page, definitions) in tema.definiciones.chunks(DEFINICION_ROWS).enumerate() {
+            let card = definicion_card_page(&p, page);
+            assert_study_definicion_card(
+                &card,
+                definitions.iter().map(|d| (d.termino.as_str(), d.texto.as_str())),
+            ).with_context(|| format!("adult estudio {study}: verify {}", card.display()))?;
         }
     }
     Ok(())
@@ -780,7 +773,7 @@ fn parse_lectura(text: &str) -> Result<Lectura> {
     Ok(Lectura { cita, versiculos })
 }
 
-fn parse_tema_header(text: &str) -> Result<(String, String)> {
+fn parse_tema_header(text: &str, dir: &Path) -> Result<(String, String)> {
     let mut titulo = String::new();
     let mut rango = String::new();
     for line in text.lines() {
@@ -792,6 +785,29 @@ fn parse_tema_header(text: &str) -> Result<(String, String)> {
         }
     }
     if titulo.is_empty() || rango.is_empty() {
+        let lines: Vec<_> = text.lines().map(str::trim).filter(|s| !s.is_empty()).collect();
+        if let [title] = lines.as_slice() {
+            let range_path = dir.join("rango.txt");
+            if !title.starts_with("RANGO:") && range_path.is_file() {
+                let range = read_trimmed(&range_path)?;
+                if !range.is_empty() {
+                    let title = title.strip_prefix("TITULO:").unwrap_or(title).trim();
+                    if !title.is_empty() {
+                        return Ok((title.to_string(), range));
+                    }
+                }
+            }
+        }
+        if let [title, range] = lines.as_slice() {
+            if !title.contains(':')
+                && range.rsplit_once(' ').is_some_and(|(_, verses)| {
+                    verses.contains(':')
+                        && verses.chars().all(|c| c.is_ascii_digit() || matches!(c, ':' | '-' | '–'))
+                })
+            {
+                return Ok((title.to_string(), range.to_string()));
+            }
+        }
         bail!("tema header.txt needs TITULO: and RANGO: lines");
     }
     Ok((titulo, rango))

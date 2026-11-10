@@ -17,6 +17,8 @@ cargo run --release -- prepare --from 20 --to 22
 
 **Volunteer deploy (mac / Windows / Linux):** run `./scripts/package-release.sh` on each OS → zip under `lamad-cli/dist/` includes the `lamad` binary + bundled `tools/pdftoppm` + template. See [`lamad-cli/README.md`](lamad-cli/README.md) and [`lamad-cli/LEEME.md`](lamad-cli/LEEME.md). No Python at runtime.
 
+PDF export uses Microsoft PowerPoint by default. For an unattended run with LibreOffice installed, set `LAMAD_SOFFICE` to the path of its `soffice` executable before running `lamad prepare` or `lamad export-pdf`. Check the rendered PDFs for font substitutions and layout differences.
+
 ### Python (legacy — [`python/mz_bible_study/`](python/mz_bible_study/))
 
 ```bash

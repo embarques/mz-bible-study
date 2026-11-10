@@ -284,10 +284,13 @@ fn ocr_single(png: &Path) -> Result<String> {
              (brew install tesseract tesseract-lang)"
         )
     })?;
+    let name = png.file_name().context("OCR image has no filename")?;
+    let dir = png.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
     for (lang, psm) in [("spa", "4"), ("spa+eng", "4"), ("spa", "6")] {
         let output = Command::new(&tess)
+            .current_dir(dir)
+            .arg(name)
             .args([
-                png.to_str().unwrap_or(""),
                 "stdout",
                 "-l",
                 lang,

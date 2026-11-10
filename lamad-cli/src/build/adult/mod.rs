@@ -10,6 +10,7 @@ pub mod definicion_card;
 mod ooxml;
 pub mod study;
 
+pub(crate) use definicion_card::{definicion_card_page, DEFINICION_ROWS};
 pub use definicion_card::{
     assert_locked_definicion_card, assert_study_definicion_card,
     bake_adult_definicion_cards_local, bake_definicion_card_local, keepable_definicion_card,
