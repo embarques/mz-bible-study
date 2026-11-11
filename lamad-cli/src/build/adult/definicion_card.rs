@@ -688,6 +688,17 @@ pub fn locked_layout_edit_prompt(tema_titulo: &str, rows_block: &str) -> String 
          chevron colours rotate teal / navy / purple (adjacent rows different). \
          ONLY change: row count to match the terms below, chevron texts, definition bodies, \
          and left/right icons so they match each definition. \
+         Treat the reference's row artwork as sample content. Replace BOTH icons in every row. \
+         Before editing, choose a concrete subject for each term and a complementary detail \
+         for its definition. Use the left circle for a small illustrated scene or object and \
+         the right slot for a simpler related symbol. For example, a definition about an \
+         unearned gift could show a gift being offered on the left and an open hand on the right. \
+         Keep the reference illustration scale, palette, and placement. Give each row its own \
+         motif and keep the artwork clear of text. Remove all original row illustrations, \
+         including tents, soldiers, crossed swords, and crowns. Preserve the header's book icon. \
+         Before exporting, inspect the finished PNG row by row against the supplied list. \
+         Verify exact Spanish text and order, two relevant icons per row, no reference row \
+         artwork, no blank sample rows, and no overlap or clipped text. Fix any mismatch. \
          FORBIDDEN redesigns: centered white title pill, cartoon flat green hills + flat blue sky, \
          play-button triangles, vertical book/tab chrome, parchment essay, plain text dump, \
          cream title-only, new card chrome. \

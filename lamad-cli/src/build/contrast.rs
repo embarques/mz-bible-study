@@ -148,16 +148,33 @@ pub fn slide_media_path(slide_xml: &Path) -> Result<std::path::PathBuf> {
 pub fn apply_image_chrome_contrast(slide_xml: &Path) -> Result<TextTone> {
     let media = slide_media_path(slide_xml)?;
     let tone = tone_for_image(&media)?;
-    set_chrome_colors(slide_xml, tone)?;
+    set_chrome_colors(slide_xml, tone, tone)?;
     Ok(tone)
 }
 
-fn set_chrome_colors(slide_xml: &Path, tone: TextTone) -> Result<()> {
+/// Choose independently for the actual title and citation bands on adult slides.
+pub(crate) fn apply_adult_chrome_contrast(
+    slide_xml: &Path,
+    title_band: (i64, i64, i64, i64),
+    citation_band: (i64, i64, i64, i64),
+) -> Result<()> {
+    let img = image::open(slide_media_path(slide_xml)?)?;
+    let (width, height) = img.dimensions();
+    let tone = |(x, y, cx, cy): (i64, i64, i64, i64)| -> Result<TextTone> {
+        let px = |value| (value as f64 * width as f64 / 12_192_000.0) as u32;
+        let py = |value| (value as f64 * height as f64 / 6_858_000.0) as u32;
+        let luma = mean_luma(&img, px(x), py(y), px(x + cx).min(width), py(y + cy).min(height))?;
+        Ok(if luma < 0.54 { TextTone::LightOnDark } else { TextTone::DarkOnLight })
+    };
+    set_chrome_colors(slide_xml, tone(title_band)?, tone(citation_band)?)
+}
+
+fn set_chrome_colors(slide_xml: &Path, title_tone: TextTone, citation_tone: TextTone) -> Result<()> {
     let xml = fs::read_to_string(slide_xml)
         .with_context(|| format!("read {}", slide_xml.display()))?;
-    let title = tone.title_rgb();
-    let verse = tone.verse_rgb();
-    let gray = tone.gray_line_rgb();
+    let title = title_tone.title_rgb();
+    let verse = citation_tone.verse_rgb();
+    let gray = citation_tone.gray_line_rgb();
 
     let xml = transform_shape(&xml, "CuadroTexto 8", |b| Ok(recolor_runs(b, title)))?;
     let xml = transform_shape(&xml, "CuadroTexto 3", |b| Ok(recolor_runs(b, verse)))?;

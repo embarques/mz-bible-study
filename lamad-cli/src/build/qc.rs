@@ -19,10 +19,10 @@ pub struct QcIssue {
 }
 
 /// QC every slide in `order`. Returns Err if any hard issue is found.
-pub fn qc_deck(build: &Path, order: &[u32], image_slides: &[u32]) -> Result<()> {
+pub fn qc_deck(build: &Path, order: &[u32], image_slides: &[u32], audience: crate::Audience) -> Result<()> {
     let mut issues = Vec::new();
     for &n in order {
-        issues.extend(qc_slide(build, n, image_slides.contains(&n))?);
+        issues.extend(qc_slide(build, n, image_slides.contains(&n), audience)?);
     }
     issues.extend(qc_unique_scenic_media(build, image_slides)?);
     let hard: Vec<_> = issues.iter().filter(|i| i.hard).collect();
@@ -163,7 +163,7 @@ pub fn assert_unique_image_files(paths: &[PathBuf], label: &str) -> Result<()> {
     Ok(())
 }
 
-fn qc_slide(build: &Path, slide: u32, is_image_chrome: bool) -> Result<Vec<QcIssue>> {
+fn qc_slide(build: &Path, slide: u32, is_image_chrome: bool, audience: crate::Audience) -> Result<Vec<QcIssue>> {
     let path = build
         .join("ppt")
         .join("slides")
@@ -186,8 +186,32 @@ fn qc_slide(build: &Path, slide: u32, is_image_chrome: bool) -> Result<Vec<QcIss
         });
     }
 
+    if audience == crate::Audience::Adult {
+        if let Some(body) = shape_block(&xml, "Marcador de contenido 2") {
+            if let Some((_, logo)) = xml.split_once(r#"name="Imagen 8""#) {
+                let logo = logo.split_once("</p:pic>").map(|(pic, _)| pic).unwrap_or("");
+                let off = Regex::new(r#"<a:off\b[^>]*\by="(\d+)""#).unwrap();
+                let ext = Regex::new(r#"<a:ext\b[^>]*\bcy="(\d+)""#).unwrap();
+                let dimension = |pattern: &Regex, block: &str| -> Option<i64> {
+                    pattern.captures(block)?.get(1)?.as_str().parse().ok()
+                };
+                let fits = match (dimension(&off, body), dimension(&ext, body), dimension(&off, logo)) {
+                    (Some(y), Some(height), Some(top)) => y + height < top,
+                    _ => false,
+                };
+                if !fits {
+                    issues.push(QcIssue {
+                        slide,
+                        hard: true,
+                        message: "body text panel reaches the top edge of the Mount Zion logo".into(),
+                    });
+                }
+            }
+        }
+    }
+
     if is_image_chrome {
-        issues.extend(qc_image_chrome(slide, &xml));
+        issues.extend(qc_image_chrome(slide, &xml, audience));
     } else if looks_like_verse_slide(&xml) {
         // Only Lectura / Texto Bíblico — title/próximo may reuse shape names.
         issues.extend(qc_verse_like(slide, &xml));
@@ -209,9 +233,9 @@ fn all_text_runs(xml: &str) -> Vec<String> {
         .collect()
 }
 
-fn qc_image_chrome(slide: u32, xml: &str) -> Vec<QcIssue> {
+fn qc_image_chrome(slide: u32, xml: &str, audience: crate::Audience) -> Vec<QcIssue> {
     let mut issues = Vec::new();
-    if !xml.contains(r#"name="OrangeBar""#) {
+    if audience == crate::Audience::Youth && !xml.contains(r#"name="OrangeBar""#) {
         issues.push(QcIssue {
             slide,
             hard: true,
@@ -416,7 +440,7 @@ mod tests {
         let xml = r#"<p:sld><p:sp><p:nvSpPr><p:cNvPr name="OrangeBar"/></p:nvSpPr></p:sp>
         <p:sp><p:nvSpPr><p:cNvPr name="CuadroTexto 8"/></p:nvSpPr><p:txBody><a:p><a:r><a:t></a:t></a:r></a:p></p:txBody></p:sp>
         <p:sp><p:nvSpPr><p:cNvPr name="CuadroTexto 3"/></p:nvSpPr><p:txBody><a:p><a:r><a:t>verse</a:t></a:r></a:p></p:txBody></p:sp></p:sld>"#;
-        let issues = qc_image_chrome(1, xml);
+        let issues = qc_image_chrome(1, xml, crate::Audience::Youth);
         assert!(issues.iter().any(|i| i.message.contains("title")));
     }
 

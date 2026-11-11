@@ -11,38 +11,111 @@ use regex::Regex;
 
 use crate::build::ooxml::body::{set_content_body_teaching, strip_arc_shapes};
 use crate::build::ooxml::shape::{
-    replace_text_preserving_runs, replace_text_single_run, set_simple_text_block, transform_shape,
+    replace_text_preserving_runs, replace_text_single_run, set_simple_text_block,
+    split_teaching_paragraphs, transform_shape,
 };
 use crate::build::ooxml::title::set_adult_title_slide;
 use crate::paths;
 use crate::Audience;
 
-/// Soft cap per body paragraph on adult `Marcador de contenido 2` shapes.
-/// Soft warn / QC ceiling for adult `Marcador de contenido 2` body text.
-/// Prefer packing at [`ADULT_BODY_LOGO_BUDGET`] so text stays **above the
-/// Mount Zion logo top** (never on/below the logo edge).
-pub const ADULT_BODY_PARA_BUDGET: usize = 500;
-/// Logo-safe pack budget for intro / A-B bodies (gold estudio 8).
-/// Body band is ~4.75" above the logo (`y≈6.19M`); ~460 chars at ~42pt fills
-/// that band. Old 380 left large white gaps under short paragraphs.
-pub const ADULT_BODY_LOGO_BUDGET: usize = 460;
+// Keep the logo position, panel geometry, and packing limit in the same units.
+const LOGO_TOP: i64 = 6_196_152;
+const BODY_FLOOR: i64 = LOGO_TOP - 146_152;
+const EMU_PER_POINT: f32 = 12_700.0;
+const BODY_FONT: u32 = 4200;
+const ADULT_BODY_PARA_BUDGET: usize = 500;
+const BODY_SHAPE: &str = "Marcador de contenido 2";
 
-#[derive(Debug, Clone, Copy)]
-pub enum AbRefShape {
-    CuadroTexto6,
-    CuadroTexto4,
-    Titulo6,
-    Titulo7,
+#[derive(Clone, Copy)]
+pub(super) struct BodyPanel {
+    x: i64,
+    y: i64,
+    width: i64,
 }
 
-impl AbRefShape {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::CuadroTexto6 => "CuadroTexto 6",
-            Self::CuadroTexto4 => "CuadroTexto 4",
-            Self::Titulo6 => "Título 6",
-            Self::Titulo7 => "Título 7",
+pub(super) const INTRO_BODY: BodyPanel = BodyPanel { x: 459_346, y: 1_708_353, width: 10_945_254 };
+pub(super) const AB_BODY: BodyPanel = BodyPanel { x: 162_730, y: 1_200_000, width: 11_866_540 };
+
+impl BodyPanel {
+    fn height(self) -> i64 {
+        BODY_FLOOR - self.y
+    }
+
+    fn fits(self, text: &str, font_size: u32) -> bool {
+        use ab_glyph::{Font, FontRef, ScaleFont};
+        // Use bold metrics to allow for the inline references. Keep a
+        // conservative substitute on hosts without the template font.
+        static TIMES_BOLD: std::sync::OnceLock<Option<Vec<u8>>> = std::sync::OnceLock::new();
+        let font = TIMES_BOLD.get_or_init(|| {
+            fs::read("/System/Library/Fonts/Supplemental/Times New Roman Bold.ttf").ok()
+        });
+        let font = font.as_deref().and_then(|bytes| FontRef::try_from_slice(bytes).ok())
+            .unwrap_or_else(|| FontRef::try_from_slice(include_bytes!("../../../assets/fonts/DejaVuSans-Bold.ttf"))
+                .expect("bundled body measurement font"));
+        let points = font_size as f32 / 100.0;
+        let metrics = font.as_scaled(font.pt_to_px_scale(points * 0.75).expect("scalable font"));
+        let width = self.width as f32 / EMU_PER_POINT - 18.0;
+        let height = self.height() as f32 / EMU_PER_POINT - 16.0;
+        let word_width = |word: &str| {
+            word.chars().map(|c| metrics.h_advance(metrics.glyph_id(c))).sum::<f32>()
+        };
+        let space = word_width(" ");
+        let mut lines = 0;
+        for paragraph in split_teaching_paragraphs(text) {
+            lines += 1;
+            let mut used = 0.0;
+            for word in paragraph.split_whitespace() {
+                let next = word_width(word);
+                if next > width {
+                    return false;
+                }
+                if used == 0.0 {
+                    used = next;
+                } else if used + space + next > width {
+                    lines += 1;
+                    used = next;
+                } else {
+                    used += space + next;
+                }
+            }
         }
+        lines as f32 * points * 1.23 <= height
+    }
+
+    pub(super) fn pack(self, slides: &[String]) -> Vec<String> {
+        let mut packs = Vec::new();
+        let mut current = String::new();
+        for sentence in crate::pack::split_sentences(slides.join(" ").trim()) {
+            if current.is_empty() {
+                current = sentence;
+                continue;
+            }
+            let candidate = format!("{current} {sentence}");
+            if self.fits(&candidate, BODY_FONT) {
+                current = candidate;
+            } else {
+                packs.push(std::mem::replace(&mut current, sentence));
+            }
+        }
+        if !current.is_empty() {
+            packs.push(current);
+        }
+        packs
+    }
+
+    fn apply(self, path: &Path, text: &str) -> Result<()> {
+        // An unusually long sentence stays intact on its own slide.
+        let size = (24..=BODY_FONT / 100)
+            .rev()
+            .map(|points| points * 100)
+            .find(|&size| self.fits(text, size))
+            .with_context(|| format!("body text cannot fit above the logo at 24 pt: {}", path.display()))?;
+        let xml = fs::read_to_string(path)?;
+        let xml = set_shape_xfrm(&xml, BODY_SHAPE, self.x, self.y, self.width, self.height())?;
+        let xml = transform_shape(&xml, BODY_SHAPE, |shape| {
+            Ok(force_all_run_sz(&set_body_pr_anchor(shape, "t"), size))
+        })?;
+        fs::write(path, xml).with_context(|| format!("write {}", path.display()))
     }
 }
 
@@ -151,29 +224,55 @@ fn set_shape_y_cy(shape_xml: &str, y: i64, cy: i64) -> String {
     .into_owned()
 }
 
-/// TEMA image header — same chrome as youth section slides (orange bar,
-/// title, gray line, verse), anchored at the **bottom-left** so longer
-/// adult titles have room without covering the scene.
-pub fn set_tema_header_image(path: &Path, tema_label: &str, titulo: &str, rango: &str) -> Result<()> {
-    // Gold (estudio 8): `TEMA I - TITLE` — spaces on both sides of the dash.
-    let title = format!("{tema_label} - {titulo}");
-    // Adult image + Texto Bíblico citations never use parentheses.
-    let cite = strip_citation_parens(rango);
-    rewrite_as_youth_section_bottom(path, &title, &cite)
+/// The TEMA and A/B headers in one study share a layout. Vary both the
+/// vertical placement and the divider across the study series, within the
+/// left text-safe area used by the scenic assets.
+#[derive(Clone, Copy)]
+pub(super) struct ScenicLayout {
+    title_y: i64,
+    citation_y: i64,
+    divider_width: i64,
+    text_width: i64,
+    orange_accent: bool,
 }
 
-/// A/B title image slide — youth section chrome at bottom-left.
-pub fn set_ab_title_header(
-    path: &Path,
-    point_label: &str,
-    titulo: &str,
-    cita: &str,
-    _reference: AbRefShape,
+impl ScenicLayout {
+    pub(super) fn for_study(number: &str) -> Self {
+        let index = number.parse::<usize>().unwrap_or(1) % 8;
+        let (title_y, citation_y, divider_width) = [
+            (2_780_000, 4_900_000, 1_200_000),
+            (3_050_000, 5_210_000, 4_900_000),
+            (2_060_000, 4_080_000, 0),
+            (2_280_000, 4_230_000, 0),
+            (2_600_000, 4_700_000, 2_100_000),
+            (3_100_000, 5_180_000, 0),
+            (2_420_000, 4_500_000, 1_450_000),
+            (3_510_000, 5_480_000, 2_800_000),
+        ][index];
+        Self {
+            title_y,
+            citation_y,
+            divider_width,
+            text_width: if index == 7 { 3_250_000 } else { 4_900_000 },
+            orange_accent: index == 1,
+        }
+    }
+}
+
+pub(super) fn set_tema_header_image(
+    path: &Path, tema_label: &str, titulo: &str, rango: &str, layout: ScenicLayout,
 ) -> Result<()> {
-    // Gold (estudio 8): `1.A - Title` — spaces on both sides of the dash.
+    let title = format!("{tema_label} - {titulo}");
+    let cite = strip_citation_parens(rango);
+    rewrite_scenic_header(path, &title, &cite, layout)
+}
+
+pub(super) fn set_ab_title_header(
+    path: &Path, point_label: &str, titulo: &str, cita: &str, layout: ScenicLayout,
+) -> Result<()> {
     let title = format!("{point_label} - {titulo}");
     let cite = strip_citation_parens(cita);
-    rewrite_as_youth_section_bottom(path, &title, &cite)
+    rewrite_scenic_header(path, &title, &cite, layout)
 }
 
 /// `MATEO 6:1-4` — never `(MATEO 6:1-4)` or trailing `;` on image chrome.
@@ -187,11 +286,8 @@ fn strip_citation_parens(cita: &str) -> String {
         .to_string()
 }
 
-/// Adult image slide = **exact youth section slide** (master slide 8), with
-/// chrome shifted to the bottom for longer titles. Do not invent OOXML —
-/// only: clone youth XML → strip Arc → move Y → swap text → keep image rid.
-/// Scenic media was already written into that rid by `apply_scenic_image`.
-fn rewrite_as_youth_section_bottom(path: &Path, title: &str, verse: &str) -> Result<()> {
+/// Clone the existing OOXML chrome and apply the study's scenic layout.
+fn rewrite_scenic_header(path: &Path, title: &str, verse: &str, layout: ScenicLayout) -> Result<()> {
     let current = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let embed = Regex::new(r#"r:embed="(rId\d+)""#)
         .unwrap()
@@ -210,23 +306,25 @@ fn rewrite_as_youth_section_bottom(path: &Path, title: &str, verse: &str) -> Res
     // scenic image → solid black slide. Remove it.
     xml = strip_named_shape(&xml, "!!Rectangle");
 
-    // Same youth gaps; whole stack anchored above a 0.25" bottom margin.
-    const SLIDE_H: i64 = 6_858_000;
-    const MARGIN_BOTTOM: i64 = 228_600;
-    const ORANGE_Y0: i64 = 402_336;
-    const TITLE_Y0: i64 = 640_080;
-    const GRAY_Y0: i64 = 2_862_072;
-    const VERSE_Y0: i64 = 3_026_664;
-    const VERSE_H: i64 = 1_463_040;
-    let dy = SLIDE_H - MARGIN_BOTTOM - ((VERSE_Y0 - ORANGE_Y0) + VERSE_H) - ORANGE_Y0;
-
-    xml = shift_shape_y(&xml, "OrangeBar", ORANGE_Y0 + dy)?;
-    xml = shift_shape_y(&xml, "CuadroTexto 8", TITLE_Y0 + dy)?;
-    xml = shift_shape_y(&xml, "GrayLine", GRAY_Y0 + dy)?;
-    xml = shift_shape_y(&xml, "CuadroTexto 3", VERSE_Y0 + dy)?;
-    // Youth section chrome is ~3.6" wide — too narrow for adult TEMA titles.
-    // Widen title / gray line / verse to ~45% of slide (left text-safe band).
-    xml = widen_image_chrome(&xml, IMAGE_CHROME_CX)?;
+    if layout.orange_accent {
+        xml = shift_shape_y(&xml, "OrangeBar", layout.title_y - 237_744)?;
+    } else {
+        xml = strip_named_shape(&xml, "OrangeBar");
+    }
+    let title_box = shape_xfrm(&xml, "CuadroTexto 8").context("missing scenic title box")?;
+    let cite_box = shape_xfrm(&xml, "CuadroTexto 3").context("missing scenic citation box")?;
+    let title_height = layout.citation_y - layout.title_y - 210_000;
+    let cite_height = 6_630_000 - layout.citation_y;
+    xml = set_shape_xfrm(&xml, "CuadroTexto 8", title_box.x, layout.title_y, layout.text_width, title_height)?;
+    xml = set_shape_xfrm(&xml, "CuadroTexto 3", cite_box.x, layout.citation_y, layout.text_width, cite_height)?;
+    if layout.divider_width == 0 {
+        xml = strip_named_shape(&xml, "GrayLine");
+    } else if let Some(line) = shape_xfrm(&xml, "GrayLine") {
+        xml = set_shape_xfrm(
+            &xml, "GrayLine", line.x, layout.citation_y - 164_592,
+            layout.divider_width, line.cy,
+        )?;
+    }
 
     // Point at this slide's media rid only — leave pic geometry/stretch alone.
     let blip_re = Regex::new(r#"r:embed="rId\d+""#).unwrap();
@@ -237,12 +335,18 @@ fn rewrite_as_youth_section_bottom(path: &Path, title: &str, verse: &str) -> Res
     // Long adult TEMA/A-B titles overflow the bottom-left panel and collide
     // with the verse under the gray line — shrink until they fit.
     let title_sz = title_font_sz_hundredths(title);
+    let title_sz = if layout.text_width < 4_000_000 { title_sz.min(2300) } else { title_sz };
     xml = transform_shape(&xml, "CuadroTexto 8", |b| {
         let s = set_simple_text_block(b, title, Some(true))?;
         Ok(force_all_run_sz(&s, title_sz))
     })?;
     xml = transform_shape(&xml, "CuadroTexto 3", |b| {
         let s = set_simple_text_block(b, verse, Some(true))?;
+        let s = if layout.divider_width == 0 {
+            Regex::new(r"<a:buChar\b[^>]*/>").unwrap().replace_all(&s, "<a:buNone/>").into_owned()
+        } else {
+            s
+        };
         Ok(force_all_run_sz(&s, IMAGE_VERSE_SZ))
     })?;
 
@@ -252,30 +356,15 @@ fn rewrite_as_youth_section_bottom(path: &Path, title: &str, verse: &str) -> Res
     // some content … removed it". Normalize to one `<a:stretch><a:fillRect/>`
     // full-bleed pic (same as apply_scenic_image), then colour chrome only.
     force_pics_fullbleed(path)?;
-    let tone = crate::build::apply_image_chrome_contrast(path)?;
-    crate::progress::debug(format!(
-        "contrast {}: {:?} title_sz={}",
-        path.file_name().and_then(|s| s.to_str()).unwrap_or("?"),
-        tone,
-        title_sz
-    ));
+    crate::build::apply_adult_chrome_contrast(
+        path,
+        (title_box.x, layout.title_y, layout.text_width, title_height),
+        (cite_box.x, layout.citation_y, layout.text_width, cite_height.min(600_000)),
+    )?;
     Ok(())
 }
 
-/// Bottom-left image chrome width (EMU). Youth default ≈3291840 (~3.6").
-const IMAGE_CHROME_CX: i64 = 4_900_000; // ~5.4" — fits left text-safe band
 const IMAGE_VERSE_SZ: u32 = 2200; // 22pt (youth clone ships 18pt)
-
-/// Widen title / gray line / verse shapes together (same left edge, wider cx).
-fn widen_image_chrome(xml: &str, cx: i64) -> Result<String> {
-    let mut out = xml.to_string();
-    for shape in ["CuadroTexto 8", "GrayLine", "CuadroTexto 3"] {
-        if let Some(xfrm) = shape_xfrm(&out, shape) {
-            out = set_shape_xfrm(&out, shape, xfrm.x, xfrm.y, cx, xfrm.cy)?;
-        }
-    }
-    Ok(out)
-}
 
 /// Hundredths of a point for bottom-left image titles. Longer titles need
 /// smaller type so they stay above the gray line / verse.
@@ -518,8 +607,8 @@ pub fn remove_orphan_videos(build: &Path) -> Result<()> {
 
 pub fn set_ab_body_slide(path: &Path, point_title: &str, body: &str) -> Result<()> {
     set_ab_body_title(path, point_title)?;
-    warn_if_over_budget(body);
-    set_content_body_teaching(path, body, None)
+    set_content_body_teaching(path, body, None)?;
+    AB_BODY.apply(path, body)
 }
 
 /// A/B body header (`Título 1`) + body panel geometry.
@@ -580,42 +669,12 @@ fn normalize_ab_body_panels(xml: &str) -> Result<String> {
     const PANEL_CX: i64 = 11_866_540; // must stay < 12_192_000 so text wraps
     const TITLE_Y: i64 = 100_000;
     const TITLE_CY: i64 = 1_050_000; // two-line band at 32–40pt
-    const GAP: i64 = 50_000;
-    // Soft floor above logo top (logo off y=6_196_152). Same as intro BODY_FLOOR.
-    const BODY_FLOOR: i64 = 6_050_000;
-
-    let title_bottom = TITLE_Y + TITLE_CY;
-    let new_body_y = title_bottom + GAP;
-    let new_body_cy = (BODY_FLOOR - new_body_y).max(3_500_000);
-
-    let mut out = set_shape_xfrm(
-        xml,
-        "Título 1",
-        PANEL_X,
-        TITLE_Y,
-        PANEL_CX,
-        TITLE_CY,
-    )?;
-    out = set_shape_xfrm(
-        &out,
-        "Marcador de contenido 2",
-        PANEL_X,
-        new_body_y,
-        PANEL_CX,
-        new_body_cy,
-    )?;
-    // Top-align so dense packs fill downward toward the logo floor.
-    out = transform_shape(&out, "Marcador de contenido 2", |b| {
-        Ok(set_body_pr_anchor(b, "t"))
-    })?;
-    Ok(out)
+    set_shape_xfrm(xml, "Título 1", PANEL_X, TITLE_Y, PANEL_CX, TITLE_CY)
 }
 
 #[derive(Clone, Copy)]
 struct Xfrm {
     x: i64,
-    y: i64,
-    cx: i64,
     cy: i64,
 }
 
@@ -630,8 +689,6 @@ fn shape_xfrm(xml: &str, shape: &str) -> Option<Xfrm> {
     let caps = re.captures(block)?;
     Some(Xfrm {
         x: caps[1].parse().ok()?,
-        y: caps[2].parse().ok()?,
-        cx: caps[3].parse().ok()?,
         cy: caps[4].parse().ok()?,
     })
 }
@@ -835,35 +892,8 @@ fn rewrite_slide_as_fullbleed_pic(slide_xml: &str, embed_rid: &str) -> Result<St
 }
 
 pub fn set_intro_body(path: &Path, text: &str) -> Result<()> {
-    warn_if_over_budget(text);
     set_content_body_teaching(path, text, None)?;
-    Ok(())
-}
-
-/// Call after logo inject. Expand `Marcador de contenido 2` to the full white
-/// body band (below the blue header, above the logo) and top-align text.
-pub fn fit_intro_body_box(path: &Path, _text: &str) -> Result<()> {
-    // Gold slide 10 — white body inset matches `Título 1` header bar.
-    const BODY_X: i64 = 459_346;
-    const BODY_CX: i64 = 10_945_254;
-    const BODY_TOP: i64 = 1_708_353;
-    // Soft floor above Mount Zion logo (~y=6.19M).
-    const BODY_FLOOR: i64 = 6_050_000;
-    let body_cy = (BODY_FLOOR - BODY_TOP).max(1_500_000);
-
-    let xml = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let mut out = set_shape_xfrm(
-        &xml,
-        "Marcador de contenido 2",
-        BODY_X,
-        BODY_TOP,
-        BODY_CX,
-        body_cy,
-    )?;
-    out = transform_shape(&out, "Marcador de contenido 2", |b| {
-        Ok(set_body_pr_anchor(b, "t"))
-    })?;
-    fs::write(path, out).with_context(|| format!("write {}", path.display()))
+    INTRO_BODY.apply(path, text)
 }
 
 /// Youth body slides include the Mount Zion logo at bottom-right (`Imagen 8`).
@@ -939,7 +969,7 @@ pub fn ensure_intro_body_logo(build: &Path, slide_num: u32, logo_png: &Path) -> 
 
     // Geometry copied from youth master-template intro body (`Imagen 8`).
     let pic = format!(
-        r#"<p:pic><p:nvPicPr><p:cNvPr id="{shape_id}" name="Imagen 8"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="{logo_rid}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="11281505" y="6196152"/><a:ext cx="815245" cy="582318"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>"#
+        r#"<p:pic><p:nvPicPr><p:cNvPr id="{shape_id}" name="Imagen 8"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="{logo_rid}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="11281505" y="{LOGO_TOP}"/><a:ext cx="815245" cy="582318"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>"#
     );
     if !xml.contains("</p:spTree>") {
         bail!("slide {slide_num} missing </p:spTree>");
@@ -1263,5 +1293,25 @@ mod tests {
         let out = ensure_single_stretch(&pic).expect("should collapse");
         assert_eq!(out.matches("<a:stretch").count(), 1);
         assert!(out.contains(FULL));
+    }
+}
+
+
+#[cfg(test)]
+mod body_panel_tests {
+    use super::*;
+
+    #[test]
+    fn packs_by_wrapped_width_and_preserves_long_sentences() {
+        let narrow = format!("{}.", "iiii ".repeat(26).trim_end());
+        let wide = format!("{}.", "WWWW ".repeat(26).trim_end());
+        assert_eq!(narrow.len(), wide.len());
+        assert_eq!(INTRO_BODY.pack(&[narrow.clone(), narrow]).len(), 1);
+        assert_eq!(INTRO_BODY.pack(&[wide.clone(), wide]).len(), 2);
+
+        let long = format!("{}.", "palabra ".repeat(65).trim_end());
+        assert!(!INTRO_BODY.fits(&long, BODY_FONT));
+        assert!(INTRO_BODY.fits(&long, 2400));
+        assert_eq!(INTRO_BODY.pack(&[long.clone()]), [long]);
     }
 }

@@ -220,7 +220,7 @@ fn merge_adjacent_under_budget(packs: Vec<String>, budget: usize) -> Vec<String>
 /// The `regex` crate has no look-around support, so this can't be a single
 /// `(?<=[.!?…])\s+` split (that Python-style pattern panics here) — instead
 /// match the punctuation run + following whitespace and slice around it.
-fn split_sentences(text: &str) -> Vec<String> {
+pub(crate) fn split_sentences(text: &str) -> Vec<String> {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| Regex::new(r"[.!?…]+\s+").expect("regex"));
     let mut out = Vec::new();

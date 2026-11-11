@@ -180,9 +180,9 @@ Follow slide order and recipes below, then the checklist.
 
 **One design family per study; different family from other studies.**
 
-- Within a study, all section/scenic images share the **same visual design language** (lighting, finish, edge treatment, optional accents).
+- Within a study, keep a coherent visual language and vary the composition for each passage. Plan the subject, camera distance, angle, and setting for the intro, TEMA, and each A/B image. Use establishing scenes, close details, and action where the passage calls for them. Changing only the figure or symbol in the same horizon composition does not count.
 - **HARD — unique scenes:** every image file must be a **different scene** (youth `section1` ≠ `section2` ≠ `section3`; adult `intro-header` ≠ each `tema-N` ≠ each `ab-N{Letter}`). Never copy the same PNG, never reuse one photo for TEMA I/II/III or for 1.A/1.B/1.C. Builder QC fails on identical bytes. Adult builder must give each scenic slide its **own** media part (duplicated slides must not share one `imageN.png`).
-- Across studies, **change the design** — `mzbs` assigns a rotating family; chat builds must not reuse the previous study’s look (e.g. if study 16 used yellow dashed accent arcs / a particular white-curve panel, study 17 and 18 must not copy that).
+- Across studies, **change the design**. Before generating, assign a distinct combination of medium, palette, composition, and treatment under the text for each study. Compare the batch as a contact sheet and replace scenes that repeat the same visual formula, such as a warm sunrise, right-side subject, and pale fade. `mzbs` assigns a rotating family.
 - Catalog: `python/mz_bible_study/section_styles.py` (parchment, lavender mist, sage paper, ink wash, dawn gold, …).
 - When cloning a prior deck, **always strip** PowerPoint shapes named `Arc …` (yellow dashed/dotted arcs). That motif is retired — **do not** keep or redraw dotted/dashed arc chrome on section slides for any new study.
 - Generate three **new** illustrations every study (don’t reuse another study’s media files).
@@ -193,10 +193,10 @@ Requirements:
 - Scene fits each section theme; be inventive.
 - **Finished slide backgrounds (HARD):** each PNG must include a deliberate **left text-safe treatment** (~35–45% width — soft mist, parchment fade, watercolor bloom, dusk glow, cool paper wash, etc.) that **matches this study’s design family**. Put the scene subject right/center-right. Do **not** deliver a busy undressed full-bleed under the title band. The treatment must **change with each study** — do not reuse the previous study’s fade motif.
 - Full-bleed canvas is fine **only when** that left treatment is baked into the art.
-- **HARD RULE — title + verse must be readable:** calm/light area under the text (via the left treatment above), or switch title/verse colors if needed. Never leave dark navy text on a busy dark photo, or white text on a bright wash.
+- **HARD RULE — title + verse must be readable:** choose the PowerPoint text foreground for the actual area behind each title and citation. Use dark navy on light areas and near-white on dark areas. If brightness varies under the words, simplify that part of the art or use a subtle local scrim. Inspect every scenic slide in the exported PDF at presentation size and thumbnail size. Correct low contrast before delivery.
 - No text, letters, logos, watermarks, or decorative caption marks in the art. **Never** use yellow dotted/dashed arcs (study-16 motif is retired).
 - **No** `alphaModFix` / opacity dimming on the photo itself.
-- Slide chrome (XML): orange bar (`E85D04`), gray line, title (`1- TITLE`), bold verse under gray line — colors chosen so they stay readable on the image.
+- Adult scenic typography (XML): give each study a distinct title and citation arrangement. Vary the vertical placement, spacing, and divider treatment. A simple type stack, a short divider, and a wider rule are all options. Reserve the orange bar for an occasional layout and choose a readable foreground for each text block.
 
 **Title vs verse (HARD RULE):** the section title and the verse citation must **never overlap**. Leave a clear gap above the gray line; the title box must end above the gray line; the verse sits **under** the gray line only. For long titles: shrink title font and/or deepen the title box and **push the gray line + verse down** so everything fits without collision.
 
@@ -226,6 +226,7 @@ On **every slide that shows the Mount Zion Church logo** (comentario, intro, A/B
 
 - **Do not draw** any guide/red line on the slide — the logo itself is the guide.
 - **No text may sit on or below the top of the logo** (not overlapping it, not in the footer band).
+- For adult Introducción and A/B bodies, the CLI uses the logo’s top coordinate to limit the panel and measures wrapped lines before packing. Move the next complete sentence to a continuation slide when needed. A character target alone cannot establish fit. Check the last line on every rendered logo slide.
 - Practical content-box bottom ≈ **6.45"** on a 7.5" slide so the last line stays **above** the logo top.
 - Use `noAutofit`; turn off `spAutoFit` / `normAutofit`.
 
@@ -292,7 +293,7 @@ Do **not** call a helper that strips `b="1"` from every run with `bold=False` as
 ### Don’t fight the template
 
 - Keep template headers (**Introducción** = white on blue bar).
-- Section chrome (orange bar, gray line, title/verse placement) still follows the template overlays — the **illustration style** may change (see section images).
+- Adult scenic slides vary the title and citation arrangement by study. Keep title and citation separate, readable, and editable in PowerPoint.
 
 ---
 
@@ -338,7 +339,7 @@ Do **not** call a helper that strips `b="1"` from every run with `bold=False` as
 - **Always strip** cloned `Arc …` yellow dashed/dotted shapes — that motif is retired; do not put it back.
 - Whole-image art is fine **only with** a baked-in left text-safe treatment that matches this study’s design family (change the treatment next study).
 - **Title + verse must stay readable** — calm area under text, soft scrim, and/or text color that contrasts with the background.
-- Orange bar, gray line, title `1- TITLE`; verse **under** the gray line only.
+- For adult slides, use the study’s selected typography layout and place the citation below the title. When a divider is used, place it between them.
 - **No overlap** between title and verse — if the title is long, reduce font size and/or move gray line + verse down until there is a clear gap.
 - Final media ≈ **1408×768** PNG; no text/logos/watermarks in the image; **no** `alphaModFix` dimming on the photo.
 
