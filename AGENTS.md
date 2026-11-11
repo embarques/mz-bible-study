@@ -196,7 +196,7 @@ Requirements:
 - **HARD RULE — title + verse must be readable:** choose the PowerPoint text foreground for the actual area behind each title and citation. Use dark navy on light areas and near-white on dark areas. If brightness varies under the words, simplify that part of the art or use a subtle local scrim. Inspect every scenic slide in the exported PDF at presentation size and thumbnail size. Correct low contrast before delivery.
 - No text, letters, logos, watermarks, or decorative caption marks in the art. **Never** use yellow dotted/dashed arcs (study-16 motif is retired).
 - **No** `alphaModFix` / opacity dimming on the photo itself.
-- Slide chrome (XML): orange bar (`E85D04`), gray line, title (`1- TITLE`), bold verse under gray line — colors chosen so they stay readable on the image.
+- Adult scenic typography (XML): give each study a distinct title and citation arrangement. Vary the vertical placement, spacing, and divider treatment. A simple type stack, a short divider, and a wider rule are all options. Reserve the orange bar for an occasional layout and choose a readable foreground for each text block.
 
 **Title vs verse (HARD RULE):** the section title and the verse citation must **never overlap**. Leave a clear gap above the gray line; the title box must end above the gray line; the verse sits **under** the gray line only. For long titles: shrink title font and/or deepen the title box and **push the gray line + verse down** so everything fits without collision.
 
@@ -226,6 +226,7 @@ On **every slide that shows the Mount Zion Church logo** (comentario, intro, A/B
 
 - **Do not draw** any guide/red line on the slide — the logo itself is the guide.
 - **No text may sit on or below the top of the logo** (not overlapping it, not in the footer band).
+- For adult Introducción and A/B bodies, the CLI uses the logo’s top coordinate to limit the panel and measures wrapped lines before packing. Move the next complete sentence to a continuation slide when needed. A character target alone cannot establish fit. Check the last line on every rendered logo slide.
 - Practical content-box bottom ≈ **6.45"** on a 7.5" slide so the last line stays **above** the logo top.
 - Use `noAutofit`; turn off `spAutoFit` / `normAutofit`.
 
@@ -292,7 +293,7 @@ Do **not** call a helper that strips `b="1"` from every run with `bold=False` as
 ### Don’t fight the template
 
 - Keep template headers (**Introducción** = white on blue bar).
-- Section chrome (orange bar, gray line, title/verse placement) still follows the template overlays — the **illustration style** may change (see section images).
+- Adult scenic slides vary the title and citation arrangement by study. Keep title and citation separate, readable, and editable in PowerPoint.
 
 ---
 
@@ -338,7 +339,7 @@ Do **not** call a helper that strips `b="1"` from every run with `bold=False` as
 - **Always strip** cloned `Arc …` yellow dashed/dotted shapes — that motif is retired; do not put it back.
 - Whole-image art is fine **only with** a baked-in left text-safe treatment that matches this study’s design family (change the treatment next study).
 - **Title + verse must stay readable** — calm area under text, soft scrim, and/or text color that contrasts with the background.
-- Orange bar, gray line, title `1- TITLE`; verse **under** the gray line only.
+- For adult slides, use the study’s selected typography layout and place the citation below the title. When a divider is used, place it between them.
 - **No overlap** between title and verse — if the title is long, reduce font size and/or move gray line + verse down until there is a clear gap.
 - Final media ≈ **1408×768** PNG; no text/logos/watermarks in the image; **no** `alphaModFix` dimming on the photo.
 

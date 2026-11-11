@@ -36,7 +36,7 @@ These slide types use a **single image covering the entire slide** (edge to edge
 | Slide type | Image role | Text placement |
 |------------|------------|----------------|
 | `intro_header` | Scenic full-bleed (e.g. open Bible, landscape) | Centred semi-transparent white box with section title only |
-| `tema_header` | Cinematic scene for the theme | **Youth section chrome at bottom-left** — orange bar, title, gray line, verse (same idea as youth; lower because adult titles are longer) |
+| `tema_header` | Cinematic scene for the theme | **Study-specific overlay** — title and citation in the left text-safe band with a rotating divider treatment |
 | `ab_title` | Cinematic scene for the A/B point | **Same youth chrome at bottom-left** (not torn-paper / top bar) |
 
 **Contrast (CLI, automatic):** sample the left ~40% **and** the full frame. Dark band **or** dark cinematic scene with a soft left mist → **white** title + **white** verse. Only true light parchment/wash (bright overall) → navy title/verse. Never leave dark/gray text on a dark mood photo.
@@ -50,24 +50,17 @@ Every text-heavy slide has a **hard floor** where content stops. Nothing may sit
 | Slide type | Guard rail | Approx. safe height |
 |------------|------------|---------------------|
 | `intro_body` | **Top edge of Mount Zion logo** (bottom-right) | Content box floor ≈ `y=6.05M` EMU — **never** put text on/below the logo top |
-| `ab_body` | **Logo top** (Mount Zion `Imagen 8`) | Stop above the logo edge; pack denser (≤460 chars) so slides are not half-empty |
+| `ab_body` | **Logo top** (Mount Zion `Imagen 8`) | Fit measured lines in the panel above the logo edge |
 | `lectura_antifonal` | Bottom of white/blue content panel | Pack whole verses; split slide before next verse crosses the floor |
 | `texto_biblico` | Empty black margin at bottom | Leave **~20–25%** of slide height below last verse line |
 | `tema_header` | Bottom gradient bar | Title + reference live **inside** the bar (~bottom 20–25% of slide) |
 
-**Packing (HARD — even distribute, logo floor):**
-
-1. Join the section’s body text (Introducción or one A/B point).  
-2. Compute how many slides are needed so each pack stays **≤460 chars** (logo-top floor — gold 8).  
-3. Distribute **whole sentences** evenly, then merge adjacent packs that still fit (no sparse half-empty slides). Never mid-sentence; never below the logo top.  
-4. Builder does this automatically via `pack_sentences_even` / `rebalance_body_slides` — JSON may be uneven; rebuild rebalances.
-
-| Shape | ~chars per slide / paragraph |
-|-------|------------------------------|
-| `Marcador de contenido 2` (body) | **≤460** logo-safe pack; warn if still >500 |
-| `CuadroTexto 5` (lectura) | **250–300** verse chars |
-| `TextBox 4` (texto bíblico) | **250–300** verse chars; split at whole verses |
-| Teaching body | Split at `(1)`, `(2)`, `(3)` **and** at sentence ends before the floor |
+**Packing (HARD):** The CLI measures wrapped lines against the intro or
+A/B panel width and the height available above the logo. It moves whole
+sentences to a continuation slide and reduces the font for an unusually long
+sentence when necessary. The build fails if the sentence cannot fit at the
+minimum body size. Inspect the last text line on rendered slides with the logo.
+For scripture slides, keep whole verses and use the appropriate content panel.
 
 ### 3. Colours & fonts (from reference deck)
 
@@ -80,7 +73,7 @@ Every text-heavy slide has a **hard floor** where content stops. Nothing may sit
 | Texto Bíblico header | White centred “Texto Bíblico” on black |
 | Texto citation + verse numbers | **Yellow** `#FFFF00`, bold |
 | Texto verse body | **White** `#FFFFFF`, regular |
-| Tema / A-B image chrome | Youth-style: orange `#E85D04` bar, title + gray line + verse — **bottom-left**, panel **~5.4" wide** (wider than youth ~3.6"), title **22–36pt** by length, verse **22pt** |
+| Tema / A-B image chrome | Study-specific title and citation placement in the **~5.4"** left band. Divider widths vary, some layouts use type alone, and an occasional layout uses the orange accent. The CLI samples the two background regions independently for text color. |
 
 Preserve template run colours when filling OOXML — do not flatten to a single style.
 
@@ -282,7 +275,7 @@ Insert via OOXML media replace (`ppt/media/imageN.png`) — same pattern as yout
 2. **Texto Bíblico** — every slide shows yellow/white verses on black (no “empty” slides).
 3. **Definición** — matches card design (header + icon/chevron/text/icon rows); icons fit the terms, not the sample stock set.
 4. **Body slides** — no text touching or crossing the navy footer bar.
-5. **Tema / A-B image slides** — full-bleed art; youth chrome (orange bar / title / gray line / verse) at bottom-left only.
+5. **Tema / A-B image slides** — full-bleed art with each study’s title and citation arrangement. Verify spacing and foreground contrast in the exported PDF.
 6. **Paragraph breaks** — teaching markers `(1)`/`(2)`/`(3)` start new paragraphs.
 7. `lamad validate` → OK; export PDF.
 

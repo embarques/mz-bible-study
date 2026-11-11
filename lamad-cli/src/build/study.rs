@@ -293,7 +293,7 @@ pub fn apply_study(build: &Path, study: &Study) -> Result<Vec<u32>> {
             crate::build::apply_image_chrome_contrast(&ooxml::slide_path(build, sec_n))?;
         crate::progress::debug(format!("contrast section slide {sec_n}: {tone:?}"));
     }
-    crate::build::qc_deck(build, &order, &PROTO.section)?;
+    crate::build::qc_deck(build, &order, &PROTO.section, Audience::Youth)?;
 
     println!(
         "Packed {} active slides (lectura={}, comentario={}, intro={}, conclusion={})",

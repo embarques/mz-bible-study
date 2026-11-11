@@ -381,10 +381,16 @@ sheet and replace scenes that repeat the same horizon, lighting, or fade.
 Within a study, choose a scene or object for each passage and vary the viewpoint,
 distance, and setting across the intro, TEMA, and A/B slides. Keep the art suited
 to Mount Zion's Pentecostal congregation. Keep the artwork free of baked text.
+Give each adult study a distinct title/citation layout. Vary placement,
+spacing, and divider treatment within the left text-safe area. Consider
+unadorned type, a short rule, or a full-width divider. Use the orange accent
+occasionally. The CLI rotates these overlays by study number.
 Choose the slide title and citation foreground per image: dark navy over light
 areas and near-white over dark areas. Simplify busy or mixed-brightness areas
 behind the text when necessary. Once the deck is built, inspect every scenic
 slide in the exported PDF and correct any title or citation that is hard to read.
+On any slide with the Mount Zion logo, verify the last text line ends above
+the logo’s top edge. Keep sentences and verses whole across continuations.
 
 ---
 

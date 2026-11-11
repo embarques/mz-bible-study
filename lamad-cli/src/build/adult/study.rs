@@ -10,9 +10,9 @@ use serde_json::Value;
 use super::definicion_card::{definicion_card_page, DEFINICION_ROWS};
 use crate::build::adult::ooxml::{
     apply_scenic_image, convert_video_tema_to_image_layout, ensure_intro_body_logo,
-    fit_intro_body_box, remove_orphan_videos, set_ab_body_slide, set_ab_title_header,
+    remove_orphan_videos, set_ab_body_slide, set_ab_title_header,
     set_definicion_image, set_ensenanza_datos, set_intro_body, set_tema_header_image,
-    set_title_or_proximo, AbRefShape, ADULT_BODY_LOGO_BUDGET,
+    set_title_or_proximo, ScenicLayout, AB_BODY, INTRO_BODY,
 };
 use crate::build::ooxml::{self, VerseKind};
 use crate::build::ooxml::verses::expand_glued_verses;
@@ -207,18 +207,15 @@ pub fn apply_adult_study(build: &Path, study: &AdultStudy) -> Result<Vec<u32>> {
     if study.introduccion_slides.is_empty() {
         bail!("introduccion_slides must have at least one paragraph");
     }
-    // Evenly redistribute so no intro slide clips under the logo top.
-    let intro_packs =
-        pack::rebalance_body_slides(&study.introduccion_slides, ADULT_BODY_LOGO_BUDGET);
+    let intro_packs = INTRO_BODY.pack(&study.introduccion_slides);
     if intro_packs.is_empty() {
         bail!("introduccion_slides rebalance produced no packs");
     }
     if intro_packs.len() != study.introduccion_slides.len() {
         crate::progress::info(format!(
-            "introducción: rebalanced {} → {} slides (logo-safe ≤{} chars)",
+            "introducción: rebalanced {} → {} slides to fit above the logo",
             study.introduccion_slides.len(),
-            intro_packs.len(),
-            ADULT_BODY_LOGO_BUDGET
+            intro_packs.len()
         ));
     }
     let intro_nums = allocate_body_slides(build, &INTRO_BODY_PROTOS, intro_packs.len())?;
@@ -228,9 +225,6 @@ pub fn apply_adult_study(build: &Path, study: &AdultStudy) -> Result<Vec<u32>> {
         // Adult intro body prototypes lack the Mount Zion logo; youth has it.
         // Copy youth bottom-right logo onto intro body slides only.
         ensure_intro_body_logo(build, slide_num, &youth_intro_logo_path()?)?;
-        // After logo inject — expand Marcador to the band above the logo top
-        // and top-align text (never below the logo edge).
-        fit_intro_body_box(&path, text)?;
     }
     order.extend(&intro_nums);
 
@@ -275,7 +269,7 @@ pub fn apply_adult_study(build: &Path, study: &AdultStudy) -> Result<Vec<u32>> {
     )?;
     order.push(ADULT_SLIDE_COUNT);
 
-    crate::build::qc_deck(build, &order, &image_slides)?;
+    crate::build::qc_deck(build, &order, &image_slides, Audience::Adult)?;
 
     crate::progress::ok(format!("Filled adult deck with {} slides", order.len()));
     Ok(order)
@@ -394,6 +388,7 @@ fn fill_tema(
     ab_image_i: &mut usize,
 ) -> Result<()> {
     let label = tema_label(idx);
+    let layout = ScenicLayout::for_study(&study.numero_string());
     let header = if idx == 0 {
         PROTO_TEMA_HEADER
     } else {
@@ -409,6 +404,7 @@ fn fill_tema(
         &label,
         &tema_title,
         &tema.rango,
+        layout,
     )?;
     order.push(header);
     image_slides.push(header);
@@ -487,6 +483,7 @@ fn fill_tema(
             title_slide,
             texto_proto,
             &body_protos,
+            layout,
             order,
             image_slides,
         )?;
@@ -504,6 +501,7 @@ fn fill_ab_block(
     title_slide: u32,
     texto_proto: u32,
     body_slides: &[u32],
+    layout: ScenicLayout,
     order: &mut Vec<u32>,
     image_slides: &mut Vec<u32>,
 ) -> Result<()> {
@@ -534,7 +532,7 @@ fn fill_ab_block(
         &label,
         &titulo,
         section_cita,
-        AbRefShape::CuadroTexto6,
+        layout,
     )?;
     order.push(title_slide);
     image_slides.push(title_slide);
@@ -557,17 +555,15 @@ fn fill_ab_block(
     }
 
     let body_title = format!("{label} - {titulo}");
-    // Even packs above the logo / navy-footer floor (same budget as intro).
-    let body_packs = pack::rebalance_body_slides(&block.texto_slides, ADULT_BODY_LOGO_BUDGET);
+    let body_packs = AB_BODY.pack(&block.texto_slides);
     if body_packs.is_empty() {
         bail!("{label} texto_slides rebalance produced no packs");
     }
     if body_packs.len() != block.texto_slides.len() {
         crate::progress::info(format!(
-            "{label} body: rebalanced {} → {} slides (logo-safe ≤{} chars)",
+            "{label} body: rebalanced {} → {} slides to fit above the logo",
             block.texto_slides.len(),
-            body_packs.len(),
-            ADULT_BODY_LOGO_BUDGET
+            body_packs.len()
         ));
     }
     let body_nums = allocate_body_slides(build, body_slides, body_packs.len())?;
