@@ -306,6 +306,11 @@ Esta era una ciudad antigua…
 | `body.txt` | Point body; paragraphs separated by blank lines |
 | `texto-biblico.txt` | Same `CITA:` + verse lines format as lectura |
 
+For a scan-only build, include only the whole verses printed in the scan.
+If a point cites a passage with no whole verses printed, write its `CITA:`
+line followed by `SIN_TEXTO_IMPRESO`. The citation appears on the point
+header slide.
+
 ### `NN-proximo/` (when not omitted)
 
 | File | Content |

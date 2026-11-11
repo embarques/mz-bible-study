@@ -482,6 +482,7 @@ fn fill_tema(
             point_n,
             &punto.letra,
             &punto.as_bloque(),
+            punto.citation_only,
             &tema.rango,
             title_slide,
             texto_proto,
@@ -498,6 +499,7 @@ fn fill_ab_block(
     point: usize,
     letter: &str,
     block: &crate::model::adult_study::BloqueAdult,
+    citation_only: bool,
     tema_rango: &str,
     title_slide: u32,
     texto_proto: u32,
@@ -509,7 +511,8 @@ fn fill_ab_block(
     // Builder already prefixes `{N}.{Letter} - `.
     // Strip agent leftovers: `A. …`, `2.A- …`, trailing `(6:12)`.
     let titulo = sanitize_ab_point_titulo(&block.titulo);
-    if block.texto_biblico.cita.trim().is_empty() || block.texto_biblico.versiculos.is_empty()
+    if block.texto_biblico.cita.trim().is_empty()
+        || (block.texto_biblico.versiculos.is_empty() != citation_only)
     {
         bail!(
             "{label}: texto_biblico missing section verses — each A/B point needs its own \
@@ -536,20 +539,22 @@ fn fill_ab_block(
     order.push(title_slide);
     image_slides.push(title_slide);
 
-    let packs = texto_biblico_packs(&block.texto_biblico);
-    if packs.is_empty() {
-        bail!("{label} texto_biblico produced no verse packs");
+    if !citation_only {
+        let packs = texto_biblico_packs(&block.texto_biblico);
+        if packs.is_empty() {
+            bail!("{label} texto_biblico produced no verse packs");
+        }
+        let texto_nums = allocate_from_proto(build, texto_proto, packs.len())?;
+        for ((verses, cite), &slide_n) in packs.iter().zip(texto_nums.iter()) {
+            ooxml::set_verses(
+                &ooxml::slide_path(build, slide_n),
+                verses,
+                cite.as_deref(),
+                VerseKind::Texto,
+            )?;
+        }
+        order.extend(&texto_nums);
     }
-    let texto_nums = allocate_from_proto(build, texto_proto, packs.len())?;
-    for ((verses, cite), &slide_n) in packs.iter().zip(texto_nums.iter()) {
-        ooxml::set_verses(
-            &ooxml::slide_path(build, slide_n),
-            verses,
-            cite.as_deref(),
-            VerseKind::Texto,
-        )?;
-    }
-    order.extend(&texto_nums);
 
     let body_title = format!("{label} - {titulo}");
     // Even packs above the logo / navy-footer floor (same budget as intro).

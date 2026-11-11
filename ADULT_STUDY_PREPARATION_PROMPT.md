@@ -11,7 +11,10 @@ For this run, proceed without waiting for batch confirmation or my review.
 2. Transcribe the required Spanish content verbatim into the standard
    `studies/adult/{N}/` section files. Read the columns in order, join text
    across columns and pages, preserve chapter and verse markers, and prepare
-   the required scenic PNGs.
+   the required scenic PNGs. Use imagery suited to Mount Zion's Pentecostal
+   congregation. Choose scenes and objects that illustrate the lesson. Avoid
+   stained-glass depictions, Catholic devotional imagery, cathedral interiors,
+   and ornamental carved reliefs or mosaics.
 3. In a separate pass, compare the section files against the original scan.
    Check for omissions, altered words, incorrect citations, and broken joins.
    Re-read unclear areas at higher zoom and fix every discrepancy you can
