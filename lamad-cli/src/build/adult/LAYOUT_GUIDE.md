@@ -147,10 +147,9 @@ Generators may change **only**:
 2. `texto` definition body  
 3. Left circular icon + small right icon (to match that definition)
 
-Do **not** change, “improve”, restyle, or replace the layout. Host generate uses
-**OpenAI image edits against the gold PNG** (`lamad prepare --gen-definicion`) so the
-structure cannot drift. Layout QC rejects invents (centered title pill, cartoon hills,
-play triangles, parchment essay, etc.).
+Keep the layout unchanged. The dedicated generation command supplies the gold PNG
+as a reference for Cursor or OpenAI. Layout QC checks the result for departures
+such as a centered title pill, cartoon hills, play triangles, or a parchment essay.
 
 Do **not** dump definitions as a plain blue-header body slide. Each tema’s definición slide is a **composed 16:9 graphic** (full-bleed) matching this layout:
 
@@ -171,6 +170,8 @@ Do **not** dump definitions as a plain blue-header body slide. Each tema’s def
 **Row colours** rotate per card (blue → darker blue → teal → purple, etc.) so adjacent rows never share the same chevron colour.
 
 **Icons are content-specific** — do not reuse the sample’s clock/storm/brain icons when the study talks about *justicia*, *modestia*, *humildad*, etc. Generate new icon pairs that fit each termino/texto.
+
+With the current study's section files ready, run `lamad prepare -n N --audience adult --gen-definicion` to regenerate the cards. This uses Cursor when the Cursor key is configured and the OpenAI key is empty. For each row, choose a concrete illustration for the printed term and a smaller complementary symbol for its explanation. Replace both sample illustrations, preserve the header book icon, and inspect the finished PNG for exact Spanish and relevant artwork in both slots. The layout and terms fingerprint checks do not assess whether an icon fits its definition. The local text-only bake retains the reference illustrations.
 
 **FORBIDDEN (HARD — never ship):**
 - Parchment / paper texture with centered essay text
