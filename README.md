@@ -50,7 +50,10 @@ Attach the scan to Codex, or give it the scan’s path, and paste this command:
 > Proceed independently without waiting for batch confirmation or my review.
 > Identify each study by its printed title page and `RESUMEN GENERAL` boundary,
 > and use the next title page for Próximo when available. Prepare all the
-> required section files and unique scenic artwork. Compare the Spanish text
+> required section files and unique scenic artwork suited to Mount Zion's
+> Pentecostal congregation. Choose scenes and objects that illustrate the
+> lesson. Avoid stained glass, Catholic devotional imagery, cathedral
+> interiors, and ornamental carved reliefs or mosaics. Compare the Spanish text
 > against the scan in a separate pass, correcting omissions, citations, and
 > text split across columns or pages. Run
 > `lamad validate-content -n N --audience adult` for each study, then run

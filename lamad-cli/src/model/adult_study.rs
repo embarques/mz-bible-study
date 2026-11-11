@@ -49,6 +49,8 @@ pub struct PuntoAdult {
     pub titulo: String,
     pub texto_slides: Vec<String>,
     pub texto_biblico: Lectura,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub citation_only: bool,
 }
 
 impl PuntoAdult {
@@ -58,6 +60,7 @@ impl PuntoAdult {
             titulo: b.titulo,
             texto_slides: b.texto_slides,
             texto_biblico: b.texto_biblico,
+            citation_only: false,
         }
     }
 

@@ -318,7 +318,11 @@ pub fn write_adult_sections(study: &AdultStudy, study_dir: &Path) -> Result<()> 
             )?;
             write_text(
                 &dir.join("texto-biblico.txt"),
-                &format_lectura(&punto.texto_biblico),
+                &if punto.citation_only {
+                    format!("CITA: {}\nSIN_TEXTO_IMPRESO", punto.texto_biblico.cita)
+                } else {
+                    format_lectura(&punto.texto_biblico)
+                },
             )?;
         }
     }
@@ -479,7 +483,7 @@ fn read_adult_sections(study: u32) -> Result<AdultStudy> {
                     let body = split_paragraphs(&read_trimmed(&dir.join("body.txt"))?);
                     let texto_path = dir.join("texto-biblico.txt");
                     let texto_raw = fs::read_to_string(&texto_path)?;
-                    let texto = parse_lectura(&super::adult_normalize::ensure_cita_prefix(&texto_raw))
+                    let (texto, citation_only) = parse_point_scripture(&texto_raw)
                         .with_context(|| format!("parse {}", texto_path.display()))?;
                     puntos.push((
                         tema_n,
@@ -489,6 +493,7 @@ fn read_adult_sections(study: u32) -> Result<AdultStudy> {
                             titulo: title,
                             texto_slides: body,
                             texto_biblico: texto,
+                            citation_only,
                         },
                     ));
                 } else {
@@ -836,6 +841,16 @@ fn format_lectura(block: &Lectura) -> String {
         out.push('\n');
     }
     out
+}
+
+fn parse_point_scripture(text: &str) -> Result<(Lectura, bool)> {
+    let lines: Vec<_> = text.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+    if let [citation, "SIN_TEXTO_IMPRESO"] = lines.as_slice() {
+        let cita = citation.strip_prefix("CITA:").map(str::trim).filter(|s| !s.is_empty())
+            .context("SIN_TEXTO_IMPRESO requires a nonempty CITA: line")?;
+        return Ok((Lectura { cita: cita.to_string(), versiculos: Vec::new() }, true));
+    }
+    parse_lectura(&super::adult_normalize::ensure_cita_prefix(text)).map(|reading| (reading, false))
 }
 
 fn parse_lectura(text: &str) -> Result<Lectura> {
