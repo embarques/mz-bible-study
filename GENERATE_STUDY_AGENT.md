@@ -367,12 +367,24 @@ For **each tema that has a printed definición box**, also generate:
 | `definicion-{k}.png` | Locked **Definición y etimología** card layout: gold/cream card, term + body + left/right icons. Change **only** term text, definition text, and icons. Do **not** invent a new layout (no centered essay, cartoon hills, parchment scroll, play triangles). |
 
 If tema `k` has **no** definición box → **do not** create `definicion-{k}.png`.
+Show one row per printed definition. Omit every unused white card, chevron,
+divider, and icon. Replace both sample icons on each populated row with
+illustrations tied to the printed term and explanation.
 
 ### Image prompt hints (use the study’s content)
 
-For each scenic file, invent a concrete biblical / historical scene that matches
-that section’s title and verses (e.g. David consulting the Lord, Hebrón,
-coronation, Jerusalem). Keep it reverent and readable under dark navy title text.
+Assign each study its own medium, palette, composition, and text-safe treatment.
+For example, use documentary-style photography with shaded stone in one study
+and cool watercolor with open sky in another. Compare the batch in a contact
+sheet and replace scenes that repeat the same horizon, lighting, or fade.
+
+Within a study, choose a scene or object for each passage and vary the viewpoint,
+distance, and setting across the intro, TEMA, and A/B slides. Keep the art suited
+to Mount Zion's Pentecostal congregation. Keep the artwork free of baked text.
+Choose the slide title and citation foreground per image: dark navy over light
+areas and near-white over dark areas. Simplify busy or mixed-brightness areas
+behind the text when necessary. Once the deck is built, inspect every scenic
+slide in the exported PDF and correct any title or citation that is hard to read.
 
 ---
 

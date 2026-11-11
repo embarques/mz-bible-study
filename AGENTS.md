@@ -180,9 +180,9 @@ Follow slide order and recipes below, then the checklist.
 
 **One design family per study; different family from other studies.**
 
-- Within a study, all section/scenic images share the **same visual design language** (lighting, finish, edge treatment, optional accents).
+- Within a study, keep a coherent visual language and vary the composition for each passage. Plan the subject, camera distance, angle, and setting for the intro, TEMA, and each A/B image. Use establishing scenes, close details, and action where the passage calls for them. Changing only the figure or symbol in the same horizon composition does not count.
 - **HARD — unique scenes:** every image file must be a **different scene** (youth `section1` ≠ `section2` ≠ `section3`; adult `intro-header` ≠ each `tema-N` ≠ each `ab-N{Letter}`). Never copy the same PNG, never reuse one photo for TEMA I/II/III or for 1.A/1.B/1.C. Builder QC fails on identical bytes. Adult builder must give each scenic slide its **own** media part (duplicated slides must not share one `imageN.png`).
-- Across studies, **change the design** — `mzbs` assigns a rotating family; chat builds must not reuse the previous study’s look (e.g. if study 16 used yellow dashed accent arcs / a particular white-curve panel, study 17 and 18 must not copy that).
+- Across studies, **change the design**. Before generating, assign a distinct combination of medium, palette, composition, and treatment under the text for each study. Compare the batch as a contact sheet and replace scenes that repeat the same visual formula, such as a warm sunrise, right-side subject, and pale fade. `mzbs` assigns a rotating family.
 - Catalog: `python/mz_bible_study/section_styles.py` (parchment, lavender mist, sage paper, ink wash, dawn gold, …).
 - When cloning a prior deck, **always strip** PowerPoint shapes named `Arc …` (yellow dashed/dotted arcs). That motif is retired — **do not** keep or redraw dotted/dashed arc chrome on section slides for any new study.
 - Generate three **new** illustrations every study (don’t reuse another study’s media files).
@@ -193,7 +193,7 @@ Requirements:
 - Scene fits each section theme; be inventive.
 - **Finished slide backgrounds (HARD):** each PNG must include a deliberate **left text-safe treatment** (~35–45% width — soft mist, parchment fade, watercolor bloom, dusk glow, cool paper wash, etc.) that **matches this study’s design family**. Put the scene subject right/center-right. Do **not** deliver a busy undressed full-bleed under the title band. The treatment must **change with each study** — do not reuse the previous study’s fade motif.
 - Full-bleed canvas is fine **only when** that left treatment is baked into the art.
-- **HARD RULE — title + verse must be readable:** calm/light area under the text (via the left treatment above), or switch title/verse colors if needed. Never leave dark navy text on a busy dark photo, or white text on a bright wash.
+- **HARD RULE — title + verse must be readable:** choose the PowerPoint text foreground for the actual area behind each title and citation. Use dark navy on light areas and near-white on dark areas. If brightness varies under the words, simplify that part of the art or use a subtle local scrim. Inspect every scenic slide in the exported PDF at presentation size and thumbnail size. Correct low contrast before delivery.
 - No text, letters, logos, watermarks, or decorative caption marks in the art. **Never** use yellow dotted/dashed arcs (study-16 motif is retired).
 - **No** `alphaModFix` / opacity dimming on the photo itself.
 - Slide chrome (XML): orange bar (`E85D04`), gray line, title (`1- TITLE`), bold verse under gray line — colors chosen so they stay readable on the image.

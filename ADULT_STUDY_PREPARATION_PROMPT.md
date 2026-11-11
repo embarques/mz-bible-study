@@ -14,7 +14,12 @@ For this run, proceed without waiting for batch confirmation or my review.
    the required scenic PNGs. Use imagery suited to Mount Zion's Pentecostal
    congregation. Choose scenes and objects that illustrate the lesson. Avoid
    stained-glass depictions, Catholic devotional imagery, cathedral interiors,
-   and ornamental carved reliefs or mosaics.
+   and ornamental carved reliefs or mosaics. Give each study a distinct visual
+   design and vary viewpoint and composition within the study. Choose dark
+   navy or near-white slide text to contrast with the actual image behind it.
+   Inspect every rendered scenic title and citation before delivery. On
+   Definición y etimología slides, use the locked card design, illustrate each
+   printed term, and omit unused rows entirely.
 3. In a separate pass, compare the section files against the original scan.
    Check for omissions, altered words, incorrect citations, and broken joins.
    Re-read unclear areas at higher zoom and fix every discrepancy you can
