@@ -142,9 +142,16 @@ pub fn bible_studies_dir() -> Result<PathBuf> {
 
 /// `output/{audience}/{N}/`
 pub fn study_output_dir(audience: Audience, study: u32) -> Result<PathBuf> {
-    let path = bible_studies_dir()?
-        .join(audience.as_str())
-        .join(study.to_string());
+    let root = bible_studies_dir()?;
+    let name = root.file_name().and_then(|name| name.to_str());
+    let audience_dir = match name {
+        Some(name) if name.eq_ignore_ascii_case(audience.as_str()) => root,
+        Some(name) if ["adult", "youth"].iter().any(|dir| name.eq_ignore_ascii_case(dir)) => {
+            root.with_file_name(audience.as_str())
+        }
+        _ => root.join(audience.as_str()),
+    };
+    let path = audience_dir.join(study.to_string());
     std::fs::create_dir_all(path.join("powerpoint"))?;
     std::fs::create_dir_all(path.join("pdf"))?;
     Ok(path)

@@ -36,6 +36,8 @@ studies_dir = "studies"
 #   {output_dir}/{audience}/{N}/powerpoint/{N} - {TITLE}.pptx
 #   {output_dir}/{audience}/{N}/pdf/{N} - {TITLE}.pdf
 output_dir = "bible-studies"
+# You can also point directly to an Adult or Youth folder. The other audience
+# uses a sibling folder.
 
 # Scratch (OCR pages, unzipped builds)
 generated_dir = "generated"
